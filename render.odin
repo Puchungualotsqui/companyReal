@@ -25,6 +25,8 @@ COLOR_SELECTION :: rl.Color{255, 255, 255, 255}
 COLOR_BUILDING :: rl.Color{190, 190, 190, 255}
 
 DrawBoard :: proc(world: ^World, camera: ViewCamera, selected: SquadId) {
+	rl.DrawText(FactionName(WorldTeamFaction(world, .A)), BOARD_X, 4, 14, COLOR_TEAM_A)
+	rl.DrawText(FactionName(WorldTeamFaction(world, .B)), BOARD_X + 220, 4, 14, COLOR_TEAM_B)
 	rl.DrawRectangleLines(BOARD_X, BOARD_Y, BOARD_WIDTH, BOARD_HEIGHT, COLOR_BORDER)
 	for column: i32 = 0; column <= i32(world.max_size.x); column += 1 {
 		world_pos := Vec2{f32(column), 0}

@@ -473,3 +473,64 @@ SquadsCanEscortAndRaidConvoys :: proc(t: ^testing.T) {
 	WorldUpdateLogistics(&world, 1.0)
 	testing.expect(t, convoy.health < health, "raid order did not damage convoy")
 }
+
+@(test)
+FactionProfilesChangeCombatAndBuildings :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	testing.expect_value(t, WorldTeamFaction(&world, .A), Faction.BastionDirectorate)
+	testing.expect_value(t, WorldTeamFaction(&world, .B), Faction.FreeMarches)
+	testing.expect(t, WorldSetTeamFaction(&world, .A, .MeridianCombine), "could not assign Meridian faction")
+	WorldSetTeamFaction(&world, .B, .BastionDirectorate)
+
+	meridian_scout := UnitStatsGetForTeam(&world, .A, .Scout)
+	bastion_heavy := UnitStatsGetForTeam(&world, .B, .Heavy)
+	base_scout := UnitStatsGet(.Scout)
+	base_heavy := UnitStatsGet(.Heavy)
+	testing.expect(t, meridian_scout.range > base_scout.range, "Meridian did not improve reconnaissance range")
+	testing.expect(t, bastion_heavy.health > base_heavy.health, "Bastion did not improve armored durability")
+
+	meridian_defense := BuildingStatsGetForTeam(&world, .A, .Defense)
+	WorldSetTeamFaction(&world, .B, .FreeMarches)
+	free_defense := BuildingStatsGetForTeam(&world, .B, .Defense)
+	testing.expect(t, meridian_defense.health > free_defense.health, "factions did not differentiate building durability")
+}
+
+@(test)
+FactionProductionAndLogisticsDoctrinesDiffer :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	WorldSetTeamFaction(&world, .A, .HearthUnion)
+	hearth_cost := BuildingProductionCostForTeam(&world, .A, .Line)
+	base_cost := BuildingProductionCost(.Line)
+	hearth_count := BuildingProductionCountForTeam(&world, .A, .Line)
+	testing.expect(t, hearth_cost.amounts[ResourceIndex(.Materials)] < base_cost.amounts[ResourceIndex(.Materials)], "Hearth did not reduce infantry material cost")
+	testing.expect(t, hearth_count > BuildingProductionCount(.Line), "Hearth did not improve infantry mass production")
+
+	WorldSetTeamFaction(&world, .A, .FreeMarches)
+	world.sectors[0].team = .A
+	world.sectors[1].team = .A
+	WorldAddSectorResource(&world, SectorId(1), .Materials, 200)
+	cargo := WorldQueueCargo(&world, .A, .Materials, 50, SectorId(1), SectorId(2))
+	testing.expect(t, cargo != INVALID_CARGO_ID, "Free Marches logistics shipment was not created")
+	testing.expect(t, world.convoys[0].speed > 1, "Free Marches did not improve convoy mobility")
+	testing.expect(t, world.convoys[0].capacity < CONVOY_VEHICLE_CAPACITY, "Free Marches convoy capacity was not differentiated")
+}
+
+@(test)
+FactionCountersCreateAsymmetricMatchups :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	WorldSetTeamFaction(&world, .A, .MeridianCombine)
+	attacker_squad := SquadSpawn(&world, .A, .Equipment, 1, Vec2{20, 20})
+	target_squad := SquadSpawn(&world, .B, .Vehicle, 1, Vec2{20, 20})
+	attacker := UnitGet(&world, SquadGet(&world, attacker_squad).units[0])
+	target := UnitGet(&world, SquadGet(&world, target_squad).units[0])
+	testing.expect(t, FactionCounterMultiplier(&world, attacker^, target^) > 1, "Meridian precision units lacked a vehicle counter")
+}

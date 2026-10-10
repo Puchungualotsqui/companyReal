@@ -154,7 +154,7 @@ WorldCargoRouteOperational :: proc(w: ^World, cargo: CargoLot) -> bool {
 		sector_id := WorldSectorIdAtCoordinates(int(current.x), int(current.y))
 		if !WorldSectorRouteOperational(w, sector_id, cargo.team) do return false
 	}
-	sector_path := WorldFindStrategicSectorPath(w, cargo.origin, cargo.destination, cargo.team, true)
+	sector_path := WorldFindStrategicSectorPath(w, cargo.origin, cargo.destination, cargo.team, FactionAvoidsRouteDanger(w, cargo.team))
 	defer delete(sector_path)
 	return len(sector_path) > 0
 }
@@ -167,7 +167,7 @@ WorldCargoGet :: proc(w: ^World, id: CargoId) -> ^CargoLot {
 }
 
 WorldConvoyPosition :: proc(w: ^World, convoy: Convoy) -> Vec2 {
-	sector_path := WorldFindStrategicSectorPath(w, convoy.origin, convoy.destination, convoy.team, true)
+	sector_path := WorldFindStrategicSectorPath(w, convoy.origin, convoy.destination, convoy.team, FactionAvoidsRouteDanger(w, convoy.team))
 	defer delete(sector_path)
 	amount := clamp(convoy.progress / max(0.1, convoy.travel_time), 0, 1)
 	if len(sector_path) < 2 {
@@ -190,7 +190,7 @@ WorldQueueCargo :: proc(w: ^World, team: Team, resource: ResourceType, amount: f
 	if !WorldCargoRouteOperational(w, cargo) do return INVALID_CARGO_ID
 	provided := WorldConsumeResource(w, team, origin, resource, amount)
 	if provided <= 0 do return INVALID_CARGO_ID
-	sector_path := WorldFindStrategicSectorPath(w, origin, destination, team, true)
+	sector_path := WorldFindStrategicSectorPath(w, origin, destination, team, FactionAvoidsRouteDanger(w, team))
 	defer delete(sector_path)
 	if len(sector_path) < 2 do return INVALID_CARGO_ID
 	distance := len(sector_path) - 1
@@ -200,8 +200,9 @@ WorldQueueCargo :: proc(w: ^World, team: Team, resource: ResourceType, amount: f
 	convoy_id := w.next_convoy_id
 	w.next_convoy_id += 1
 	cargo.convoy = convoy_id
-	vehicle_count := max(1, int((provided + CONVOY_VEHICLE_CAPACITY - 1) / CONVOY_VEHICLE_CAPACITY))
-	convoy := Convoy{convoy_id, team, resource, cargo.id, origin, destination, 0, max(0.5, f32(distance) * CARGO_BASE_TRAVEL_TIME), 0, vehicle_count, f32(vehicle_count) * CONVOY_VEHICLE_CAPACITY, 1, CONVOY_STARTING_FUEL, CONVOY_HEALTH, .Traveling}
+	vehicle_capacity := FactionConvoyCapacity(w, team)
+	vehicle_count := max(1, int((provided + vehicle_capacity - 1) / vehicle_capacity))
+	convoy := Convoy{convoy_id, team, resource, cargo.id, origin, destination, 0, max(0.5, f32(distance) * CARGO_BASE_TRAVEL_TIME), 0, vehicle_count, f32(vehicle_count) * vehicle_capacity, FactionConvoySpeed(w, team), FactionConvoyFuel(w, team), FactionConvoyHealth(w, team), .Traveling}
 	append(&w.cargo, cargo)
 	append(&w.convoys, convoy)
 	return cargo.id
@@ -229,7 +230,7 @@ WorldSectorLogisticsDemand :: proc(w: ^World, sector_id: SectorId, resource: Res
 	for building in w.buildings {
 		if building.destroyed || !building.complete || building.queue <= 0 || building.team != sector.team do continue
 		if WorldSectorAtPosition(w, building.pos) != sector_id do continue
-		cost := BuildingProductionCost(building.production)
+		cost := BuildingProductionCostForTeam(w, building.team, building.production)
 		demand += cost.amounts[ResourceIndex(resource)] * f32(building.queue)
 	}
 	return demand
@@ -384,7 +385,7 @@ WorldUpdateConvoys :: proc(w: ^World, dt: f32) {
 			continue
 		}
 		convoy.state = .Traveling
-		sector_path := WorldFindStrategicSectorPath(w, convoy.origin, convoy.destination, convoy.team, true)
+		sector_path := WorldFindStrategicSectorPath(w, convoy.origin, convoy.destination, convoy.team, FactionAvoidsRouteDanger(w, convoy.team))
 		if len(sector_path) > 1 do convoy.travel_time = max(convoy.progress, WorldStrategicPathTravelTime(sector_path[:]))
 		delete(sector_path)
 		convoy.progress += dt * convoy.speed

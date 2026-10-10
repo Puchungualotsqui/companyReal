@@ -314,6 +314,7 @@ World :: struct {
 	squads: [dynamic]Squad,
 	sectors: [dynamic]Sector,
 	routes: [dynamic]SectorRoute,
+	factions: [3]Faction,
 	buildings: [dynamic]Building,
 	cargo: [dynamic]CargoLot,
 	convoys: [dynamic]Convoy,
@@ -341,6 +342,7 @@ WorldInit :: proc(w: ^World) {
 	w.squads = make([dynamic]Squad)
 	w.sectors = make([dynamic]Sector)
 	w.routes = make([dynamic]SectorRoute)
+	w.factions = [3]Faction{.HearthUnion, .BastionDirectorate, .FreeMarches}
 	w.buildings = make([dynamic]Building)
 	w.cargo = make([dynamic]CargoLot)
 	w.convoys = make([dynamic]Convoy)

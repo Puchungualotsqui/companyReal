@@ -342,6 +342,18 @@ Mass mobilization, logistics, recovery, and morale.
 
 **Weaknesses:** Lower individual quality and weak logistics when cut off.
 
+### Prototype faction rules
+
+The simulation assigns one faction doctrine to each team. Teams remain separate from factions so multiplayer ownership and team capture rules do not need to change when a matchup changes. The default prototype matchup is Bastion Directorate versus Free Marches.
+
+- **Bastion Directorate:** tougher and longer-ranged units, stronger buildings, defensive cover, and resilient convoys. Production is not cheaper, and its forces are slower.
+- **Free Marches:** faster units and convoys, better reconnaissance, faster construction, and lower production costs. Convoys carry less, survive less damage, and accept dangerous routes more readily.
+- **Ember Syndicate:** high assault damage, extra ammunition, cheaper fuel use, and greatly improved munitions production. Its buildings and units are more fragile and shorter-ranged.
+- **Meridian Combine:** exceptional observation and weapon range, faster firing, precision resource efficiency, and strong equipment/artillery counters against vehicles. Its units and buildings are fragile and material-intensive.
+- **Hearth Union:** cheaper production across all resources, larger infantry formations, higher recovery potential, stronger storage transport, and better defenses. Its troops and convoys are slower and less individually destructive.
+
+Faction matchups use explicit counter bonuses in addition to normal unit stats. This makes doctrine matter without adding faction-specific unit classes before the prototype combat model is stable.
+
 ## 13. Art Direction
 
 - Pixel art generated from small sprite patterns.

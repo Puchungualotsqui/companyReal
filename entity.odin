@@ -23,7 +23,7 @@ UnitStatsGet :: proc(type: UnitType) -> UnitStats {
 }
 
 UnitSpawn :: proc(w: ^World, squad: SquadId, team: Team, type: UnitType, pos, formation_offset: Vec2) -> UnitId {
-	stats := UnitStatsGet(type)
+	stats := UnitStatsGetForTeam(w, team, type)
 	id := UnitId(uint(len(w.units) + 1))
 	append(&w.units, Unit{id, squad, team, type, .Idle, pos, Vec2{}, formation_offset, stats.health, stats.health, 1, 0, stats.ammo, stats.ammo, 0, Order{.Idle, pos, INVALID_UNIT_ID}})
 	return id
@@ -232,7 +232,7 @@ UnitMove :: proc(w: ^World, unit: ^Unit, dt: f32) {
 }
 
 UnitAttack :: proc(w: ^World, unit: ^Unit, dt: f32) {
-	stats := UnitStatsGet(unit.type)
+	stats := UnitStatsGetForTeam(w, unit.team, unit.type)
 	target := UnitGet(w, unit.order.target)
 	if target == nil || !UnitCanAttack(unit^, target^) {
 		unit.order.target = UnitFindTarget(w, unit^, stats.range * 4)
@@ -269,7 +269,7 @@ UnitAttack :: proc(w: ^World, unit: ^Unit, dt: f32) {
 	unit.velocity = Vec2{}
 	unit.cooldown -= dt
 	if unit.cooldown > 0 do return
-	damage := stats.damage * max(0.25, 1 - unit.suppression * 0.5)
+	damage := stats.damage * max(0.25, 1 - unit.suppression * 0.5) * FactionCounterMultiplier(w, unit^, target^)
 	UnitDamage(w, target, damage, stats.suppression)
 	unit.ammo -= 1
 	unit.cooldown = stats.cooldown
@@ -317,7 +317,7 @@ UnitDamage :: proc(w: ^World, unit: ^Unit, damage, suppression: f32) {
 }
 
 UnitMoveSpeed :: proc(w: ^World, unit: Unit) -> f32 {
-	stats := UnitStatsGet(unit.type)
+	stats := UnitStatsGetForTeam(w, unit.team, unit.type)
 	terrain_speed := TerrainSpeed(WorldTerrainAt(w, unit.pos))
 	suppression_speed := max(0.25, 1 - unit.suppression * 0.5)
 	return stats.speed * terrain_speed * suppression_speed
@@ -419,7 +419,7 @@ UnitWoundedUpdate :: proc(w: ^World, unit: ^Unit, dt: f32) {
 UnitFindTarget :: proc(w: ^World, attacker: Unit, max_distance: f32) -> UnitId {
 	found := INVALID_UNIT_ID
 	closest := max_distance
-	stats := UnitStatsGet(attacker.type)
+	stats := UnitStatsGetForTeam(w, attacker.team, attacker.type)
 	for target in w.units {
 		if target.id == attacker.id || !UnitCanAttack(attacker, target) do continue
 		distance := Vec2Length(Vec2Sub(target.pos, attacker.pos))
@@ -464,7 +464,7 @@ SquadReinforce :: proc(w: ^World, id: SquadId, count: int) -> int {
 			break
 		}
 	}
-	stats := UnitStatsGet(squad.type)
+	stats := UnitStatsGetForTeam(w, squad.team, squad.type)
 	cost := stats.health * 0.1
 	spawned := 0
 	for index: int = 0; index < count; index += 1 {

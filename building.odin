@@ -54,7 +54,7 @@ WorldSectorAtPosition :: proc(w: ^World, position: Vec2) -> SectorId {
 }
 
 BuildingPlace :: proc(w: ^World, team: Team, type: BuildingType, pos: Vec2, owner := INVALID_PLAYER_ID, resource := ResourceType.Materials) -> BuildingId {
-	stats := BuildingStatsGet(type)
+	stats := BuildingStatsGetForTeam(w, team, type)
 	id := BuildingId(uint(len(w.buildings) + 1))
 	building := Building{id, owner, team, type, Vec2Clamp(pos, Vec2{}, w.max_size), stats.health, stats.health, stats.build_time, stats.build_time, true, false, INVALID_SQUAD_ID, .Line, resource, 0, 0}
 	append(&w.buildings, building)
@@ -72,7 +72,7 @@ BuildingConstructForPlayer :: proc(w: ^World, player: PlayerId, squad_id: SquadI
 	sector := WorldSectorGet(w, WorldSectorAtPosition(w, pos))
 	if !ResourceInventoryCanAfford(sector.inventory, cost) do return INVALID_BUILDING_ID
 	ResourceInventoryConsume(&sector.inventory, cost)
-	stats := BuildingStatsGet(type)
+	stats := BuildingStatsGetForTeam(w, squad.team, type)
 	id := BuildingId(uint(len(w.buildings) + 1))
 	building := Building{id, player, squad.team, type, Vec2Clamp(pos, Vec2{}, w.max_size), stats.health, stats.health, 0, stats.build_time, false, false, squad_id, .Line, .Materials, 0, 0}
 	append(&w.buildings, building)
@@ -213,9 +213,9 @@ WorldCanObserve :: proc(w: ^World, team: Team, position: Vec2) -> bool {
 		range := f32(0)
 		switch building.type {
 		case .Headquarters:
-			range = 24
+			range = FactionObservationRange(w, team, 24)
 		case .ObservationPost:
-			range = 48
+			range = FactionObservationRange(w, team, 48)
 		case .ResourceSite, .Refinery, .MunitionsFactory, .Warehouse, .RouteInfrastructure, .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
 			continue
 		}
@@ -226,7 +226,7 @@ WorldCanObserve :: proc(w: ^World, team: Team, position: Vec2) -> bool {
 
 WorldDefenseCover :: proc(w: ^World, position: Vec2, team: Team) -> f32 {
 	for building in w.buildings {
-		if building.complete && building.team == team && building.type == .Defense && Vec2Length(Vec2Sub(position, building.pos)) <= 10 do return 0.35
+		if building.complete && building.team == team && building.type == .Defense && Vec2Length(Vec2Sub(position, building.pos)) <= 10 do return FactionDefenseCover(w, team)
 	}
 	return 0
 }
@@ -257,23 +257,23 @@ WorldUpdateBuildings :: proc(w: ^World, dt: f32) {
 
 		switch building.type {
 		case .ResourceSite:
-			WorldAddSectorResource(w, sector_id, building.resource, dt * 4)
+			WorldAddSectorResource(w, sector_id, building.resource, dt * 4 * FactionResourceOutputRate(w, building.team, building.type))
 		case .Refinery:
 			input := ResourceInventoryMake(dt * 0.5, 0, 0)
-			if ResourceInventoryConsume(&sector.inventory, input) do WorldAddSectorResource(w, sector_id, .Fuel, dt)
+			if ResourceInventoryConsume(&sector.inventory, input) do WorldAddSectorResource(w, sector_id, .Fuel, dt * FactionResourceOutputRate(w, building.team, building.type))
 		case .MunitionsFactory:
 			input := ResourceInventoryMake(dt * 0.75, dt * 0.25, 0)
-			if ResourceInventoryConsume(&sector.inventory, input) do WorldAddSectorResource(w, sector_id, .Munitions, dt)
+			if ResourceInventoryConsume(&sector.inventory, input) do WorldAddSectorResource(w, sector_id, .Munitions, dt * FactionResourceOutputRate(w, building.team, building.type))
 		case .Headquarters, .Warehouse, .RouteInfrastructure, .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
 			building.production_timer += 0
 		}
 
 		if building.queue <= 0 do continue
 		building.production_timer += dt
-		if building.production_timer < BuildingProductionTime(building.production) do continue
-		cost := BuildingProductionCost(building.production)
+		if building.production_timer < BuildingProductionTimeForTeam(w, building.team, building.production) do continue
+		cost := BuildingProductionCostForTeam(w, building.team, building.production)
 		if !ResourceInventoryConsume(&sector.inventory, cost) do continue
-		count := BuildingProductionCount(building.production)
+		count := BuildingProductionCountForTeam(w, building.team, building.production)
 		SquadSpawn(w, building.team, building.production, count, building.pos, building.owner)
 		building.queue -= 1
 		building.production_timer = 0

@@ -135,14 +135,14 @@ This document tracks the implementation order. Each phase should be playable or 
 
 ## Phase 9: Factions
 
-- [ ] Implement the Bastion Directorate.
-- [ ] Implement the Free Marches.
-- [ ] Implement the Ember Syndicate.
-- [ ] Implement the Meridian Combine.
-- [ ] Implement the Hearth Union.
-- [ ] Give each faction distinct units, buildings, and logistics behavior.
-- [ ] Give each faction distinct resource costs, production strengths, and counters.
-- [ ] Balance faction strengths and weaknesses.
+- [x] Implement the Bastion Directorate.
+- [x] Implement the Free Marches.
+- [x] Implement the Ember Syndicate.
+- [x] Implement the Meridian Combine.
+- [x] Implement the Hearth Union.
+- [x] Give each faction distinct units, buildings, and logistics behavior.
+- [x] Give each faction distinct resource costs, production strengths, and counters.
+- [x] Balance faction strengths and weaknesses.
 
 **Exit:** Each faction has a clear play style, a distinct relationship with logistics, and at least one strong counter.
 
@@ -195,9 +195,3 @@ This document tracks the implementation order. Each phase should be playable or 
 - [ ] Test the one-million-unit target.
 
 **Exit:** The simulation remains stable at the largest supported battle size.
-
-## Current Position
-
-Phase 6 implementation is marked complete. The current prototype has individual combat, sector capture, buildings, abstract supply, artillery, destruction effects, and headless simulation scenarios.
-
-The next milestone is **Phase 7: Physical Logistics Vertical Slice**. Implement the three-resource model and prove that production, transport, disruption, and recovery are fun before implementing the full faction roster.
