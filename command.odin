@@ -21,6 +21,35 @@ CommandUpdate :: proc(w: ^World, state: ^CommandState, dt: f32) {
 		state.selected = INVALID_SQUAD_ID
 		return
 	}
+	if state.selected != INVALID_SQUAD_ID {
+		squad := SquadGet(w, state.selected)
+		if squad != nil {
+			target := squad.order.target_pos
+			if target.x == 0 && target.y == 0 {
+				target = WorldSquadLeaderPosition(w, squad^)
+			}
+			if rl.IsKeyPressed(.Q) {
+				SquadSetIntentForPlayer(w, state.player, state.selected, .Defend, target)
+				return
+			}
+			if rl.IsKeyPressed(.E) {
+				SquadSetIntentForPlayer(w, state.player, state.selected, .Probe, target)
+				return
+			}
+			if rl.IsKeyPressed(.R) {
+				SquadSetIntentForPlayer(w, state.player, state.selected, .Resupply, target)
+				return
+			}
+			if rl.IsKeyPressed(.T) {
+				SquadSetIntentForPlayer(w, state.player, state.selected, .Withdraw, target)
+				return
+			}
+			if rl.IsKeyPressed(.F) {
+				SquadSetIntentForPlayer(w, state.player, state.selected, .Advance, target)
+				return
+			}
+		}
+	}
 	if !rl.IsMouseButtonPressed(.LEFT) do return
 
 	mouse := rl.GetMousePosition()

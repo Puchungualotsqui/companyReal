@@ -398,3 +398,78 @@ LogisticsConvoyDamageDestroysCargo :: proc(t: ^testing.T) {
 	testing.expect(t, world.cargo_lost >= 50, "destroyed convoy did not lose cargo")
 	testing.expect(t, len(world.effects) > 0, "destroyed convoy did not leave a wreck")
 }
+
+@(test)
+PathfindingAvoidsBlockedTerrain :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	for x: int = 1; x < 7; x += 1 do WorldSetTerrainCell(&world, x, 0, .Blocked)
+	path := WorldTacticalPath(&world, Vec2{8, 8}, Vec2{120, 8})
+	defer delete(path)
+	testing.expect(t, len(path) > 0, "tactical path was not found around blocked terrain")
+	for position in path do testing.expect(t, WorldTerrainAt(&world, position) != .Blocked, "tactical path entered blocked terrain")
+}
+
+@(test)
+StrategicRoutesRerouteConvoys :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	world.sectors[0].team = .A
+	world.sectors[1].team = .A
+	world.sectors[4].team = .A
+	world.sectors[5].team = .A
+	testing.expect(t, WorldSetSectorRouteDanger(&world, SectorId(1), SectorId(2), 1), "could not mark strategic route dangerous")
+	danger_path := WorldFindStrategicSectorPath(&world, SectorId(1), SectorId(2), .A, true)
+	defer delete(danger_path)
+	testing.expect(t, len(danger_path) > 2, "strategic path did not avoid a dangerous route")
+	testing.expect(t, WorldSetSectorRouteBlocked(&world, SectorId(1), SectorId(2), true), "could not block strategic route")
+	WorldAddSectorResource(&world, SectorId(1), .Fuel, 200)
+	cargo := WorldQueueCargo(&world, .A, .Fuel, 50, SectorId(1), SectorId(2))
+	testing.expect(t, cargo != INVALID_CARGO_ID, "logistics did not find an alternate strategic route")
+	testing.expect(t, world.convoys[0].travel_time > CARGO_BASE_TRAVEL_TIME, "rerouted convoy did not receive a longer route")
+	WorldUpdateConvoys(&world, 3.1)
+	testing.expect_value(t, len(world.cargo), 0)
+	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(2), .Fuel), f32(50))
+}
+
+@(test)
+WoundedSquadAutonomouslyResupplies :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	BuildingPlace(&world, .A, .Headquarters, Vec2{4, 4}, LOCAL_PLAYER_ID)
+	world.sectors[1].team = .A
+	squad_id := SquadSpawn(&world, .A, .Line, 1, Vec2{100, 32}, LOCAL_PLAYER_ID)
+	unit := UnitGet(&world, SquadGet(&world, squad_id).units[0])
+	UnitDamage(&world, unit, 75, 0)
+	for index: int = 0; index < 100; index += 1 do WorldStep(&world)
+	testing.expect_value(t, SquadGet(&world, squad_id).intent, SquadIntent.Resupply)
+	testing.expect(t, WorldCanResupply(&world, unit^), "wounded squad did not reach a resupply point")
+	testing.expect(t, unit.health > 25, "wounded squad did not recover at the resupply point")
+}
+
+@(test)
+SquadsCanEscortAndRaidConvoys :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	world.sectors[0].team = .A
+	world.sectors[1].team = .A
+	WorldAddSectorResource(&world, SectorId(1), .Materials, 200)
+	cargo := WorldQueueCargo(&world, .A, .Materials, 50, SectorId(1), SectorId(2))
+	testing.expect(t, cargo != INVALID_CARGO_ID, "escort-test convoy was not created")
+	convoy := &world.convoys[0]
+	escort := SquadSpawn(&world, .A, .Line, 1, WorldConvoyPosition(&world, convoy^), LOCAL_PLAYER_ID)
+	raider := SquadSpawn(&world, .B, .Scout, 1, WorldConvoyPosition(&world, convoy^), PLAYER_TWO_ID)
+	testing.expect(t, SquadSetEscortForPlayer(&world, LOCAL_PLAYER_ID, escort, convoy.id), "escort order was rejected")
+	testing.expect(t, SquadSetRaidForPlayer(&world, PLAYER_TWO_ID, raider, convoy.id), "raid order was rejected")
+	health := convoy.health
+	WorldUpdateLogistics(&world, 1.0)
+	testing.expect(t, convoy.health < health, "raid order did not damage convoy")
+}

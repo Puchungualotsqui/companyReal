@@ -104,6 +104,15 @@ ArtilleryImpact :: proc(w: ^World, shell: ArtilleryShell) {
 		ArtilleryAddEffect(w, .Wreck, building.pos, 99999, 3)
 	}
 
+	for &route in w.routes {
+		midpoint := Vec2Lerp(WorldSectorCenter(w, route.from), WorldSectorCenter(w, route.to), 0.5)
+		if Vec2Length(Vec2Sub(midpoint, shell.target)) > shell.radius do continue
+		if !route.damaged {
+			route.damaged = true
+			w.route_revision += 1
+		}
+	}
+
 	for &convoy in w.convoys {
 		distance := Vec2Length(Vec2Sub(WorldConvoyPosition(w, convoy), shell.target))
 		if distance > shell.radius do continue

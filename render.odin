@@ -38,6 +38,13 @@ DrawBoard :: proc(world: ^World, camera: ViewCamera, selected: SquadId) {
 		y := i32(screen_pos.y)
 		rl.DrawLine(BOARD_X, y, BOARD_X + BOARD_WIDTH, y, COLOR_GRID)
 	}
+	for route in world.routes {
+		origin := ViewCameraWorldToScreen(camera, WorldSectorCenter(world, route.from))
+		destination := ViewCameraWorldToScreen(camera, WorldSectorCenter(world, route.to))
+		color := RouteColor(route.type)
+		if route.damaged || route.blocked do color = COLOR_SELECTION
+		rl.DrawLine(i32(origin.x), i32(origin.y), i32(destination.x), i32(destination.y), color)
+	}
 	for sector in world.sectors {
 		top_left := ViewCameraWorldToScreen(camera, Vec2{sector.bounds.x, sector.bounds.y})
 		width := i32(sector.bounds.width * f32(CELL_SIZE) * camera.zoom)
@@ -121,9 +128,30 @@ DrawBoard :: proc(world: ^World, camera: ViewCamera, selected: SquadId) {
 		if unit.squad == selected do rl.DrawRectangle(cell_x, cell_y, cell_size, cell_size, COLOR_PLAYER_CELL)
 		rl.DrawTextCodepoint(rl.GetFontDefault(), UnitDefaultChar(unit.type), rl.Vector2{f32(cell_x) + f32(cell_size) * 0.25, f32(cell_y) - f32(font_size) * 0.1}, f32(font_size), color)
 	}
+	warning_y := BOARD_Y + BOARD_HEIGHT - 18
 	if WorldHasBlockedConvoy(world) {
-		rl.DrawText("SUPPLY ROUTE BLOCKED", BOARD_X, BOARD_Y + BOARD_HEIGHT + 8, 16, COLOR_SELECTION)
+		rl.DrawText("SUPPLY ROUTE BLOCKED", BOARD_X, warning_y, 14, COLOR_SELECTION)
+		warning_y -= 16
 	}
+	if WorldHasIsolatedSquad(world) {
+		rl.DrawText("SQUAD ISOLATED", BOARD_X, warning_y, 14, COLOR_SELECTION)
+		warning_y -= 16
+	}
+	if WorldHasIsolatedBuilding(world) {
+		rl.DrawText("INDUSTRY ISOLATED", BOARD_X, warning_y, 14, COLOR_SELECTION)
+	}
+}
+
+RouteColor :: proc(type: RouteType) -> rl.Color {
+	switch type {
+	case .Road:
+		return rl.Color{100, 100, 100, 255}
+	case .Bridge:
+		return rl.Color{80, 140, 180, 255}
+	case .Chokepoint:
+		return rl.Color{180, 120, 60, 255}
+	}
+	unreachable()
 }
 
 ResourceColor :: proc(resource: ResourceType) -> rl.Color {

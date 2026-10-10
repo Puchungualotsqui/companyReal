@@ -93,6 +93,43 @@ TerrainType :: enum u8 {
 	Rough,
 	Crater,
 	Damaged,
+	Road,
+	Bridge,
+	Chokepoint,
+	Blocked,
+}
+
+SquadIntent :: enum u8 {
+	Idle,
+	Advance,
+	Defend,
+	Assault,
+	Probe,
+	Escort,
+	Raid,
+	Resupply,
+	Withdraw,
+}
+
+FormationType :: enum u8 {
+	Line,
+	Column,
+	Wedge,
+}
+
+RouteType :: enum u8 {
+	Road,
+	Bridge,
+	Chokepoint,
+}
+
+SectorRoute :: struct {
+	from: SectorId,
+	to: SectorId,
+	type: RouteType,
+	damaged: bool,
+	blocked: bool,
+	danger: f32,
 }
 
 BuildingType :: enum u8 {
@@ -161,6 +198,14 @@ Squad :: struct {
 	type: UnitType,
 	units: [dynamic]UnitId,
 	order: Order,
+	intent: SquadIntent,
+	formation: FormationType,
+	convoy: ConvoyId,
+	path: [dynamic]Vec2,
+	path_index: int,
+	path_goal: Vec2,
+	path_terrain_revision: u64,
+	path_route_revision: u64,
 }
 
 Sector :: struct {
@@ -268,6 +313,7 @@ World :: struct {
 	units: [dynamic]Unit,
 	squads: [dynamic]Squad,
 	sectors: [dynamic]Sector,
+	routes: [dynamic]SectorRoute,
 	buildings: [dynamic]Building,
 	cargo: [dynamic]CargoLot,
 	convoys: [dynamic]Convoy,
@@ -286,12 +332,15 @@ World :: struct {
 	accumulator: f32,
 	step: f32,
 	max_size: Vec2,
+	terrain_revision: u64,
+	route_revision: u64,
 }
 
 WorldInit :: proc(w: ^World) {
 	w.units = make([dynamic]Unit)
 	w.squads = make([dynamic]Squad)
 	w.sectors = make([dynamic]Sector)
+	w.routes = make([dynamic]SectorRoute)
 	w.buildings = make([dynamic]Building)
 	w.cargo = make([dynamic]CargoLot)
 	w.convoys = make([dynamic]Convoy)
@@ -303,6 +352,8 @@ WorldInit :: proc(w: ^World) {
 	w.terrain_height = 16
 	w.terrain = make([dynamic]TerrainType)
 	for index: int = 0; index < w.terrain_width * w.terrain_height; index += 1 do append(&w.terrain, TerrainType.Open)
+	w.terrain_revision = 0
+	w.route_revision = 0
 	WorldCreateTerrain(w)
 	w.cargo_lost = 0
 	w.next_cargo_id = CargoId(1)
@@ -313,13 +364,18 @@ WorldInit :: proc(w: ^World) {
 	w.step = 1.0 / 20.0
 	w.max_size = Vec2{256, 256}
 	WorldCreateSectors(w)
+	WorldCreateRoutes(w)
 }
 
 WorldDeinit :: proc(w: ^World) {
-	for &squad in w.squads do delete(squad.units)
+	for &squad in w.squads {
+		delete(squad.units)
+		delete(squad.path)
+	}
 	delete(w.units)
 	delete(w.squads)
 	delete(w.sectors)
+	delete(w.routes)
 	delete(w.buildings)
 	delete(w.cargo)
 	delete(w.convoys)
@@ -335,6 +391,8 @@ WorldCreateTerrain :: proc(w: ^World) {
 	WorldSetTerrainCell(w, 5, 4, .HeavyCover)
 	WorldSetTerrainCell(w, 9, 8, .Rough)
 	WorldSetTerrainCell(w, 12, 11, .LightCover)
+	WorldSetTerrainCell(w, 1, 1, .Road)
+	WorldSetTerrainCell(w, 8, 8, .Chokepoint)
 }
 
 WorldCreateSectors :: proc(w: ^World) {
@@ -344,6 +402,26 @@ WorldCreateSectors :: proc(w: ^World) {
 			id := SectorId(uint(len(w.sectors) + 1))
 			bounds := Rect{f32(x) * sector_size.x, f32(y) * sector_size.y, sector_size.x, sector_size.y}
 			append(&w.sectors, Sector{id, .Neutral, bounds, 0, ResourceInventory{}, ResourceInventory{}})
+		}
+	}
+}
+
+WorldCreateRoutes :: proc(w: ^World) {
+	for y: int = 0; y < 4; y += 1 {
+		for x: int = 0; x < 4; x += 1 {
+			from := WorldSectorIdAtCoordinates(x, y)
+			if x < 3 {
+				to := WorldSectorIdAtCoordinates(x + 1, y)
+				type := RouteType.Road
+				if x == 1 && y == 1 do type = .Chokepoint
+				append(&w.routes, SectorRoute{from, to, type, false, false, 0})
+			}
+			if y < 3 {
+				to := WorldSectorIdAtCoordinates(x, y + 1)
+				type := RouteType.Road
+				if x == 1 do type = .Bridge
+				append(&w.routes, SectorRoute{from, to, type, false, false, 0})
+			}
 		}
 	}
 }
@@ -419,19 +497,23 @@ WorldTerrainAt :: proc(w: ^World, position: Vec2) -> TerrainType {
 
 WorldSetTerrainCell :: proc(w: ^World, x, y: int, terrain: TerrainType) -> bool {
 	if x < 0 || y < 0 || x >= w.terrain_width || y >= w.terrain_height do return false
-	w.terrain[TerrainIndex(w, x, y)] = terrain
+	index := TerrainIndex(w, x, y)
+	if w.terrain[index] != terrain {
+		w.terrain[index] = terrain
+		w.terrain_revision += 1
+	}
 	return true
 }
 
 TerrainCover :: proc(terrain: TerrainType) -> f32 {
 	switch terrain {
-	case .Open:
+	case .Open, .Road, .Bridge:
 		return 0
 	case .LightCover:
 		return 0.25
 	case .HeavyCover:
 		return 0.5
-	case .Rough, .Damaged:
+	case .Rough, .Damaged, .Chokepoint, .Blocked:
 		return 0
 	case .Crater:
 		return 0.1
@@ -443,12 +525,20 @@ TerrainSpeed :: proc(terrain: TerrainType) -> f32 {
 	switch terrain {
 	case .Open, .LightCover, .HeavyCover:
 		return 1
+	case .Road:
+		return 1.35
+	case .Bridge:
+		return 1.15
 	case .Rough:
 		return 0.65
 	case .Crater:
 		return 0.45
 	case .Damaged:
 		return 0.8
+	case .Chokepoint:
+		return 0.55
+	case .Blocked:
+		return 0
 	}
 	unreachable()
 }

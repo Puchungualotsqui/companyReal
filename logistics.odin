@@ -154,7 +154,9 @@ WorldCargoRouteOperational :: proc(w: ^World, cargo: CargoLot) -> bool {
 		sector_id := WorldSectorIdAtCoordinates(int(current.x), int(current.y))
 		if !WorldSectorRouteOperational(w, sector_id, cargo.team) do return false
 	}
-	return true
+	sector_path := WorldFindStrategicSectorPath(w, cargo.origin, cargo.destination, cargo.team, true)
+	defer delete(sector_path)
+	return len(sector_path) > 0
 }
 
 WorldCargoGet :: proc(w: ^World, id: CargoId) -> ^CargoLot {
@@ -165,10 +167,20 @@ WorldCargoGet :: proc(w: ^World, id: CargoId) -> ^CargoLot {
 }
 
 WorldConvoyPosition :: proc(w: ^World, convoy: Convoy) -> Vec2 {
-	origin := WorldSectorCenter(w, convoy.origin)
-	destination := WorldSectorCenter(w, convoy.destination)
+	sector_path := WorldFindStrategicSectorPath(w, convoy.origin, convoy.destination, convoy.team, true)
+	defer delete(sector_path)
 	amount := clamp(convoy.progress / max(0.1, convoy.travel_time), 0, 1)
-	return Vec2Lerp(origin, destination, amount)
+	if len(sector_path) < 2 {
+		origin := WorldSectorCenter(w, convoy.origin)
+		destination := WorldSectorCenter(w, convoy.destination)
+		return Vec2Lerp(origin, destination, amount)
+	}
+	scaled := amount * f32(len(sector_path) - 1)
+	segment := min(int(scaled), len(sector_path) - 2)
+	segment_amount := scaled - f32(segment)
+	origin := WorldSectorCenter(w, sector_path[segment])
+	destination := WorldSectorCenter(w, sector_path[segment + 1])
+	return Vec2Lerp(origin, destination, segment_amount)
 }
 
 WorldQueueCargo :: proc(w: ^World, team: Team, resource: ResourceType, amount: f32, origin, destination: SectorId) -> CargoId {
@@ -178,9 +190,10 @@ WorldQueueCargo :: proc(w: ^World, team: Team, resource: ResourceType, amount: f
 	if !WorldCargoRouteOperational(w, cargo) do return INVALID_CARGO_ID
 	provided := WorldConsumeResource(w, team, origin, resource, amount)
 	if provided <= 0 do return INVALID_CARGO_ID
-	origin_pos := WorldSectorCoordinates(origin)
-	destination_pos := WorldSectorCoordinates(destination)
-	distance := abs(int(destination_pos.x - origin_pos.x)) + abs(int(destination_pos.y - origin_pos.y))
+	sector_path := WorldFindStrategicSectorPath(w, origin, destination, team, true)
+	defer delete(sector_path)
+	if len(sector_path) < 2 do return INVALID_CARGO_ID
+	distance := len(sector_path) - 1
 	cargo.id = w.next_cargo_id
 	w.next_cargo_id += 1
 	cargo.quantity = provided
@@ -258,6 +271,54 @@ WorldAssignCargo :: proc(w: ^World) {
 	}
 }
 
+WorldConvoyGet :: proc(w: ^World, id: ConvoyId) -> ^Convoy {
+	for &convoy in w.convoys {
+		if convoy.id == id do return &convoy
+	}
+	return nil
+}
+
+WorldConvoyIsEscorted :: proc(w: ^World, convoy: Convoy) -> bool {
+	for squad in w.squads {
+		if squad.intent != .Escort || squad.convoy != convoy.id || !SquadIsAlive(w, squad.id) do continue
+		if Vec2Length(Vec2Sub(WorldSquadLeaderPosition(w, squad), WorldConvoyPosition(w, convoy))) <= 12 do return true
+	}
+	return false
+}
+
+WorldUpdateConvoyRaids :: proc(w: ^World, dt: f32) {
+	for &convoy in w.convoys {
+		if convoy.state == .Destroyed do continue
+		escorted := WorldConvoyIsEscorted(w, convoy)
+		for squad in w.squads {
+			if squad.intent != .Raid || squad.convoy != convoy.id || squad.team == convoy.team || !SquadIsAlive(w, squad.id) do continue
+			if Vec2Length(Vec2Sub(WorldSquadLeaderPosition(w, squad), WorldConvoyPosition(w, convoy))) > 12 do continue
+			damage := f32(18) * dt
+			if escorted do damage *= 0.35
+			ConvoyDamage(&convoy, damage)
+		}
+	}
+}
+
+WorldHasIsolatedSquad :: proc(w: ^World) -> bool {
+	for squad in w.squads {
+		if !SquadIsAlive(w, squad.id) do continue
+		for unit_id in squad.units {
+			unit := UnitGet(w, unit_id)
+			if unit != nil && UnitIsAlive(unit^) && !WorldCanResupply(w, unit^) do return true
+		}
+	}
+	return false
+}
+
+WorldHasIsolatedBuilding :: proc(w: ^World) -> bool {
+	for building in w.buildings {
+		if building.destroyed || !building.complete || building.type == .Headquarters || building.type == .RouteInfrastructure do continue
+		if !WorldSectorSupplied(w, WorldSectorAtPosition(w, building.pos), building.team) do return true
+	}
+	return false
+}
+
 WorldCargoIndex :: proc(w: ^World, id: CargoId) -> int {
 	for cargo, index in w.cargo {
 		if cargo.id == id do return index
@@ -323,6 +384,9 @@ WorldUpdateConvoys :: proc(w: ^World, dt: f32) {
 			continue
 		}
 		convoy.state = .Traveling
+		sector_path := WorldFindStrategicSectorPath(w, convoy.origin, convoy.destination, convoy.team, true)
+		if len(sector_path) > 1 do convoy.travel_time = max(convoy.progress, WorldStrategicPathTravelTime(sector_path[:]))
+		delete(sector_path)
 		convoy.progress += dt * convoy.speed
 		convoy.fuel = max(0, convoy.fuel - dt * f32(convoy.vehicle_count) * 0.1)
 		if convoy.progress < convoy.travel_time {
@@ -342,6 +406,7 @@ WorldUpdateConvoys :: proc(w: ^World, dt: f32) {
 }
 
 WorldUpdateLogistics :: proc(w: ^World, dt: f32) {
+	WorldUpdateConvoyRaids(w, dt)
 	WorldUpdateConvoys(w, dt)
 	WorldAssignCargo(w)
 }

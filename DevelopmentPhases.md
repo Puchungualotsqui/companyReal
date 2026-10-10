@@ -120,16 +120,16 @@ This document tracks the implementation order. Each phase should be playable or 
 
 ## Phase 8: High-Level Autonomy and Pathfinding
 
-- [ ] Replace direct destination movement with squad-level pathfinding.
-- [ ] Add a strategic sector route graph.
-- [ ] Add tactical terrain pathfinding within sectors.
-- [ ] Add roads, bridges, chokepoints, and route damage.
-- [ ] Add squad intents: advance, defend, assault, probe, escort, raid, resupply, and withdraw.
-- [ ] Let squads choose local targets, formations, cover, and retreat behavior.
-- [ ] Add convoy escort and convoy raid orders.
-- [ ] Add logistics AI rerouting around blocked or dangerous routes.
-- [ ] Add readable warnings for isolated squads, factories, and depots.
-- [ ] Add tests for path selection, blocked routes, and autonomous resupply.
+- [x] Replace direct destination movement with squad-level pathfinding.
+- [x] Add a strategic sector route graph.
+- [x] Add tactical terrain pathfinding within sectors.
+- [x] Add roads, bridges, chokepoints, and route damage.
+- [x] Add squad intents: advance, defend, assault, probe, escort, raid, resupply, and withdraw.
+- [x] Let squads choose local targets, formations, cover, and retreat behavior.
+- [x] Add convoy escort and convoy raid orders.
+- [x] Add logistics AI rerouting around blocked or dangerous routes.
+- [x] Add readable warnings for isolated squads, factories, and depots.
+- [x] Add tests for path selection, blocked routes, and autonomous resupply.
 
 **Exit:** Players can issue objectives and priorities while squads and transport units choose practical local actions on their own.
 

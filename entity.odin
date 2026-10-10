@@ -31,19 +31,29 @@ UnitSpawn :: proc(w: ^World, squad: SquadId, team: Team, type: UnitType, pos, fo
 
 SquadSpawn :: proc(w: ^World, team: Team, type: UnitType, count: int, pos: Vec2, owner := INVALID_PLAYER_ID) -> SquadId {
 	id := SquadId(uint(len(w.squads) + 1))
-	squad := Squad{id, owner, team, type, make([dynamic]UnitId), Order{.Idle, pos, INVALID_UNIT_ID}}
+	squad := Squad{id, owner, team, type, make([dynamic]UnitId), Order{.Idle, pos, INVALID_UNIT_ID}, .Idle, .Line, INVALID_CONVOY_ID, make([dynamic]Vec2), 0, pos, 0, 0}
 	append(&w.squads, squad)
 
 	for index: int = 0; index < count; index += 1 {
-		offset := SquadFormationOffset(index)
+		offset := SquadFormationOffset(index, squad.formation)
 		unit_id := UnitSpawn(w, id, team, type, Vec2Add(pos, offset), offset)
 		append(&w.squads[SquadIndex(id)].units, unit_id)
 	}
 	return id
 }
 
-SquadFormationOffset :: proc(index: int) -> Vec2 {
-	return Vec2{f32(index % 4) - 1.5, f32(index / 4) - 0.5}
+SquadFormationOffset :: proc(index: int, formation := FormationType.Line) -> Vec2 {
+	column := f32(index % 4)
+	row := f32(index / 4)
+	switch formation {
+	case .Line:
+		return Vec2{column - 1.5, row - 0.5}
+	case .Column:
+		return Vec2{0, f32(index) - 1.5}
+	case .Wedge:
+		return Vec2{column - 1.5 + row * 0.5, row - 0.5}
+	}
+	unreachable()
 }
 
 
@@ -75,10 +85,82 @@ SquadSetOrder :: proc(w: ^World, id: SquadId, order: Order) {
 	squad := SquadGet(w, id)
 	if squad == nil do return
 	squad.order = order
+	squad.path_index = 0
+	resize(&squad.path, 0)
+	switch order.type {
+	case .Idle:
+		squad.intent = .Idle
+	case .Move:
+		squad.intent = .Advance
+	case .Attack:
+		squad.intent = .Assault
+	case .Retreat:
+		squad.intent = .Withdraw
+	}
 	for unit_id in squad.units {
 		unit := UnitGet(w, unit_id)
 		if unit != nil do unit.order = order
 	}
+}
+
+SquadSetFormationForPlayer :: proc(w: ^World, player: PlayerId, id: SquadId, formation: FormationType) -> bool {
+	squad := SquadGet(w, id)
+	if squad == nil || !SquadCanControl(squad^, player) do return false
+	squad.formation = formation
+	for unit_id, index in squad.units {
+		unit := UnitGet(w, unit_id)
+		if unit != nil do unit.formation_offset = SquadFormationOffset(index, formation)
+	}
+	return true
+}
+
+SquadSetIntentForPlayer :: proc(w: ^World, player: PlayerId, id: SquadId, intent: SquadIntent, target: Vec2) -> bool {
+	squad := SquadGet(w, id)
+	if squad == nil || !SquadCanControl(squad^, player) do return false
+	squad.intent = intent
+	switch intent {
+	case .Assault:
+		squad.formation = .Wedge
+	case .Probe:
+		squad.formation = .Column
+	case .Defend, .Advance, .Escort, .Raid, .Resupply, .Withdraw, .Idle:
+		squad.formation = .Line
+	}
+	for unit_id, index in squad.units {
+		unit := UnitGet(w, unit_id)
+		if unit != nil do unit.formation_offset = SquadFormationOffset(index, squad.formation)
+	}
+	squad.convoy = INVALID_CONVOY_ID
+	order_type := OrderType.Move
+	if intent == .Withdraw do order_type = .Retreat
+	if intent == .Idle do order_type = .Idle
+	SquadSetOrder(w, id, Order{order_type, target, INVALID_UNIT_ID})
+	squad.intent = intent
+	return true
+}
+
+SquadSetEscortForPlayer :: proc(w: ^World, player: PlayerId, id: SquadId, convoy_id: ConvoyId) -> bool {
+	squad := SquadGet(w, id)
+	convoy := WorldConvoyGet(w, convoy_id)
+	if squad == nil || convoy == nil || !SquadCanControl(squad^, player) || squad.team != convoy.team do return false
+	squad.intent = .Escort
+	squad.convoy = convoy_id
+	SquadSetOrder(w, id, Order{.Move, WorldConvoyPosition(w, convoy^), INVALID_UNIT_ID})
+	squad.intent = .Escort
+	squad.convoy = convoy_id
+	return true
+}
+
+SquadSetRaidForPlayer :: proc(w: ^World, player: PlayerId, id: SquadId, convoy_id: ConvoyId) -> bool {
+	squad := SquadGet(w, id)
+	convoy := WorldConvoyGet(w, convoy_id)
+	if squad == nil || convoy == nil || !SquadCanControl(squad^, player) || squad.team == convoy.team do return false
+	squad.intent = .Raid
+	squad.convoy = convoy_id
+	SquadSetOrder(w, id, Order{.Move, WorldConvoyPosition(w, convoy^), INVALID_UNIT_ID})
+	squad.intent = .Raid
+	squad.convoy = convoy_id
+	return true
 }
 
 WorldUpdate :: proc(w: ^World, dt: f32) {
@@ -92,8 +174,8 @@ WorldUpdate :: proc(w: ^World, dt: f32) {
 WorldStep :: proc(w: ^World) {
 	w.time += w.step
 	w.tick += 1
-	for &unit in w.units do UnitUpdate(w, &unit, w.step)
 	WorldUpdateSquads(w)
+	for &unit in w.units do UnitUpdate(w, &unit, w.step)
 	WorldUpdateSectors(w, w.step)
 	WorldUpdateBuildings(w, w.step)
 	WorldUpdateLogistics(w, w.step)
@@ -135,6 +217,16 @@ UnitUpdate :: proc(w: ^World, unit: ^Unit, dt: f32) {
 UnitIdle :: proc(unit: ^Unit) { unit.state = .Idle; unit.velocity = Vec2{} }
 
 UnitMove :: proc(w: ^World, unit: ^Unit, dt: f32) {
+	squad := SquadGet(w, unit.squad)
+	if squad != nil {
+		SquadEnsurePath(w, squad, squad.order.target_pos)
+		if len(squad.path) > 0 {
+			UnitMoveTo(w, unit, SquadPathTarget(w, squad, unit^), dt)
+		} else {
+			UnitIdle(unit)
+		}
+		return
+	}
 	target := Vec2Add(unit.order.target_pos, unit.formation_offset)
 	UnitMoveTo(w, unit, target, dt)
 }
@@ -157,6 +249,19 @@ UnitAttack :: proc(w: ^World, unit: ^Unit, dt: f32) {
 	delta := Vec2Sub(target.pos, unit.pos)
 	distance := Vec2Length(delta)
 	if distance > stats.range {
+		squad := SquadGet(w, unit.squad)
+		if squad != nil {
+			squad.order.target_pos = target.pos
+			squad.intent = .Assault
+			squad.formation = .Wedge
+			SquadEnsurePath(w, squad, target.pos)
+			if len(squad.path) > 0 {
+				UnitMoveTo(w, unit, SquadPathTarget(w, squad, unit^), dt)
+			} else {
+				UnitIdle(unit)
+			}
+			return
+		}
 		UnitMoveTo(w, unit, target.pos, dt)
 		return
 	}
@@ -250,6 +355,26 @@ UnitRetreatPosition :: proc(team: Team) -> Vec2 {
 
 UnitRetreat :: proc(w: ^World, unit: ^Unit, dt: f32) {
 	destination := UnitRetreatPosition(unit.team)
+	squad := SquadGet(w, unit.squad)
+	if squad != nil {
+		squad.intent = .Withdraw
+		squad.order = Order{.Retreat, destination, INVALID_UNIT_ID}
+		SquadEnsurePath(w, squad, destination)
+		if len(squad.path) > 0 {
+			unit.state = .Retreating
+			UnitMoveTo(w, unit, SquadPathTarget(w, squad, unit^), dt)
+			if Vec2Length(Vec2Sub(destination, unit.pos)) > 1 do unit.state = .Retreating
+			if Vec2Length(Vec2Sub(destination, unit.pos)) <= 1 do unit.morale = max(unit.morale, 0.45)
+			if Vec2Length(Vec2Sub(destination, unit.pos)) <= 1 {
+				unit.suppression = 0
+				unit.order = Order{.Idle, unit.pos, INVALID_UNIT_ID}
+				UnitIdle(unit)
+			}
+			unit.velocity = Vec2{}
+			unit.state = .Retreating
+			return
+		}
+	}
 	delta := Vec2Sub(destination, unit.pos)
 	distance := Vec2Length(delta)
 	travel := UnitMoveSpeed(w, unit^) * 1.25 * dt
@@ -268,7 +393,21 @@ UnitRetreat :: proc(w: ^World, unit: ^Unit, dt: f32) {
 
 UnitWoundedUpdate :: proc(w: ^World, unit: ^Unit, dt: f32) {
 	unit.velocity = Vec2{}
-	if !WorldCanResupply(w, unit^) do return
+	if unit.order.type == .Attack do return
+	if !WorldCanResupply(w, unit^) {
+		destination := WorldFindResupplyPosition(w, unit.team, unit.pos)
+		squad := SquadGet(w, unit.squad)
+		if squad != nil {
+			squad.intent = .Resupply
+			squad.order = Order{.Move, destination, INVALID_UNIT_ID}
+			SquadEnsurePath(w, squad, destination)
+			if len(squad.path) > 0 {
+				UnitMoveTo(w, unit, SquadPathTarget(w, squad, unit^), dt)
+				unit.state = .Wounded
+			}
+		}
+		return
+	}
 	heal := WorldConsumeResource(w, unit.team, WorldSectorAtPosition(w, unit.pos), .Materials, 6 * dt)
 	unit.health = min(unit.max_health, unit.health + heal)
 	if unit.health >= unit.max_health * 0.5 {
@@ -299,7 +438,10 @@ WorldCanResupply :: proc(w: ^World, unit: Unit) -> bool {
 	sector_id := WorldSectorAtPosition(w, unit.pos)
 	if sector_id == INVALID_SECTOR_ID do return false
 	if WorldSectorHasBuilding(w, sector_id, unit.team, .SupplyDepot) || WorldSectorHasBuilding(w, sector_id, unit.team, .ReinforcementCenter) do return true
-	return WorldSectorSupplied(w, sector_id, unit.team)
+	for building in w.buildings {
+		if building.complete && !building.destroyed && building.team == unit.team && building.type == .Headquarters && Vec2Length(Vec2Sub(building.pos, unit.pos)) <= 8 do return true
+	}
+	return false
 }
 
 
@@ -348,8 +490,41 @@ SquadIsAlive :: proc(w: ^World, id: SquadId) -> bool {
 
 WorldUpdateSquads :: proc(w: ^World) {
 	for &squad in w.squads {
-		if SquadIsAlive(w, squad.id) do continue
-		squad.order = Order{.Idle, Vec2{}, INVALID_UNIT_ID}
+		if !SquadIsAlive(w, squad.id) {
+			squad.order = Order{.Idle, Vec2{}, INVALID_UNIT_ID}
+			squad.intent = .Idle
+			continue
+		}
+		switch squad.intent {
+		case .Escort, .Raid:
+			convoy := WorldConvoyGet(w, squad.convoy)
+			if convoy == nil {
+				squad.intent = .Idle
+				squad.convoy = INVALID_CONVOY_ID
+				SquadSetOrder(w, squad.id, Order{.Idle, WorldSquadLeaderPosition(w, squad), INVALID_UNIT_ID})
+				continue
+			}
+			squad.order = Order{.Move, WorldConvoyPosition(w, convoy^), INVALID_UNIT_ID}
+		case .Withdraw:
+			squad.order = Order{.Retreat, UnitRetreatPosition(squad.team), INVALID_UNIT_ID}
+		case .Resupply:
+			squad.order = Order{.Move, WorldFindResupplyPosition(w, squad.team, WorldSquadLeaderPosition(w, squad)), INVALID_UNIT_ID}
+		case .Defend:
+			squad.order.target_pos = WorldFindLocalCoverPosition(w, squad.team, squad.order.target_pos)
+			squad.order.type = .Move
+		case .Advance, .Probe, .Assault, .Idle:
+			if squad.intent == .Assault && squad.order.target != INVALID_UNIT_ID {
+				target := UnitGet(w, squad.order.target)
+				if target != nil && UnitIsAlive(target^) do squad.order.target_pos = target.pos
+			}
+		}
+		if squad.order.type == .Move || squad.order.type == .Retreat || squad.intent == .Defend || squad.intent == .Resupply || squad.intent == .Escort || squad.intent == .Raid {
+			SquadEnsurePath(w, &squad, squad.order.target_pos)
+		}
+		for unit_id in squad.units {
+			unit := UnitGet(w, unit_id)
+			if unit != nil && UnitIsAlive(unit^) do unit.order = squad.order
+		}
 	}
 }
 
