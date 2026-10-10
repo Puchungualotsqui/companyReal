@@ -52,6 +52,10 @@ DrawBoard :: proc(world: ^World, camera: ViewCamera, selected: SquadId) {
 		width := i32(sector.bounds.width * f32(CELL_SIZE) * camera.zoom)
 		height := i32(sector.bounds.height * f32(CELL_SIZE) * camera.zoom)
 		rl.DrawRectangleLines(i32(top_left.x), i32(top_left.y), width, height, UnitTeamColor(sector.team))
+		if sector.objective != .None {
+			center := ViewCameraWorldToScreen(camera, WorldSectorCenter(world, sector.id))
+			rl.DrawTextCodepoint(rl.GetFontDefault(), SectorObjectiveChar(sector.objective), rl.Vector2{center.x - 5, center.y - 8}, 16, ObjectiveColor(sector.objective))
+		}
 	}
 	for strike in world.strikes {
 		target := ViewCameraWorldToScreen(camera, strike.target)
@@ -141,7 +145,23 @@ DrawBoard :: proc(world: ^World, camera: ViewCamera, selected: SquadId) {
 	}
 	if WorldHasIsolatedBuilding(world) {
 		rl.DrawText("INDUSTRY ISOLATED", BOARD_X, warning_y, 14, COLOR_SELECTION)
+		warning_y -= 16
 	}
+	match_message: cstring
+	switch world.match_state {
+	case .Setup:
+		match_message = "MATCH SETUP"
+	case .Running:
+		match_message = "MATCH RUNNING"
+	case .Victory:
+		match_message = "VICTORY - PRESS N TO RESTART"
+	case .Defeat:
+		match_message = "DEFEAT - PRESS N TO RESTART"
+	case .Draw:
+		match_message = "DRAW - PRESS N TO RESTART"
+	}
+	rl.DrawText(match_message, BOARD_X, warning_y, 14, COLOR_SELECTION)
+	DrawMatchHud(world)
 }
 
 RouteColor :: proc(type: RouteType) -> rl.Color {
@@ -152,6 +172,80 @@ RouteColor :: proc(type: RouteType) -> rl.Color {
 		return rl.Color{80, 140, 180, 255}
 	case .Chokepoint:
 		return rl.Color{180, 120, 60, 255}
+	}
+	unreachable()
+}
+
+DrawMatchHud :: proc(world: ^World) {
+	strategic_total := 0
+	strategic_a := 0
+	for sector in world.sectors {
+		if sector.objective != .Strategic do continue
+		strategic_total += 1
+		if sector.team == .A do strategic_a += 1
+	}
+	rl.DrawText("OBJ A", 460, 4, 14, COLOR_TEAM_A)
+	DrawNumber(strategic_a, 505, 4, 14, COLOR_TEAM_A)
+	rl.DrawText("/", 525, 4, 14, COLOR_TEAM_A)
+	DrawNumber(strategic_total, 538, 4, 14, COLOR_TEAM_A)
+	rl.DrawText("REINF", 580, 4, 14, COLOR_TEAM_A)
+	DrawNumber(WorldTeamReinforcements(world, .A), 635, 4, 14, COLOR_TEAM_A)
+	rl.DrawText("TIME", 460, 18, 14, COLOR_BORDER)
+	minutes := int(world.match_time) / 60
+	seconds := int(world.match_time) % 60
+	DrawNumber(minutes, 505, 18, 14, COLOR_BORDER)
+	rl.DrawText(":", 525, 18, 14, COLOR_BORDER)
+	if seconds < 10 {
+		DrawNumber(0, 538, 18, 14, COLOR_BORDER)
+		DrawNumber(seconds, 547, 18, 14, COLOR_BORDER)
+	} else {
+		DrawNumber(seconds, 538, 18, 14, COLOR_BORDER)
+	}
+}
+
+DrawNumber :: proc(value: int, x, y, size: i32, color: rl.Color) {
+	number := max(0, value)
+	if number == 0 {
+		rl.DrawTextCodepoint(rl.GetFontDefault(), '0', rl.Vector2{f32(x), f32(y)}, f32(size), color)
+		return
+	}
+	digits: [12]rune
+	count := 0
+	for number > 0 && count < len(digits) {
+		digits[count] = rune(number % 10) + '0'
+		number /= 10
+		count += 1
+	}
+	for index := count - 1; index >= 0; index -= 1 {
+		digit_x := x + i32(count - index - 1) * (size * 3 / 5)
+		rl.DrawTextCodepoint(rl.GetFontDefault(), digits[index], rl.Vector2{f32(digit_x), f32(y)}, f32(size), color)
+	}
+}
+
+SectorObjectiveChar :: proc(objective: SectorObjectiveType) -> rune {
+	switch objective {
+	case .Strategic:
+		return 'S'
+	case .Base:
+		return 'B'
+	case .Resource:
+		return 'R'
+	case .None:
+		return ' '
+	}
+	unreachable()
+}
+
+ObjectiveColor :: proc(objective: SectorObjectiveType) -> rl.Color {
+	switch objective {
+	case .Strategic:
+		return COLOR_SELECTION
+	case .Base:
+		return COLOR_BORDER
+	case .Resource:
+		return ResourceColor(.Materials)
+	case .None:
+		return COLOR_NEUTRAL
 	}
 	unreachable()
 }

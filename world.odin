@@ -34,6 +34,21 @@ ResourceType :: enum u8 {
 	Munitions,
 }
 
+SectorObjectiveType :: enum u8 {
+	None,
+	Strategic,
+	Base,
+	Resource,
+}
+
+MatchState :: enum u8 {
+	Setup,
+	Running,
+	Victory,
+	Defeat,
+	Draw,
+}
+
 RESOURCE_TYPE_COUNT :: 3
 
 ResourceInventory :: struct {
@@ -215,6 +230,9 @@ Sector :: struct {
 	capture: f32,
 	inventory: ResourceInventory,
 	requested: ResourceInventory,
+	objective: SectorObjectiveType,
+	objective_team: Team,
+	objective_value: int,
 }
 
 CargoLot :: struct {
@@ -335,6 +353,12 @@ World :: struct {
 	max_size: Vec2,
 	terrain_revision: u64,
 	route_revision: u64,
+	match_state: MatchState,
+	match_time: f32,
+	match_time_limit: f32,
+	winner: Team,
+	reinforcements: [3]int,
+	reinforcement_limit: [3]int,
 }
 
 WorldInit :: proc(w: ^World) {
@@ -356,6 +380,12 @@ WorldInit :: proc(w: ^World) {
 	for index: int = 0; index < w.terrain_width * w.terrain_height; index += 1 do append(&w.terrain, TerrainType.Open)
 	w.terrain_revision = 0
 	w.route_revision = 0
+	w.match_state = .Setup
+	w.match_time = 0
+	w.match_time_limit = 20 * 60
+	w.winner = .Neutral
+	w.reinforcements = [3]int{0, 100, 100}
+	w.reinforcement_limit = [3]int{0, 100, 100}
 	WorldCreateTerrain(w)
 	w.cargo_lost = 0
 	w.next_cargo_id = CargoId(1)
@@ -403,7 +433,7 @@ WorldCreateSectors :: proc(w: ^World) {
 		for x: i32 = 0; x < 4; x += 1 {
 			id := SectorId(uint(len(w.sectors) + 1))
 			bounds := Rect{f32(x) * sector_size.x, f32(y) * sector_size.y, sector_size.x, sector_size.y}
-			append(&w.sectors, Sector{id, .Neutral, bounds, 0, ResourceInventory{}, ResourceInventory{}})
+			append(&w.sectors, Sector{id, .Neutral, bounds, 0, ResourceInventory{}, ResourceInventory{}, .None, .Neutral, 0})
 		}
 	}
 }

@@ -148,13 +148,13 @@ This document tracks the implementation order. Each phase should be playable or 
 
 ## Phase 10: Main Game Mode
 
-- [ ] Build connected sector maps.
-- [ ] Add sector objectives.
-- [ ] Add reinforcement limits.
-- [ ] Add base sectors.
-- [ ] Add victory and defeat conditions.
-- [ ] Add match setup and restart.
-- [ ] Target 15–30 minute matches.
+- [x] Build connected sector maps.
+- [x] Add sector objectives.
+- [x] Add reinforcement limits.
+- [x] Add base sectors.
+- [x] Add victory and defeat conditions.
+- [x] Add match setup and restart.
+- [x] Target 15–30 minute matches.
 
 **Exit:** A complete single-player match can start, progress, and end.
 

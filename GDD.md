@@ -44,7 +44,9 @@ A sector is controlled through:
 - Defensive structures.
 - Time spent uncontested.
 
-A team wins by controlling a required percentage of strategic sectors, capturing the enemy base sector, or breaking the enemy's reinforcement network.
+A team wins by capturing the enemy base sector, controlling every strategic objective, or breaking the enemy's reinforcement network. In the first single-player match, the player is Team A: capturing Team B's base or all four strategic sectors is a victory; losing Team A's base or every remaining squad after the reinforcement pool is exhausted is a defeat. If the 20-minute match limit expires without a decisive result, the match is a draw.
+
+The default map is a connected 4×4 sector network. Team A and Team B begin in opposite corner base sectors. Strategic objectives occupy the center lanes, while resource objectives provide incentives to contest the industrial routes between the bases. Pressing `N` after a result resets the scenario and starts a fresh match.
 
 Logistics are part of the frontline. A sector can be tactically occupied but strategically unsustainable if its routes, depots, or production network are cut. Local stockpiles allow a short period of continued operation after isolation, creating a readable delay before a force becomes ineffective.
 
@@ -278,7 +280,7 @@ Players control logistics through high-level policies:
 
 Logistics AI handles routine transport. It creates and assigns convoys in response to production demand and stockpile priorities. Convoys can be delayed, intercepted, destroyed, rerouted, or captured; a destroyed convoy loses its remaining cargo. Distant logistics may be simulated as one convoy record or a sector flow, while nearby logistics can be shown as multiple visible trucks, tankers, supply teams, cargo, and wrecks.
 
-Manpower is not a physical resource in the first version. Reinforcements are limited by headquarters capacity, production buildings, faction rules, and time.
+Manpower is not a physical resource in the first version. Each team starts with 100 reinforcement points. A combat unit death consumes one point; produced units and the initial garrison do not consume points. A team with no reinforcement points can still fight with surviving squads, but loses when its last squad is gone. The match HUD shows Team A's strategic objective count, reinforcement pool, elapsed time, and terminal result.
 
 ## 12. Factions
 

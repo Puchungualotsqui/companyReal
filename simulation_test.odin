@@ -534,3 +534,81 @@ FactionCountersCreateAsymmetricMatchups :: proc(t: ^testing.T) {
 	target := UnitGet(&world, SquadGet(&world, target_squad).units[0])
 	testing.expect(t, FactionCounterMultiplier(&world, attacker^, target^) > 1, "Meridian precision units lacked a vehicle counter")
 }
+
+@(test)
+MainMatchSetupBuildsObjectivesAndBases :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	WorldSetupMatch(&world)
+	testing.expect_value(t, world.match_state, MatchState.Running)
+	testing.expect_value(t, len(world.sectors), 16)
+	testing.expect_value(t, len(world.routes), 24)
+	testing.expect_value(t, WorldBaseSector(&world, .A), SectorId(1))
+	testing.expect_value(t, WorldBaseSector(&world, .B), SectorId(16))
+	testing.expect(t, WorldIsBaseSector(&world, SectorId(1)), "Team A base objective was not assigned")
+	testing.expect(t, WorldTeamControlsBase(&world, .A), "Team A did not control its starting base")
+	testing.expect(t, WorldTeamControlsBase(&world, .B), "Team B did not control its starting base")
+	strategic_count := 0
+	for sector in world.sectors {
+		if sector.objective == .Strategic do strategic_count += 1
+	}
+	testing.expect_value(t, strategic_count, 4)
+}
+
+@(test)
+MainMatchReinforcementsAreConsumedOncePerDeath :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+	WorldSetupMatch(&world)
+
+	squad := SquadGet(&world, SquadId(1))
+	unit := UnitGet(&world, squad.units[0])
+	before := WorldTeamReinforcements(&world, .A)
+	UnitDamage(&world, unit, 10000, 0)
+	testing.expect_value(t, WorldTeamReinforcements(&world, .A), before - 1)
+	UnitDamage(&world, unit, 10000, 0)
+	testing.expect_value(t, WorldTeamReinforcements(&world, .A), before - 1)
+}
+
+@(test)
+MainMatchEndsOnBaseCaptureAndStopsTicks :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+	WorldSetupMatch(&world)
+
+	base_b := WorldBaseSector(&world, .B)
+	for &unit in world.units {
+		if unit.team == .A {
+			unit.pos = WorldSectorCenter(&world, base_b)
+		} else if unit.team == .B {
+			unit.state = .Dead
+		}
+	}
+	WorldSetMatchSectorControl(&world, base_b, .A, 1)
+	WorldStep(&world)
+	testing.expect_value(t, world.match_state, MatchState.Victory)
+	testing.expect_value(t, world.winner, Team.A)
+	tick := world.tick
+	WorldStep(&world)
+	testing.expect_value(t, world.tick, tick)
+}
+
+@(test)
+MainMatchDrawsAtTimeLimitAndCanRestart :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+	WorldSetupMatch(&world)
+	world.match_time_limit = world.step
+	WorldStep(&world)
+	testing.expect_value(t, world.match_state, MatchState.Draw)
+
+	WorldResetMatch(&world)
+	testing.expect_value(t, world.match_state, MatchState.Running)
+	testing.expect_value(t, world.match_time, f32(0))
+	testing.expect_value(t, len(world.squads), 6)
+}

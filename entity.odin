@@ -172,6 +172,7 @@ WorldUpdate :: proc(w: ^World, dt: f32) {
 }
 
 WorldStep :: proc(w: ^World) {
+	if w.match_state == .Victory || w.match_state == .Defeat || w.match_state == .Draw do return
 	w.time += w.step
 	w.tick += 1
 	WorldUpdateSquads(w)
@@ -181,6 +182,7 @@ WorldStep :: proc(w: ^World) {
 	WorldUpdateLogistics(w, w.step)
 	WorldUpdateArtillery(w, w.step)
 	WorldUpdateSupply(w, w.step)
+	WorldUpdateMatch(w, w.step)
 }
 
 UnitUpdate :: proc(w: ^World, unit: ^Unit, dt: f32) {
@@ -311,6 +313,7 @@ UnitDamage :: proc(w: ^World, unit: ^Unit, damage, suppression: f32) {
 		unit.state = .Dead
 		unit.velocity = Vec2{}
 		unit.order = Order{.Idle, unit.pos, INVALID_UNIT_ID}
+		WorldConsumeReinforcement(w, unit.team, 1)
 		return
 	}
 	if unit.health <= unit.max_health * 0.35 do unit.state = .Wounded
