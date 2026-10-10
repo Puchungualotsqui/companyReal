@@ -260,6 +260,8 @@ WorldUpdateBuildings :: proc(w: ^World, dt: f32) {
 		case .MunitionsFactory:
 			input := ResourceInventoryMake(dt * 0.75, dt * 0.25, 0)
 			if ResourceInventoryConsume(&sector.inventory, input) do WorldAddSectorResource(w, sector_id, .Munitions, dt)
+		case .Headquarters, .Warehouse, .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
+			building.production_timer += 0
 		}
 
 		if building.queue <= 0 do continue

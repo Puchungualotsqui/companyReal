@@ -2,6 +2,10 @@ package main
 
 CARGO_BLOCKED_LOSS_TIME :: 8.0
 CARGO_BASE_TRAVEL_TIME :: 1.0
+CONVOY_CARGO_CAPACITY :: 100.0
+CONVOY_VEHICLE_CAPACITY :: 100.0
+CONVOY_STARTING_FUEL :: 100.0
+CONVOY_HEALTH :: 100.0
 SECTOR_BASE_STORAGE :: 500.0
 HQ_STORAGE_BONUS :: 1000.0
 WAREHOUSE_STORAGE_BONUS :: 2000.0
@@ -42,7 +46,7 @@ WorldSectorCenter :: proc(w: ^World, id: SectorId) -> Vec2 {
 
 WorldSectorResourceCapacity :: proc(w: ^World, sector_id: SectorId, resource: ResourceType) -> f32 {
 	if WorldSectorGet(w, sector_id) == nil do return 0
-	capacity := SECTOR_BASE_STORAGE
+	capacity: f32 = SECTOR_BASE_STORAGE
 	for building in w.buildings {
 		if building.destroyed || !building.complete || WorldSectorAtPosition(w, building.pos) != sector_id do continue
 		switch building.type {
@@ -52,6 +56,8 @@ WorldSectorResourceCapacity :: proc(w: ^World, sector_id: SectorId, resource: Re
 			capacity += WAREHOUSE_STORAGE_BONUS
 		case .SupplyDepot:
 			capacity += DEPOT_STORAGE_BONUS
+		case .ResourceSite, .Refinery, .MunitionsFactory, .InfantryProduction, .ReinforcementCenter, .ObservationPost, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
+			continue
 		}
 	}
 	return capacity
@@ -143,17 +149,24 @@ WorldCargoRouteOperational :: proc(w: ^World, cargo: CargoLot) -> bool {
 	return true
 }
 
-WorldCargoPosition :: proc(w: ^World, cargo: CargoLot) -> Vec2 {
-	origin := WorldSectorCenter(w, cargo.origin)
-	destination := WorldSectorCenter(w, cargo.destination)
-	amount := clamp(cargo.progress / max(0.1, cargo.travel_time), 0, 1)
+WorldCargoGet :: proc(w: ^World, id: CargoId) -> ^CargoLot {
+	for &cargo in w.cargo {
+		if cargo.id == id do return &cargo
+	}
+	return nil
+}
+
+WorldConvoyPosition :: proc(w: ^World, convoy: Convoy) -> Vec2 {
+	origin := WorldSectorCenter(w, convoy.origin)
+	destination := WorldSectorCenter(w, convoy.destination)
+	amount := clamp(convoy.progress / max(0.1, convoy.travel_time), 0, 1)
 	return Vec2Lerp(origin, destination, amount)
 }
 
 WorldQueueCargo :: proc(w: ^World, team: Team, resource: ResourceType, amount: f32, origin, destination: SectorId) -> CargoId {
 	if team == .Neutral || amount <= 0 || origin == destination do return INVALID_CARGO_ID
 	if WorldSectorGet(w, origin) == nil || WorldSectorGet(w, destination) == nil do return INVALID_CARGO_ID
-	cargo := CargoLot{CargoId(0), team, resource, amount, origin, destination, 0, 0, 0}
+	cargo := CargoLot{INVALID_CARGO_ID, INVALID_CONVOY_ID, team, resource, amount, origin, destination}
 	if !WorldCargoRouteOperational(w, cargo) do return INVALID_CARGO_ID
 	provided := WorldConsumeResource(w, team, origin, resource, amount)
 	if provided <= 0 do return INVALID_CARGO_ID
@@ -163,8 +176,13 @@ WorldQueueCargo :: proc(w: ^World, team: Team, resource: ResourceType, amount: f
 	cargo.id = w.next_cargo_id
 	w.next_cargo_id += 1
 	cargo.quantity = provided
-	cargo.travel_time = max(0.5, f32(distance) * CARGO_BASE_TRAVEL_TIME)
+	convoy_id := w.next_convoy_id
+	w.next_convoy_id += 1
+	cargo.convoy = convoy_id
+	vehicle_count := max(1, int((provided + CONVOY_VEHICLE_CAPACITY - 1) / CONVOY_VEHICLE_CAPACITY))
+	convoy := Convoy{convoy_id, team, resource, cargo.id, origin, destination, 0, max(0.5, f32(distance) * CARGO_BASE_TRAVEL_TIME), 0, vehicle_count, f32(vehicle_count) * CONVOY_VEHICLE_CAPACITY, 1, CONVOY_STARTING_FUEL, CONVOY_HEALTH, .Traveling}
 	append(&w.cargo, cargo)
+	append(&w.convoys, convoy)
 	return cargo.id
 }
 
@@ -204,7 +222,7 @@ WorldFindCargoSource :: proc(w: ^World, team: Team, resource: ResourceType, dest
 		if sector.id == destination || sector.team != team do continue
 		available := ResourceAmount(sector.inventory, resource) - 100
 		if available <= 0 do continue
-		candidate := CargoLot{INVALID_CARGO_ID, team, resource, available, sector.id, destination, 0, 0, 0}
+		candidate := CargoLot{INVALID_CARGO_ID, INVALID_CONVOY_ID, team, resource, available, sector.id, destination}
 		if !WorldCargoRouteOperational(w, candidate) do continue
 		position := WorldSectorCoordinates(sector.id)
 		distance := abs(int(position.x - destination_pos.x)) + abs(int(position.y - destination_pos.y))
@@ -232,42 +250,68 @@ WorldAssignCargo :: proc(w: ^World) {
 	}
 }
 
-WorldUpdateCargo :: proc(w: ^World, dt: f32) {
+WorldCargoIndex :: proc(w: ^World, id: CargoId) -> int {
+	for cargo, index in w.cargo {
+		if cargo.id == id do return index
+	}
+	return -1
+}
+
+WorldRemoveCargo :: proc(w: ^World, index: int) {
+	last := len(w.cargo) - 1
+	w.cargo[index] = w.cargo[last]
+	resize(&w.cargo, last)
+}
+
+WorldRemoveConvoy :: proc(w: ^World, index: int) {
+	last := len(w.convoys) - 1
+	w.convoys[index] = w.convoys[last]
+	resize(&w.convoys, last)
+}
+
+WorldUpdateConvoys :: proc(w: ^World, dt: f32) {
 	index := 0
-	for index < len(w.cargo) {
-		cargo := &w.cargo[index]
+	for index < len(w.convoys) {
+		convoy := &w.convoys[index]
+		cargo_index := WorldCargoIndex(w, convoy.cargo)
+		if cargo_index < 0 {
+			WorldRemoveConvoy(w, index)
+			continue
+		}
+		cargo := &w.cargo[cargo_index]
 		if !WorldCargoRouteOperational(w, cargo^) {
-			cargo.blocked_time += dt
-			if cargo.blocked_time < CARGO_BLOCKED_LOSS_TIME {
+			convoy.state = .Blocked
+			convoy.blocked_time += dt
+			if convoy.blocked_time < CARGO_BLOCKED_LOSS_TIME {
 				index += 1
 				continue
 			}
 			w.cargo_lost += cargo.quantity
-			ArtilleryAddEffect(w, .Wreck, WorldCargoPosition(w, cargo^), 20, 2)
-			last := len(w.cargo) - 1
-			w.cargo[index] = w.cargo[last]
-			resize(&w.cargo, last)
+			ArtilleryAddEffect(w, .Wreck, WorldConvoyPosition(w, convoy^), 20, 2 + f32(convoy.vehicle_count))
+			WorldRemoveCargo(w, cargo_index)
+			WorldRemoveConvoy(w, index)
 			continue
 		}
-		cargo.progress += dt
-		if cargo.progress < cargo.travel_time {
+		convoy.state = .Traveling
+		convoy.progress += dt * convoy.speed
+		convoy.fuel = max(0, convoy.fuel - dt * f32(convoy.vehicle_count) * 0.1)
+		if convoy.progress < convoy.travel_time {
 			index += 1
 			continue
 		}
 		accepted := WorldAddSectorResource(w, cargo.destination, cargo.resource, cargo.quantity)
 		cargo.quantity -= accepted
 		if cargo.quantity > 0 {
-			cargo.progress = cargo.travel_time
+			convoy.progress = convoy.travel_time
 			index += 1
 			continue
 		}
-		last := len(w.cargo) - 1
-		w.cargo[index] = w.cargo[last]
-		resize(&w.cargo, last)
+		WorldRemoveCargo(w, cargo_index)
+		WorldRemoveConvoy(w, index)
 	}
 }
 
 WorldUpdateLogistics :: proc(w: ^World, dt: f32) {
-	WorldUpdateCargo(w, dt)
+	WorldUpdateConvoys(w, dt)
 	WorldAssignCargo(w)
 }

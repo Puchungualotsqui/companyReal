@@ -7,6 +7,7 @@ SectorId :: distinct uint
 BuildingId :: distinct uint
 StrikeId :: distinct uint
 CargoId :: distinct uint
+ConvoyId :: distinct uint
 PlayerId :: distinct uint
 
 INVALID_ENTITY_ID : EntityId : 0
@@ -16,6 +17,7 @@ INVALID_SECTOR_ID : SectorId : 0
 INVALID_BUILDING_ID : BuildingId : 0
 INVALID_STRIKE_ID : StrikeId : 0
 INVALID_CARGO_ID : CargoId : 0
+INVALID_CONVOY_ID : ConvoyId : 0
 INVALID_PLAYER_ID : PlayerId : 0
 LOCAL_PLAYER_ID : PlayerId : 1
 PLAYER_TWO_ID : PlayerId : 2
@@ -36,6 +38,11 @@ RESOURCE_TYPE_COUNT :: 3
 
 ResourceInventory :: struct {
 	amounts: [RESOURCE_TYPE_COUNT]f32,
+}
+
+ConvoyState :: enum u8 {
+	Traveling,
+	Blocked,
 }
 
 ResourceInventoryMake :: proc(materials, fuel, munitions: f32) -> ResourceInventory {
@@ -165,14 +172,30 @@ Sector :: struct {
 
 CargoLot :: struct {
 	id: CargoId,
+	convoy: ConvoyId,
 	team: Team,
 	resource: ResourceType,
 	quantity: f32,
 	origin: SectorId,
 	destination: SectorId,
+}
+
+Convoy :: struct {
+	id: ConvoyId,
+	team: Team,
+	resource: ResourceType,
+	cargo: CargoId,
+	origin: SectorId,
+	destination: SectorId,
 	progress: f32,
 	travel_time: f32,
 	blocked_time: f32,
+	vehicle_count: int,
+	capacity: f32,
+	speed: f32,
+	fuel: f32,
+	health: f32,
+	state: ConvoyState,
 }
 
 Building :: struct {
@@ -245,6 +268,7 @@ World :: struct {
 	sectors: [dynamic]Sector,
 	buildings: [dynamic]Building,
 	cargo: [dynamic]CargoLot,
+	convoys: [dynamic]Convoy,
 	strikes: [dynamic]ArtilleryStrike,
 	shells: [dynamic]ArtilleryShell,
 	effects: [dynamic]Effect,
@@ -254,6 +278,7 @@ World :: struct {
 	terrain_height: int,
 	cargo_lost: f32,
 	next_cargo_id: CargoId,
+	next_convoy_id: ConvoyId,
 	tick: u64,
 	time: f32,
 	accumulator: f32,
@@ -267,6 +292,7 @@ WorldInit :: proc(w: ^World) {
 	w.sectors = make([dynamic]Sector)
 	w.buildings = make([dynamic]Building)
 	w.cargo = make([dynamic]CargoLot)
+	w.convoys = make([dynamic]Convoy)
 	w.strikes = make([dynamic]ArtilleryStrike)
 	w.shells = make([dynamic]ArtilleryShell)
 	w.effects = make([dynamic]Effect)
@@ -278,6 +304,7 @@ WorldInit :: proc(w: ^World) {
 	WorldCreateTerrain(w)
 	w.cargo_lost = 0
 	w.next_cargo_id = CargoId(1)
+	w.next_convoy_id = ConvoyId(1)
 	w.tick = 0
 	w.time = 0
 	w.accumulator = 0
@@ -293,6 +320,7 @@ WorldDeinit :: proc(w: ^World) {
 	delete(w.sectors)
 	delete(w.buildings)
 	delete(w.cargo)
+	delete(w.convoys)
 	delete(w.strikes)
 	delete(w.shells)
 	delete(w.effects)

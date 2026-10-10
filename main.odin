@@ -39,7 +39,7 @@ main :: proc() {
 		WorldUpdate(&world, dt)
 		rl.BeginDrawing()
 		rl.ClearBackground(COLOR_BACKGROUND)
-		DrawBoard(world, commands.camera, commands.selected)
+		DrawBoard(&world, commands.camera, commands.selected)
 		rl.EndDrawing()
 	}
 }

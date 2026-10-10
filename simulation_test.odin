@@ -197,12 +197,12 @@ EngineerConstructionConnectsSupply :: proc(t: ^testing.T) {
 	testing.expect(t, !WorldSectorSupplied(&world, SectorId(2), .A), "enemy sector did not cut supply line")
 
 	engineer_squad := SquadSpawn(&world, .A, .Engineer, 1, Vec2{20, 20}, LOCAL_PLAYER_ID)
+	before := WorldSectorResourceCapacity(&world, SectorId(1), .Materials)
 	building := BuildingConstructForPlayer(&world, LOCAL_PLAYER_ID, engineer_squad, .SupplyDepot, Vec2{20, 20})
 	testing.expect(t, building != INVALID_BUILDING_ID, "engineer could not start construction")
 	for index: int = 0; index < 140; index += 1 do WorldStep(&world)
 	constructed := BuildingGet(&world, building)
 	testing.expect(t, constructed.complete, "engineer construction did not finish")
-	before := WorldSectorResourceCapacity(&world, SectorId(1), .Materials)
 	WorldStep(&world)
 	after := WorldSectorResourceCapacity(&world, SectorId(1), .Materials)
 	testing.expect(t, after > before, "supply depot did not increase local storage capacity")
@@ -289,12 +289,18 @@ LogisticsCargoMovesBetweenOwnedSectors :: proc(t: ^testing.T) {
 	WorldAddSectorResource(&world, SectorId(1), .Materials, 200)
 	cargo := WorldQueueCargo(&world, .A, .Materials, 50, SectorId(1), SectorId(2))
 	testing.expect(t, cargo != INVALID_CARGO_ID, "cargo shipment was not created")
+	testing.expect_value(t, len(world.squads), 0)
+	testing.expect_value(t, world.convoys[0].vehicle_count, 1)
+	testing.expect_value(t, world.convoys[0].capacity, f32(100))
+	testing.expect_value(t, world.convoys[0].cargo, cargo)
 	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(1), .Materials), f32(150))
 
-	WorldUpdateCargo(&world, 0.5)
+	WorldUpdateConvoys(&world, 0.5)
 	testing.expect_value(t, len(world.cargo), 1)
-	WorldUpdateCargo(&world, 0.6)
+	testing.expect_value(t, len(world.convoys), 1)
+	WorldUpdateConvoys(&world, 0.6)
 	testing.expect_value(t, len(world.cargo), 0)
+	testing.expect_value(t, len(world.convoys), 0)
 	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(2), .Materials), f32(50))
 }
 
@@ -311,18 +317,21 @@ LogisticsRouteInterruptionCanRecoverOrLoseCargo :: proc(t: ^testing.T) {
 	testing.expect(t, cargo != INVALID_CARGO_ID, "recoverable cargo shipment was not created")
 
 	world.sectors[1].team = .B
-	WorldUpdateCargo(&world, 2.0)
+	WorldUpdateConvoys(&world, 2.0)
 	testing.expect_value(t, len(world.cargo), 1)
+	testing.expect_value(t, len(world.convoys), 1)
 	world.sectors[1].team = .A
-	WorldUpdateCargo(&world, 2.0)
+	WorldUpdateConvoys(&world, 2.0)
 	testing.expect_value(t, len(world.cargo), 0)
+	testing.expect_value(t, len(world.convoys), 0)
 	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(2), .Fuel), f32(50))
 
 	cargo = WorldQueueCargo(&world, .A, .Fuel, 50, SectorId(1), SectorId(2))
 	testing.expect(t, cargo != INVALID_CARGO_ID, "loss-test cargo shipment was not created")
 	world.sectors[1].team = .B
-	WorldUpdateCargo(&world, 9.0)
+	WorldUpdateConvoys(&world, 9.0)
 	testing.expect_value(t, len(world.cargo), 0)
+	testing.expect_value(t, len(world.convoys), 0)
 	testing.expect(t, world.cargo_lost >= 50, "blocked cargo was not lost")
 }
 
@@ -338,6 +347,6 @@ LogisticsRequestsAssignAutomaticCargo :: proc(t: ^testing.T) {
 	testing.expect(t, WorldRequestResourceStockpile(&world, .A, SectorId(2), .Munitions, 100), "stockpile request was rejected")
 	WorldUpdateLogistics(&world, 0)
 	testing.expect(t, len(world.cargo) == 1, "logistics did not assign a cargo shipment")
-	WorldUpdateCargo(&world, 1.1)
+	WorldUpdateConvoys(&world, 1.1)
 	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(2), .Munitions), f32(100))
 }

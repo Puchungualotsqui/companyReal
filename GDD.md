@@ -256,7 +256,14 @@ The basic logistics chain is:
 Resource site → Processor → Storage depot → Transport route → Factory or forward depot → Units
 ```
 
-A shipment is an aggregated cargo lot or convoy with a resource type, quantity, origin, destination, route, and status. The simulation does not create one entity for every crate, shell, or fuel can.
+A shipment is split into two related objects:
+
+- A `CargoLot` is the payload: resource type, quantity, origin, destination, and delivery status.
+- A `Convoy` is the physical carrier: vehicle count, capacity, position, route progress, speed, fuel, health, and blocked state.
+
+A convoy transports one or more aggregated cargo lots rather than creating one entity for every crate, shell, or fuel can. Convoys are not infantry squads. They are logistics entities controlled by the logistics network and may be represented by several visible trucks, tankers, or carriers when they are near the camera.
+
+Combat vehicles are also separate from infantry squads. Tanks and other combat vehicles belong to armored formations or other combat groups, while transport vehicles belong to convoys. Both can be commanded at a high level without requiring the player to control every individual vehicle.
 
 Factories and forward positions have local inventories and storage limits. Distance affects travel time, transport capacity, fuel use, and route vulnerability. A factory does not need to be immediately adjacent to a refinery, but a longer or unsafe route costs more and is easier to disrupt.
 
@@ -269,7 +276,7 @@ Players control logistics through high-level policies:
 - Set stockpile targets.
 - Assign escorts or raid enemy routes.
 
-Logistics AI handles routine transport. Convoys can be delayed, intercepted, destroyed, rerouted, or captured. Distant logistics may be simulated at sector level; nearby logistics can be shown as visible trucks, tankers, supply teams, cargo, and wrecks.
+Logistics AI handles routine transport. It creates and assigns convoys in response to production demand and stockpile priorities. Convoys can be delayed, intercepted, destroyed, rerouted, or captured; a destroyed convoy loses its remaining cargo. Distant logistics may be simulated as one convoy record or a sector flow, while nearby logistics can be shown as multiple visible trucks, tankers, supply teams, cargo, and wrecks.
 
 Manpower is not a physical resource in the first version. Reinforcements are limited by headquarters capacity, production buildings, faction rules, and time.
 
@@ -387,6 +394,8 @@ The first playable version should contain:
 - One extraction or resource site for each resource chain.
 - A refinery, warehouse, forward depot, and one infantry or vehicle factory.
 - Aggregated cargo shipments between sectors.
+- Physical convoy entities carrying those shipments.
+- Visible convoy vehicles near the camera and convoy wrecks after destruction.
 - Production that pauses when local inputs are unavailable.
 - A route that can be cut by enemy presence or destroyed infrastructure.
 - High-level logistics priorities instead of manual truck commands.

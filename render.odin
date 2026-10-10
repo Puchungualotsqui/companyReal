@@ -24,7 +24,7 @@ COLOR_PLAYER_CELL :: rl.Color{20, 20, 20, 255}
 COLOR_SELECTION :: rl.Color{255, 255, 255, 255}
 COLOR_BUILDING :: rl.Color{190, 190, 190, 255}
 
-DrawBoard :: proc(world: World, camera: ViewCamera, selected: SquadId) {
+DrawBoard :: proc(world: ^World, camera: ViewCamera, selected: SquadId) {
 	rl.DrawRectangleLines(BOARD_X, BOARD_Y, BOARD_WIDTH, BOARD_HEIGHT, COLOR_BORDER)
 	for column: i32 = 0; column <= i32(world.max_size.x); column += 1 {
 		world_pos := Vec2{f32(column), 0}
@@ -59,12 +59,16 @@ DrawBoard :: proc(world: World, camera: ViewCamera, selected: SquadId) {
 		rl.DrawLine(i32(origin.x), i32(origin.y), i32(position.x), i32(position.y), UnitTeamColor(shell.team))
 		rl.DrawRectangle(i32(position.x) - 2, i32(position.y) - 2, 4, 4, COLOR_SELECTION)
 	}
-	for cargo in world.cargo {
-		position := ViewCameraWorldToScreen(camera, WorldCargoPosition(&world, cargo))
-		size := max(4, i32(5 * camera.zoom))
-		color := ResourceColor(cargo.resource)
-		if cargo.blocked_time > 0 do color = COLOR_SELECTION
-		rl.DrawRectangle(i32(position.x) - size / 2, i32(position.y) - size / 2, size, size, color)
+	for convoy in world.convoys {
+		position := ViewCameraWorldToScreen(camera, WorldConvoyPosition(world, convoy))
+		size := max(4, i32(4 * camera.zoom))
+		color := ResourceColor(convoy.resource)
+		if convoy.state == .Blocked do color = COLOR_SELECTION
+		visible_vehicles := min(convoy.vehicle_count, 4)
+		for vehicle_index: int = 0; vehicle_index < visible_vehicles; vehicle_index += 1 {
+			offset := i32(vehicle_index - visible_vehicles / 2) * max(2, size / 2)
+			rl.DrawRectangle(i32(position.x) - size / 2 + offset, i32(position.y) - size / 2, size, size, color)
+		}
 	}
 	for effect in world.effects {
 		position := ViewCameraWorldToScreen(camera, effect.pos)
