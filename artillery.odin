@@ -103,6 +103,13 @@ ArtilleryImpact :: proc(w: ^World, shell: ArtilleryShell) {
 		building.destroyed = true
 		ArtilleryAddEffect(w, .Wreck, building.pos, 99999, 3)
 	}
+
+	for &convoy in w.convoys {
+		distance := Vec2Length(Vec2Sub(WorldConvoyPosition(w, convoy), shell.target))
+		if distance > shell.radius do continue
+		falloff := max(0.15, 1 - distance / shell.radius)
+		ConvoyDamage(&convoy, shell.damage * falloff * 0.5)
+	}
 }
 
 WorldSetTerrainAtPosition :: proc(w: ^World, position: Vec2, terrain: TerrainType) -> bool {

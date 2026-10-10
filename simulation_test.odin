@@ -350,3 +350,51 @@ LogisticsRequestsAssignAutomaticCargo :: proc(t: ^testing.T) {
 	WorldUpdateConvoys(&world, 1.1)
 	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(2), .Munitions), f32(100))
 }
+
+@(test)
+LogisticsDestroyedInfrastructureBlocksAndRecovers :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	world.sectors[0].team = .A
+	world.sectors[1].team = .A
+	world.sectors[2].team = .A
+	infrastructure := BuildingPlace(&world, .A, .RouteInfrastructure, Vec2{96, 32})
+	WorldAddSectorResource(&world, SectorId(1), .Materials, 200)
+	cargo := WorldQueueCargo(&world, .A, .Materials, 50, SectorId(1), SectorId(3))
+	testing.expect(t, cargo != INVALID_CARGO_ID, "infrastructure route shipment was not created")
+
+	BuildingGet(&world, infrastructure).destroyed = true
+	WorldUpdateConvoys(&world, 1.0)
+	testing.expect_value(t, world.convoys[0].state, ConvoyState.Blocked)
+	testing.expect(t, WorldHasBlockedConvoy(&world), "blocked convoy warning was not raised")
+
+	BuildingGet(&world, infrastructure).destroyed = false
+	WorldUpdateConvoys(&world, 2.0)
+	testing.expect_value(t, len(world.cargo), 0)
+	testing.expect_value(t, len(world.convoys), 0)
+	testing.expect(t, !WorldHasBlockedConvoy(&world), "blocked convoy warning remained after recovery")
+	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(3), .Materials), f32(50))
+}
+
+@(test)
+LogisticsConvoyDamageDestroysCargo :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	world.sectors[0].team = .A
+	world.sectors[1].team = .A
+	WorldAddSectorResource(&world, SectorId(1), .Fuel, 200)
+	cargo := WorldQueueCargo(&world, .A, .Fuel, 50, SectorId(1), SectorId(2))
+	testing.expect(t, cargo != INVALID_CARGO_ID, "damage-test shipment was not created")
+	ConvoyDamage(&world.convoys[0], CONVOY_HEALTH + 1)
+	testing.expect_value(t, world.convoys[0].state, ConvoyState.Destroyed)
+
+	WorldUpdateConvoys(&world, 0)
+	testing.expect_value(t, len(world.cargo), 0)
+	testing.expect_value(t, len(world.convoys), 0)
+	testing.expect(t, world.cargo_lost >= 50, "destroyed convoy did not lose cargo")
+	testing.expect(t, len(world.effects) > 0, "destroyed convoy did not leave a wreck")
+}

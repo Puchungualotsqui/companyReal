@@ -109,8 +109,8 @@ This document tracks the implementation order. Each phase should be playable or 
 - [x] Add physical convoy entities with vehicle counts, capacity, fuel, health, and route progress.
 - [x] Add sector-based logistics routes and storage capacity.
 - [x] Add route travel time, local storage limits, and production buffering through queues.
-- [-] Allow enemy presence and destroyed infrastructure to interrupt routes.
-- [-] Add cargo loss, convoy destruction, and player-facing route warnings.
+- [x] Allow enemy presence and destroyed infrastructure to interrupt routes.
+- [x] Add cargo loss, convoy destruction, and player-facing route warnings.
 - [x] Add automatic transport assignment and high-level logistics priorities.
 - [x] Add resource stockpile requests for sectors and production demand.
 - [x] Show nearby convoy vehicles and convoy wreck effects.

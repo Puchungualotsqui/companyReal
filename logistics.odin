@@ -56,7 +56,7 @@ WorldSectorResourceCapacity :: proc(w: ^World, sector_id: SectorId, resource: Re
 			capacity += WAREHOUSE_STORAGE_BONUS
 		case .SupplyDepot:
 			capacity += DEPOT_STORAGE_BONUS
-		case .ResourceSite, .Refinery, .MunitionsFactory, .InfantryProduction, .ReinforcementCenter, .ObservationPost, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
+		case .ResourceSite, .Refinery, .MunitionsFactory, .RouteInfrastructure, .InfantryProduction, .ReinforcementCenter, .ObservationPost, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
 			continue
 		}
 	}
@@ -115,17 +115,27 @@ WorldSectorIdAtCoordinates :: proc(x, y: int) -> SectorId {
 	return SectorId(uint(y * 4 + x + 1))
 }
 
+WorldSectorRouteOperational :: proc(w: ^World, sector_id: SectorId, team: Team) -> bool {
+	sector := WorldSectorGet(w, sector_id)
+	if sector == nil || sector.team != team do return false
+
+	has_infrastructure := false
+	for building in w.buildings {
+		if building.team != team || building.type != .RouteInfrastructure || WorldSectorAtPosition(w, building.pos) != sector_id do continue
+		has_infrastructure = true
+		if building.complete && !building.destroyed do return true
+	}
+	return !has_infrastructure
+}
+
 WorldCargoRouteOperational :: proc(w: ^World, cargo: CargoLot) -> bool {
 	origin := WorldSectorGet(w, cargo.origin)
 	destination := WorldSectorGet(w, cargo.destination)
-	if origin == nil || destination == nil || origin.team != cargo.team || destination.team != cargo.team do return false
+	if origin == nil || destination == nil do return false
+	if !WorldSectorRouteOperational(w, cargo.origin, cargo.team) || !WorldSectorRouteOperational(w, cargo.destination, cargo.team) do return false
 
 	current := WorldSectorCoordinates(cargo.origin)
 	target := WorldSectorCoordinates(cargo.destination)
-	if origin.team != cargo.team do return false
-
-	check := WorldSectorGet(w, cargo.origin)
-	if check == nil || check.team != cargo.team do return false
 	for current.x != target.x {
 		if current.x < target.x {
 			current.x += 1
@@ -133,8 +143,7 @@ WorldCargoRouteOperational :: proc(w: ^World, cargo: CargoLot) -> bool {
 			current.x -= 1
 		}
 		sector_id := WorldSectorIdAtCoordinates(int(current.x), int(current.y))
-		sector := WorldSectorGet(w, sector_id)
-		if sector == nil || sector.team != cargo.team do return false
+		if !WorldSectorRouteOperational(w, sector_id, cargo.team) do return false
 	}
 	for current.y != target.y {
 		if current.y < target.y {
@@ -143,8 +152,7 @@ WorldCargoRouteOperational :: proc(w: ^World, cargo: CargoLot) -> bool {
 			current.y -= 1
 		}
 		sector_id := WorldSectorIdAtCoordinates(int(current.x), int(current.y))
-		sector := WorldSectorGet(w, sector_id)
-		if sector == nil || sector.team != cargo.team do return false
+		if !WorldSectorRouteOperational(w, sector_id, cargo.team) do return false
 	}
 	return true
 }
@@ -269,6 +277,21 @@ WorldRemoveConvoy :: proc(w: ^World, index: int) {
 	resize(&w.convoys, last)
 }
 
+ConvoyDamage :: proc(convoy: ^Convoy, damage: f32) {
+	if damage <= 0 || convoy.state == .Destroyed do return
+	convoy.health = max(f32(0), convoy.health - damage)
+	if convoy.health <= 0 {
+		convoy.state = .Destroyed
+	}
+}
+
+WorldHasBlockedConvoy :: proc(w: ^World) -> bool {
+	for convoy in w.convoys {
+		if convoy.state == .Blocked do return true
+	}
+	return false
+}
+
 WorldUpdateConvoys :: proc(w: ^World, dt: f32) {
 	index := 0
 	for index < len(w.convoys) {
@@ -279,6 +302,13 @@ WorldUpdateConvoys :: proc(w: ^World, dt: f32) {
 			continue
 		}
 		cargo := &w.cargo[cargo_index]
+		if convoy.state == .Destroyed {
+			w.cargo_lost += cargo.quantity
+			ArtilleryAddEffect(w, .Wreck, WorldConvoyPosition(w, convoy^), 20, 2 + f32(convoy.vehicle_count))
+			WorldRemoveCargo(w, cargo_index)
+			WorldRemoveConvoy(w, index)
+			continue
+		}
 		if !WorldCargoRouteOperational(w, cargo^) {
 			convoy.state = .Blocked
 			convoy.blocked_time += dt

@@ -121,6 +121,9 @@ DrawBoard :: proc(world: ^World, camera: ViewCamera, selected: SquadId) {
 		if unit.squad == selected do rl.DrawRectangle(cell_x, cell_y, cell_size, cell_size, COLOR_PLAYER_CELL)
 		rl.DrawTextCodepoint(rl.GetFontDefault(), UnitDefaultChar(unit.type), rl.Vector2{f32(cell_x) + f32(cell_size) * 0.25, f32(cell_y) - f32(font_size) * 0.1}, f32(font_size), color)
 	}
+	if WorldHasBlockedConvoy(world) {
+		rl.DrawText("SUPPLY ROUTE BLOCKED", BOARD_X, BOARD_Y + BOARD_HEIGHT + 8, 16, COLOR_SELECTION)
+	}
 }
 
 ResourceColor :: proc(resource: ResourceType) -> rl.Color {

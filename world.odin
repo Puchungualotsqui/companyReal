@@ -43,6 +43,7 @@ ResourceInventory :: struct {
 ConvoyState :: enum u8 {
 	Traveling,
 	Blocked,
+	Destroyed,
 }
 
 ResourceInventoryMake :: proc(materials, fuel, munitions: f32) -> ResourceInventory {
@@ -100,6 +101,7 @@ BuildingType :: enum u8 {
 	Refinery,
 	MunitionsFactory,
 	Warehouse,
+	RouteInfrastructure,
 	InfantryProduction,
 	SupplyDepot,
 	ReinforcementCenter,

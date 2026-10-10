@@ -17,6 +17,8 @@ BuildingStatsGet :: proc(type: BuildingType) -> BuildingStats {
 		return BuildingStats{450, 10}
 	case .Warehouse:
 		return BuildingStats{350, 8}
+	case .RouteInfrastructure:
+		return BuildingStats{300, 8}
 	case .InfantryProduction:
 		return BuildingStats{400, 8}
 	case .SupplyDepot:
@@ -79,7 +81,7 @@ BuildingConstructForPlayer :: proc(w: ^World, player: PlayerId, squad_id: SquadI
 
 BuildingCanProduce :: proc(building: BuildingType, unit: UnitType) -> bool {
 	switch building {
-	case .Headquarters, .ResourceSite, .Refinery, .MunitionsFactory, .Warehouse, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense:
+	case .Headquarters, .ResourceSite, .Refinery, .MunitionsFactory, .Warehouse, .RouteInfrastructure, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense:
 		return false
 	case .InfantryProduction:
 		switch unit {
@@ -197,6 +199,8 @@ WorldBuildingOperational :: proc(w: ^World, building: Building) -> bool {
 	switch building.type {
 	case .Headquarters:
 		return true
+	case .RouteInfrastructure:
+		return true
 	case .ResourceSite, .Refinery, .MunitionsFactory, .Warehouse, .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
 		return WorldSectorSupplied(w, WorldSectorAtPosition(w, building.pos), building.team)
 	}
@@ -212,7 +216,7 @@ WorldCanObserve :: proc(w: ^World, team: Team, position: Vec2) -> bool {
 			range = 24
 		case .ObservationPost:
 			range = 48
-		case .ResourceSite, .Refinery, .MunitionsFactory, .Warehouse, .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
+		case .ResourceSite, .Refinery, .MunitionsFactory, .Warehouse, .RouteInfrastructure, .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
 			continue
 		}
 		if Vec2Length(Vec2Sub(position, building.pos)) <= range do return true
@@ -260,7 +264,7 @@ WorldUpdateBuildings :: proc(w: ^World, dt: f32) {
 		case .MunitionsFactory:
 			input := ResourceInventoryMake(dt * 0.75, dt * 0.25, 0)
 			if ResourceInventoryConsume(&sector.inventory, input) do WorldAddSectorResource(w, sector_id, .Munitions, dt)
-		case .Headquarters, .Warehouse, .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
+		case .Headquarters, .Warehouse, .RouteInfrastructure, .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
 			building.production_timer += 0
 		}
 
@@ -288,6 +292,8 @@ BuildingDefaultChar :: proc(type: BuildingType) -> rune {
 		return 'A'
 	case .Warehouse:
 		return 'W'
+	case .RouteInfrastructure:
+		return 'T'
 	case .InfantryProduction:
 		return 'I'
 	case .SupplyDepot:
