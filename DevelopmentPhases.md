@@ -17,8 +17,12 @@ This document tracks the implementation order. Each phase should be playable or 
 - [x] Define sector-based victory as the main mode.
 - [x] Define five faction concepts.
 - [x] Define individual soldier simulation as a goal.
+- [x] Define three resources: materials, fuel, and munitions.
+- [x] Define physical logistics through depots, cargo lots, and transport routes.
+- [x] Define high-level logistics orders instead of transport micromanagement.
+- [x] Define levels of simulation detail for very large battles.
 
-**Exit:** GDD is clear enough to guide implementation.
+**Exit:** GDD is clear enough to guide implementation, including the resource, logistics, autonomy, and scale direction.
 
 ## Phase 1: Rendering Foundation
 
@@ -68,7 +72,7 @@ This document tracks the implementation order. Each phase should be playable or 
 
 **Exit:** Battles have readable tactical decisions beyond health and damage.
 
-## Phase 5: Buildings and Logistics
+## Phase 5: Buildings and Abstract Supply
 
 - [x] Add headquarters.
 - [x] Add infantry production.
@@ -78,8 +82,9 @@ This document tracks the implementation order. Each phase should be playable or 
 - [x] Add vehicle and equipment production.
 - [x] Add construction by engineer squads.
 - [x] Connect supply lines to sectors.
+- [x] Use a temporary abstract team supply pool for the prototype.
 
-**Exit:** Sector control depends on buildings and supply, not only unit count.
+**Exit:** Sector control depends on buildings and abstract supply, not only unit count. This phase is the foundation for physical logistics, not the final resource model.
 
 ## Phase 6: Artillery and Destruction
 
@@ -94,19 +99,53 @@ This document tracks the implementation order. Each phase should be playable or 
 
 **Exit:** Artillery can change the outcome and appearance of a sector battle.
 
-## Phase 7: Factions
+## Phase 7: Physical Logistics Vertical Slice
+
+- [ ] Replace the global team supply pool with local inventories.
+- [ ] Add materials, fuel, and munitions as resource categories.
+- [ ] Add resource sites, mines, refineries, factories, warehouses, and forward depots.
+- [ ] Add production inputs and outputs for buildings.
+- [ ] Add aggregated cargo lots or convoys with quantities and destinations.
+- [ ] Add sector-based logistics routes and route capacity.
+- [ ] Add route travel time, local storage limits, and production buffering.
+- [ ] Allow enemy presence and destroyed infrastructure to interrupt routes.
+- [ ] Add cargo loss, convoy destruction, and route warnings.
+- [ ] Add automatic transport assignment and high-level logistics priorities.
+- [ ] Add resource stockpile requests for sectors, factories, and unit groups.
+- [ ] Show nearby logistics as visible transport units, cargo, and wrecks.
+- [ ] Add headless tests for production starvation, route interruption, and recovery.
+
+**Exit:** A two-faction scenario can produce units, move resources between sectors, suffer a logistics disruption, and recover without the player ordering every transport individually.
+
+## Phase 8: High-Level Autonomy and Pathfinding
+
+- [ ] Replace direct destination movement with squad-level pathfinding.
+- [ ] Add a strategic sector route graph.
+- [ ] Add tactical terrain pathfinding within sectors.
+- [ ] Add roads, bridges, chokepoints, and route damage.
+- [ ] Add squad intents: advance, defend, assault, probe, escort, raid, resupply, and withdraw.
+- [ ] Let squads choose local targets, formations, cover, and retreat behavior.
+- [ ] Add convoy escort and convoy raid orders.
+- [ ] Add logistics AI rerouting around blocked or dangerous routes.
+- [ ] Add readable warnings for isolated squads, factories, and depots.
+- [ ] Add tests for path selection, blocked routes, and autonomous resupply.
+
+**Exit:** Players can issue objectives and priorities while squads and transport units choose practical local actions on their own.
+
+## Phase 9: Factions
 
 - [ ] Implement the Bastion Directorate.
 - [ ] Implement the Free Marches.
 - [ ] Implement the Ember Syndicate.
 - [ ] Implement the Meridian Combine.
 - [ ] Implement the Hearth Union.
-- [ ] Give each faction distinct units and buildings.
+- [ ] Give each faction distinct units, buildings, and logistics behavior.
+- [ ] Give each faction distinct resource costs, production strengths, and counters.
 - [ ] Balance faction strengths and weaknesses.
 
-**Exit:** Each faction has a clear play style and at least one strong counter.
+**Exit:** Each faction has a clear play style, a distinct relationship with logistics, and at least one strong counter.
 
-## Phase 8: Main Game Mode
+## Phase 10: Main Game Mode
 
 - [ ] Build connected sector maps.
 - [ ] Add sector objectives.
@@ -118,7 +157,7 @@ This document tracks the implementation order. Each phase should be playable or 
 
 **Exit:** A complete single-player match can start, progress, and end.
 
-## Phase 9: Pixel Art and Presentation
+## Phase 11: Pixel Art and Presentation
 
 - [ ] Generate basic sprites from code.
 - [ ] Add faction palettes and silhouettes.
@@ -130,7 +169,7 @@ This document tracks the implementation order. Each phase should be playable or 
 
 **Exit:** The battlefield is readable and visually communicates combat state.
 
-## Phase 10: Multiplayer
+## Phase 12: Multiplayer
 
 - [ ] Separate simulation from the client process.
 - [ ] Add a server-authoritative world.
@@ -142,7 +181,7 @@ This document tracks the implementation order. Each phase should be playable or 
 
 **Exit:** Multiple players can complete a match on opposing teams.
 
-## Phase 11: Scale and Optimization
+## Phase 13: Scale and Optimization
 
 - [ ] Add spatial partitioning.
 - [ ] Replace expensive per-unit searches.
@@ -158,6 +197,6 @@ This document tracks the implementation order. Each phase should be playable or 
 
 ## Current Position
 
-Phase 6 implementation is complete. Headless tests and the native build pass through `C:\BuildTools\devcmd.ps1`.
+Phase 6 implementation is marked complete. The current prototype has individual combat, sector capture, buildings, abstract supply, artillery, destruction effects, and headless simulation scenarios.
 
-The next milestone is **Phase 7: Factions**: implement the five faction rosters, buildings, roles, and counters.
+The next milestone is **Phase 7: Physical Logistics Vertical Slice**. Implement the three-resource model and prove that production, transport, disruption, and recovery are fun before implementing the full faction roster.
