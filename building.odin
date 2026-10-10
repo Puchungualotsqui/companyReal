@@ -9,6 +9,14 @@ BuildingStatsGet :: proc(type: BuildingType) -> BuildingStats {
 	switch type {
 	case .Headquarters:
 		return BuildingStats{1000, 0}
+	case .ResourceSite:
+		return BuildingStats{250, 6}
+	case .Refinery:
+		return BuildingStats{450, 10}
+	case .MunitionsFactory:
+		return BuildingStats{450, 10}
+	case .Warehouse:
+		return BuildingStats{350, 8}
 	case .InfantryProduction:
 		return BuildingStats{400, 8}
 	case .SupplyDepot:
@@ -35,7 +43,6 @@ BuildingGet :: proc(w: ^World, id: BuildingId) -> ^Building {
 	return &w.buildings[index]
 }
 
-BuildingSector :: proc(w: ^World, building: Building) -> SectorId { return WorldSectorAtPosition(w, building.pos) }
 
 WorldSectorAtPosition :: proc(w: ^World, position: Vec2) -> SectorId {
 	for sector in w.sectors {
@@ -44,34 +51,35 @@ WorldSectorAtPosition :: proc(w: ^World, position: Vec2) -> SectorId {
 	return INVALID_SECTOR_ID
 }
 
-BuildingPlace :: proc(w: ^World, team: Team, type: BuildingType, pos: Vec2) -> BuildingId {
-	return BuildingPlaceOwned(w, INVALID_PLAYER_ID, team, type, pos)
-}
-
-BuildingPlaceOwned :: proc(w: ^World, owner: PlayerId, team: Team, type: BuildingType, pos: Vec2) -> BuildingId {
+BuildingPlace :: proc(w: ^World, team: Team, type: BuildingType, pos: Vec2, owner := INVALID_PLAYER_ID, resource := ResourceType.Materials) -> BuildingId {
 	stats := BuildingStatsGet(type)
 	id := BuildingId(uint(len(w.buildings) + 1))
-	building := Building{id, owner, team, type, WorldClampPosition(w, pos), stats.health, stats.health, stats.build_time, stats.build_time, true, false, INVALID_SQUAD_ID, .Line, 0, 0}
+	building := Building{id, owner, team, type, Vec2Clamp(pos, Vec2{}, w.max_size), stats.health, stats.health, stats.build_time, stats.build_time, true, false, INVALID_SQUAD_ID, .Line, resource, 0, 0}
 	append(&w.buildings, building)
+	if type == .Headquarters {
+		WorldAddResourcesAtPosition(w, team, building.pos, ResourceInventoryMake(500, 500, 500))
+	}
 	return id
 }
 
 BuildingConstructForPlayer :: proc(w: ^World, player: PlayerId, squad_id: SquadId, type: BuildingType, pos: Vec2) -> BuildingId {
 	squad := SquadGet(w, squad_id)
 	if squad == nil || squad.owner != player || squad.type != .Engineer || !SquadIsAlive(w, squad_id) do return INVALID_BUILDING_ID
-	cost := 25
-	if w.team_supply[TeamIndex(squad.team)] < f32(cost) do return INVALID_BUILDING_ID
-	w.team_supply[TeamIndex(squad.team)] -= f32(cost)
+	cost := ResourceInventoryMake(25, 0, 0)
+	if WorldSectorGet(w, WorldSectorAtPosition(w, pos)) == nil do return INVALID_BUILDING_ID
+	sector := WorldSectorGet(w, WorldSectorAtPosition(w, pos))
+	if !ResourceInventoryCanAfford(sector.inventory, cost) do return INVALID_BUILDING_ID
+	ResourceInventoryConsume(&sector.inventory, cost)
 	stats := BuildingStatsGet(type)
 	id := BuildingId(uint(len(w.buildings) + 1))
-	building := Building{id, player, squad.team, type, WorldClampPosition(w, pos), stats.health, stats.health, 0, stats.build_time, false, false, squad_id, .Line, 0, 0}
+	building := Building{id, player, squad.team, type, Vec2Clamp(pos, Vec2{}, w.max_size), stats.health, stats.health, 0, stats.build_time, false, false, squad_id, .Line, .Materials, 0, 0}
 	append(&w.buildings, building)
 	return id
 }
 
 BuildingCanProduce :: proc(building: BuildingType, unit: UnitType) -> bool {
 	switch building {
-	case .Headquarters, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense:
+	case .Headquarters, .ResourceSite, .Refinery, .MunitionsFactory, .Warehouse, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense:
 		return false
 	case .InfantryProduction:
 		switch unit {
@@ -106,18 +114,18 @@ BuildingProductionTime :: proc(unit: UnitType) -> f32 {
 	unreachable()
 }
 
-BuildingProductionCost :: proc(unit: UnitType) -> f32 {
+BuildingProductionCost :: proc(unit: UnitType) -> ResourceInventory {
 	switch unit {
 	case .Line, .Assault, .Scout, .Engineer:
-		return 15
+		return ResourceInventoryMake(15, 0, 4)
 	case .Heavy:
-		return 25
+		return ResourceInventoryMake(25, 0, 8)
 	case .Vehicle:
-		return 80
+		return ResourceInventoryMake(80, 20, 10)
 	case .Equipment:
-		return 45
+		return ResourceInventoryMake(45, 5, 12)
 	case .Artillery:
-		return 60
+		return ResourceInventoryMake(60, 5, 15)
 	}
 	unreachable()
 }
@@ -144,7 +152,7 @@ BuildingQueueForPlayer :: proc(w: ^World, player: PlayerId, id: BuildingId, unit
 
 WorldSectorHasBuilding :: proc(w: ^World, sector_id: SectorId, team: Team, type: BuildingType) -> bool {
 	for building in w.buildings {
-		if building.complete && !building.destroyed && building.team == team && building.type == type && BuildingSector(w, building) == sector_id do return true
+		if building.complete && !building.destroyed && building.team == team && building.type == type && WorldSectorAtPosition(w, building.pos) == sector_id do return true
 	}
 	return false
 }
@@ -156,7 +164,7 @@ WorldSectorSupplied :: proc(w: ^World, sector_id: SectorId, team: Team) -> bool 
 	defer delete(queue)
 	for building in w.buildings {
 		if building.complete && !building.destroyed && building.team == team && building.type == .Headquarters {
-			root := BuildingSector(w, building)
+			root := WorldSectorAtPosition(w, building.pos)
 			if root != INVALID_SECTOR_ID && !visited[int(root) - 1] {
 				visited[int(root) - 1] = true
 				append(&queue, root)
@@ -189,8 +197,8 @@ WorldBuildingOperational :: proc(w: ^World, building: Building) -> bool {
 	switch building.type {
 	case .Headquarters:
 		return true
-	case .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
-		return WorldSectorSupplied(w, BuildingSector(w, building), building.team)
+	case .ResourceSite, .Refinery, .MunitionsFactory, .Warehouse, .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .ObservationPost, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
+		return WorldSectorSupplied(w, WorldSectorAtPosition(w, building.pos), building.team)
 	}
 	unreachable()
 }
@@ -204,7 +212,7 @@ WorldCanObserve :: proc(w: ^World, team: Team, position: Vec2) -> bool {
 			range = 24
 		case .ObservationPost:
 			range = 48
-		case .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
+		case .ResourceSite, .Refinery, .MunitionsFactory, .Warehouse, .InfantryProduction, .SupplyDepot, .ReinforcementCenter, .Defense, .VehicleWorkshop, .EquipmentWorkshop, .ArtilleryEmplacement:
 			continue
 		}
 		if Vec2Length(Vec2Sub(position, building.pos)) <= range do return true
@@ -238,15 +246,29 @@ WorldUpdateBuildings :: proc(w: ^World, dt: f32) {
 			}
 			continue
 		}
-		if building.type == .SupplyDepot && WorldBuildingOperational(w, building) do w.team_supply[TeamIndex(building.team)] += dt * 2
-		if building.queue <= 0 || !WorldBuildingOperational(w, building) do continue
+		sector_id := WorldSectorAtPosition(w, building.pos)
+		if !WorldBuildingOperational(w, building) do continue
+		sector := WorldSectorGet(w, sector_id)
+		if sector == nil do continue
+
+		switch building.type {
+		case .ResourceSite:
+			WorldAddSectorResource(w, sector_id, building.resource, dt * 4)
+		case .Refinery:
+			input := ResourceInventoryMake(dt * 0.5, 0, 0)
+			if ResourceInventoryConsume(&sector.inventory, input) do WorldAddSectorResource(w, sector_id, .Fuel, dt)
+		case .MunitionsFactory:
+			input := ResourceInventoryMake(dt * 0.75, dt * 0.25, 0)
+			if ResourceInventoryConsume(&sector.inventory, input) do WorldAddSectorResource(w, sector_id, .Munitions, dt)
+		}
+
+		if building.queue <= 0 do continue
 		building.production_timer += dt
 		if building.production_timer < BuildingProductionTime(building.production) do continue
 		cost := BuildingProductionCost(building.production)
-		if w.team_supply[TeamIndex(building.team)] < cost do continue
-		w.team_supply[TeamIndex(building.team)] -= cost
+		if !ResourceInventoryConsume(&sector.inventory, cost) do continue
 		count := BuildingProductionCount(building.production)
-		SquadSpawnOwned(w, building.owner, building.team, building.production, count, building.pos)
+		SquadSpawn(w, building.team, building.production, count, building.pos, building.owner)
 		building.queue -= 1
 		building.production_timer = 0
 	}
@@ -256,6 +278,14 @@ BuildingDefaultChar :: proc(type: BuildingType) -> rune {
 	switch type {
 	case .Headquarters:
 		return 'H'
+	case .ResourceSite:
+		return 'M'
+	case .Refinery:
+		return 'F'
+	case .MunitionsFactory:
+		return 'A'
+	case .Warehouse:
+		return 'W'
 	case .InfantryProduction:
 		return 'I'
 	case .SupplyDepot:

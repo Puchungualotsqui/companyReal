@@ -6,6 +6,7 @@ SquadId :: distinct uint
 SectorId :: distinct uint
 BuildingId :: distinct uint
 StrikeId :: distinct uint
+CargoId :: distinct uint
 PlayerId :: distinct uint
 
 INVALID_ENTITY_ID : EntityId : 0
@@ -14,6 +15,7 @@ INVALID_SQUAD_ID : SquadId : 0
 INVALID_SECTOR_ID : SectorId : 0
 INVALID_BUILDING_ID : BuildingId : 0
 INVALID_STRIKE_ID : StrikeId : 0
+INVALID_CARGO_ID : CargoId : 0
 INVALID_PLAYER_ID : PlayerId : 0
 LOCAL_PLAYER_ID : PlayerId : 1
 PLAYER_TWO_ID : PlayerId : 2
@@ -22,6 +24,38 @@ Team :: enum u8 {
 	Neutral,
 	A,
 	B,
+}
+
+ResourceType :: enum u8 {
+	Materials,
+	Fuel,
+	Munitions,
+}
+
+RESOURCE_TYPE_COUNT :: 3
+
+ResourceInventory :: struct {
+	amounts: [RESOURCE_TYPE_COUNT]f32,
+}
+
+ResourceInventoryMake :: proc(materials, fuel, munitions: f32) -> ResourceInventory {
+	return ResourceInventory{[RESOURCE_TYPE_COUNT]f32{materials, fuel, munitions}}
+}
+
+ResourceIndex :: proc(resource: ResourceType) -> int {
+	switch resource {
+	case .Materials:
+		return 0
+	case .Fuel:
+		return 1
+	case .Munitions:
+		return 2
+	}
+	unreachable()
+}
+
+ResourceAmount :: proc(inventory: ResourceInventory, resource: ResourceType) -> f32 {
+	return inventory.amounts[ResourceIndex(resource)]
 }
 
 UnitType :: enum u8 {
@@ -55,6 +89,10 @@ TerrainType :: enum u8 {
 
 BuildingType :: enum u8 {
 	Headquarters,
+	ResourceSite,
+	Refinery,
+	MunitionsFactory,
+	Warehouse,
 	InfantryProduction,
 	SupplyDepot,
 	ReinforcementCenter,
@@ -121,6 +159,20 @@ Sector :: struct {
 	team: Team,
 	bounds: Rect,
 	capture: f32,
+	inventory: ResourceInventory,
+	requested: ResourceInventory,
+}
+
+CargoLot :: struct {
+	id: CargoId,
+	team: Team,
+	resource: ResourceType,
+	quantity: f32,
+	origin: SectorId,
+	destination: SectorId,
+	progress: f32,
+	travel_time: f32,
+	blocked_time: f32,
 }
 
 Building :: struct {
@@ -137,6 +189,7 @@ Building :: struct {
 	destroyed: bool,
 	builder: SquadId,
 	production: UnitType,
+	resource: ResourceType,
 	queue: int,
 	production_timer: f32,
 }
@@ -191,6 +244,7 @@ World :: struct {
 	squads: [dynamic]Squad,
 	sectors: [dynamic]Sector,
 	buildings: [dynamic]Building,
+	cargo: [dynamic]CargoLot,
 	strikes: [dynamic]ArtilleryStrike,
 	shells: [dynamic]ArtilleryShell,
 	effects: [dynamic]Effect,
@@ -198,7 +252,8 @@ World :: struct {
 	terrain: [dynamic]TerrainType,
 	terrain_width: int,
 	terrain_height: int,
-	team_supply: [3]f32,
+	cargo_lost: f32,
+	next_cargo_id: CargoId,
 	tick: u64,
 	time: f32,
 	accumulator: f32,
@@ -211,6 +266,7 @@ WorldInit :: proc(w: ^World) {
 	w.squads = make([dynamic]Squad)
 	w.sectors = make([dynamic]Sector)
 	w.buildings = make([dynamic]Building)
+	w.cargo = make([dynamic]CargoLot)
 	w.strikes = make([dynamic]ArtilleryStrike)
 	w.shells = make([dynamic]ArtilleryShell)
 	w.effects = make([dynamic]Effect)
@@ -220,7 +276,8 @@ WorldInit :: proc(w: ^World) {
 	w.terrain = make([dynamic]TerrainType)
 	for index: int = 0; index < w.terrain_width * w.terrain_height; index += 1 do append(&w.terrain, TerrainType.Open)
 	WorldCreateTerrain(w)
-	w.team_supply = [3]f32{0, 1000, 1000}
+	w.cargo_lost = 0
+	w.next_cargo_id = CargoId(1)
 	w.tick = 0
 	w.time = 0
 	w.accumulator = 0
@@ -235,6 +292,7 @@ WorldDeinit :: proc(w: ^World) {
 	delete(w.squads)
 	delete(w.sectors)
 	delete(w.buildings)
+	delete(w.cargo)
 	delete(w.strikes)
 	delete(w.shells)
 	delete(w.effects)
@@ -255,7 +313,7 @@ WorldCreateSectors :: proc(w: ^World) {
 		for x: i32 = 0; x < 4; x += 1 {
 			id := SectorId(uint(len(w.sectors) + 1))
 			bounds := Rect{f32(x) * sector_size.x, f32(y) * sector_size.y, sector_size.x, sector_size.y}
-			append(&w.sectors, Sector{id, .Neutral, bounds, 0})
+			append(&w.sectors, Sector{id, .Neutral, bounds, 0, ResourceInventory{}, ResourceInventory{}})
 		}
 	}
 }

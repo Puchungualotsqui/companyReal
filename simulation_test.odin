@@ -23,7 +23,7 @@ SimulationMovementIsBounded :: proc(t: ^testing.T) {
 	defer WorldDeinit(&world)
 
 	squad_id := SquadSpawn(&world, .A, .Line, 1, Vec2{2, 2})
-	SquadSetMove(&world, squad_id, Vec2{300, 300})
+	SquadSetOrder(&world, squad_id, Order{.Move, Vec2{300, 300}, INVALID_UNIT_ID})
 	for index: int = 0; index < 300; index += 1 do WorldStep(&world)
 
 	unit := UnitGet(&world, SquadGet(&world, squad_id).units[0])
@@ -41,8 +41,8 @@ SimulationCombatKillsAndStopsSquad :: proc(t: ^testing.T) {
 	target_squad := SquadSpawn(&world, .B, .Scout, 1, Vec2{10, 10})
 	attacker := SquadGet(&world, attacker_squad)
 	target := SquadGet(&world, target_squad)
-	SquadSetAttack(&world, attacker_squad, target.units[0])
-	SquadSetAttack(&world, target_squad, attacker.units[0])
+	SquadSetOrder(&world, attacker_squad, Order{.Attack, Vec2{}, target.units[0]})
+	SquadSetOrder(&world, target_squad, Order{.Attack, Vec2{}, attacker.units[0]})
 	for index: int = 0; index < 100; index += 1 do WorldStep(&world)
 
 	attacker_unit := UnitGet(&world, attacker.units[0])
@@ -71,8 +71,8 @@ CommandOwnershipControlsOrders :: proc(t: ^testing.T) {
 	WorldInit(&world)
 	defer WorldDeinit(&world)
 
-	owned_squad := SquadSpawnOwned(&world, LOCAL_PLAYER_ID, .A, .Line, 1, Vec2{4, 4})
-	other_squad := SquadSpawnOwned(&world, PLAYER_TWO_ID, .B, .Line, 1, Vec2{8, 4})
+	owned_squad := SquadSpawn(&world, .A, .Line, 1, Vec2{4, 4}, LOCAL_PLAYER_ID)
+	other_squad := SquadSpawn(&world, .B, .Line, 1, Vec2{8, 4}, PLAYER_TWO_ID)
 	target := SquadGet(&world, other_squad).units[0]
 
 	testing.expect(t, SquadSetMoveForPlayer(&world, LOCAL_PLAYER_ID, owned_squad, Vec2{6, 6}), "owner could not move squad")
@@ -95,7 +95,7 @@ CombatUsesAmmoSuppressionAndTargets :: proc(t: ^testing.T) {
 	second_target := UnitGet(&world, SquadGet(&world, second_target_squad).units[0])
 	ammo := attacker.ammo
 
-	SquadSetAttack(&world, attacker_squad, first_target.id)
+	SquadSetOrder(&world, attacker_squad, Order{.Attack, Vec2{}, first_target.id})
 	WorldStep(&world)
 	testing.expect(t, attacker.ammo < ammo, "attack did not consume ammo")
 	testing.expect(t, first_target.suppression > 0, "attack did not apply suppression")
@@ -136,6 +136,7 @@ CombatRetreatsRecoversAndReinforces :: proc(t: ^testing.T) {
 	WorldInit(&world)
 	defer WorldDeinit(&world)
 
+	WorldAddResourcesAtPosition(&world, .A, Vec2{4, 4}, ResourceInventoryMake(250, 0, 100))
 	squad_id := SquadSpawn(&world, .A, .Line, 1, Vec2{20, 20})
 	unit := UnitGet(&world, SquadGet(&world, squad_id).units[0])
 	unit.morale = 0.1
@@ -164,12 +165,12 @@ BuildingsProduceAndSupportCombat :: proc(t: ^testing.T) {
 	WorldInit(&world)
 	defer WorldDeinit(&world)
 
-	BuildingPlaceOwned(&world, LOCAL_PLAYER_ID, .A, .Headquarters, Vec2{4, 4})
-	infantry := BuildingPlaceOwned(&world, LOCAL_PLAYER_ID, .A, .InfantryProduction, Vec2{8, 4})
-	vehicle := BuildingPlaceOwned(&world, LOCAL_PLAYER_ID, .A, .VehicleWorkshop, Vec2{12, 4})
-	equipment := BuildingPlaceOwned(&world, LOCAL_PLAYER_ID, .A, .EquipmentWorkshop, Vec2{16, 4})
-	observation := BuildingPlaceOwned(&world, LOCAL_PLAYER_ID, .A, .ObservationPost, Vec2{20, 4})
-	defense := BuildingPlaceOwned(&world, LOCAL_PLAYER_ID, .A, .Defense, Vec2{24, 4})
+	BuildingPlace(&world, .A, .Headquarters, Vec2{4, 4}, LOCAL_PLAYER_ID)
+	infantry := BuildingPlace(&world, .A, .InfantryProduction, Vec2{8, 4}, LOCAL_PLAYER_ID)
+	vehicle := BuildingPlace(&world, .A, .VehicleWorkshop, Vec2{12, 4}, LOCAL_PLAYER_ID)
+	equipment := BuildingPlace(&world, .A, .EquipmentWorkshop, Vec2{16, 4}, LOCAL_PLAYER_ID)
+	observation := BuildingPlace(&world, .A, .ObservationPost, Vec2{20, 4}, LOCAL_PLAYER_ID)
+	defense := BuildingPlace(&world, .A, .Defense, Vec2{24, 4}, LOCAL_PLAYER_ID)
 
 	testing.expect(t, BuildingQueueForPlayer(&world, LOCAL_PLAYER_ID, infantry, .Assault), "infantry production was rejected")
 	testing.expect(t, BuildingQueueForPlayer(&world, LOCAL_PLAYER_ID, vehicle, .Vehicle), "vehicle production was rejected")
@@ -188,22 +189,23 @@ EngineerConstructionConnectsSupply :: proc(t: ^testing.T) {
 	WorldInit(&world)
 	defer WorldDeinit(&world)
 
-	BuildingPlaceOwned(&world, LOCAL_PLAYER_ID, .A, .Headquarters, Vec2{4, 4})
+	BuildingPlace(&world, .A, .Headquarters, Vec2{4, 4}, LOCAL_PLAYER_ID)
 	world.sectors[1].team = .A
 	world.sectors[2].team = .A
 	testing.expect(t, WorldSectorSupplied(&world, SectorId(2), .A), "owned sector was not connected to headquarters")
 	world.sectors[1].team = .B
 	testing.expect(t, !WorldSectorSupplied(&world, SectorId(2), .A), "enemy sector did not cut supply line")
 
-	engineer_squad := SquadSpawnOwned(&world, LOCAL_PLAYER_ID, .A, .Engineer, 1, Vec2{20, 20})
+	engineer_squad := SquadSpawn(&world, .A, .Engineer, 1, Vec2{20, 20}, LOCAL_PLAYER_ID)
 	building := BuildingConstructForPlayer(&world, LOCAL_PLAYER_ID, engineer_squad, .SupplyDepot, Vec2{20, 20})
 	testing.expect(t, building != INVALID_BUILDING_ID, "engineer could not start construction")
 	for index: int = 0; index < 140; index += 1 do WorldStep(&world)
 	constructed := BuildingGet(&world, building)
 	testing.expect(t, constructed.complete, "engineer construction did not finish")
-	before := world.team_supply[TeamIndex(Team.A)]
+	before := WorldSectorResourceCapacity(&world, SectorId(1), .Materials)
 	WorldStep(&world)
-	testing.expect(t, world.team_supply[TeamIndex(Team.A)] > before, "supply depot did not generate supply")
+	after := WorldSectorResourceCapacity(&world, SectorId(1), .Materials)
+	testing.expect(t, after > before, "supply depot did not increase local storage capacity")
 }
 
 @(test)
@@ -212,8 +214,8 @@ ArtilleryDelaysImpactsAndLeavesEffects :: proc(t: ^testing.T) {
 	WorldInit(&world)
 	defer WorldDeinit(&world)
 
-	BuildingPlaceOwned(&world, LOCAL_PLAYER_ID, .A, .Headquarters, Vec2{4, 4})
-	artillery := BuildingPlaceOwned(&world, LOCAL_PLAYER_ID, .A, .ArtilleryEmplacement, Vec2{4, 4})
+	BuildingPlace(&world, .A, .Headquarters, Vec2{4, 4}, LOCAL_PLAYER_ID)
+	artillery := BuildingPlace(&world, .A, .ArtilleryEmplacement, Vec2{4, 4}, LOCAL_PLAYER_ID)
 	target_squad := SquadSpawn(&world, .B, .Line, 3, Vec2{14, 10})
 	target := UnitGet(&world, SquadGet(&world, target_squad).units[0])
 	strike_target := target.pos
@@ -241,7 +243,8 @@ ArtillerySquadsDestroyBuildings :: proc(t: ^testing.T) {
 	WorldInit(&world)
 	defer WorldDeinit(&world)
 
-	artillery_squad := SquadSpawnOwned(&world, LOCAL_PLAYER_ID, .A, .Artillery, 1, Vec2{8, 8})
+	WorldAddResourcesAtPosition(&world, .A, Vec2{8, 8}, ResourceInventoryMake(0, 0, 100))
+	artillery_squad := SquadSpawn(&world, .A, .Artillery, 1, Vec2{8, 8}, LOCAL_PLAYER_ID)
 	ammo := UnitGet(&world, SquadGet(&world, artillery_squad).units[0]).ammo
 	testing.expect(t, ArtilleryFireSquadForPlayer(&world, LOCAL_PLAYER_ID, artillery_squad, Vec2{16, 8}), "artillery squad could not fire")
 	testing.expect(t, UnitGet(&world, SquadGet(&world, artillery_squad).units[0]).ammo < ammo, "artillery squad did not consume ammunition")
@@ -252,4 +255,89 @@ ArtillerySquadsDestroyBuildings :: proc(t: ^testing.T) {
 	building := BuildingGet(&world, building_id)
 	testing.expect(t, building.destroyed, "artillery did not destroy building")
 	testing.expect(t, len(world.effects) > 0, "building destruction did not create wreck")
+}
+
+@(test)
+LogisticsProductionRequiresLocalInputs :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	BuildingPlace(&world, .A, .Headquarters, Vec2{4, 4}, LOCAL_PLAYER_ID)
+	infantry := BuildingPlace(&world, .A, .InfantryProduction, Vec2{8, 4}, LOCAL_PLAYER_ID)
+	WorldConsumeResource(&world, .A, SectorId(1), .Materials, 500)
+	WorldConsumeResource(&world, .A, SectorId(1), .Munitions, 500)
+
+	testing.expect(t, BuildingQueueForPlayer(&world, LOCAL_PLAYER_ID, infantry, .Assault), "production queue rejected local order")
+	for index: int = 0; index < 120; index += 1 do WorldStep(&world)
+	testing.expect_value(t, len(world.squads), 0)
+
+	WorldAddSectorResource(&world, SectorId(1), .Materials, 15)
+	WorldAddSectorResource(&world, SectorId(1), .Munitions, 4)
+	for index: int = 0; index < 100; index += 1 do WorldStep(&world)
+	testing.expect_value(t, len(world.squads), 1)
+}
+
+@(test)
+LogisticsCargoMovesBetweenOwnedSectors :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	world.sectors[0].team = .A
+	world.sectors[1].team = .A
+	WorldAddSectorResource(&world, SectorId(1), .Materials, 200)
+	cargo := WorldQueueCargo(&world, .A, .Materials, 50, SectorId(1), SectorId(2))
+	testing.expect(t, cargo != INVALID_CARGO_ID, "cargo shipment was not created")
+	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(1), .Materials), f32(150))
+
+	WorldUpdateCargo(&world, 0.5)
+	testing.expect_value(t, len(world.cargo), 1)
+	WorldUpdateCargo(&world, 0.6)
+	testing.expect_value(t, len(world.cargo), 0)
+	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(2), .Materials), f32(50))
+}
+
+@(test)
+LogisticsRouteInterruptionCanRecoverOrLoseCargo :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	world.sectors[0].team = .A
+	world.sectors[1].team = .A
+	WorldAddSectorResource(&world, SectorId(1), .Fuel, 300)
+	cargo := WorldQueueCargo(&world, .A, .Fuel, 50, SectorId(1), SectorId(2))
+	testing.expect(t, cargo != INVALID_CARGO_ID, "recoverable cargo shipment was not created")
+
+	world.sectors[1].team = .B
+	WorldUpdateCargo(&world, 2.0)
+	testing.expect_value(t, len(world.cargo), 1)
+	world.sectors[1].team = .A
+	WorldUpdateCargo(&world, 2.0)
+	testing.expect_value(t, len(world.cargo), 0)
+	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(2), .Fuel), f32(50))
+
+	cargo = WorldQueueCargo(&world, .A, .Fuel, 50, SectorId(1), SectorId(2))
+	testing.expect(t, cargo != INVALID_CARGO_ID, "loss-test cargo shipment was not created")
+	world.sectors[1].team = .B
+	WorldUpdateCargo(&world, 9.0)
+	testing.expect_value(t, len(world.cargo), 0)
+	testing.expect(t, world.cargo_lost >= 50, "blocked cargo was not lost")
+}
+
+@(test)
+LogisticsRequestsAssignAutomaticCargo :: proc(t: ^testing.T) {
+	world: World
+	WorldInit(&world)
+	defer WorldDeinit(&world)
+
+	world.sectors[0].team = .A
+	world.sectors[1].team = .A
+	WorldAddSectorResource(&world, SectorId(1), .Munitions, 300)
+	testing.expect(t, WorldRequestResourceStockpile(&world, .A, SectorId(2), .Munitions, 100), "stockpile request was rejected")
+	WorldUpdateLogistics(&world, 0)
+	testing.expect(t, len(world.cargo) == 1, "logistics did not assign a cargo shipment")
+	WorldUpdateCargo(&world, 1.1)
+	testing.expect_value(t, WorldSectorResourceAmount(&world, SectorId(2), .Munitions), f32(100))
 }

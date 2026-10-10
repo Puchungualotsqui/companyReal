@@ -12,19 +12,20 @@ ArtilleryFireSquadForPlayer :: proc(w: ^World, player: PlayerId, squad_id: Squad
 	for unit_id in squad.units {
 		unit := UnitGet(w, unit_id)
 		if unit != nil && UnitCanFight(unit^) && unit.ammo > 0 {
+			strike := ArtilleryLaunch(w, squad.team, unit.pos, target)
+			if strike == INVALID_STRIKE_ID do return false
 			unit.ammo -= 1
-			return ArtilleryLaunch(w, squad.team, unit.pos, target) != INVALID_STRIKE_ID
+			return true
 		}
 	}
 	return false
 }
 
 ArtilleryLaunch :: proc(w: ^World, team: Team, origin, target: Vec2) -> StrikeId {
-	cost := 20
-	if team == .Neutral || w.team_supply[TeamIndex(team)] < f32(cost) do return INVALID_STRIKE_ID
-	w.team_supply[TeamIndex(team)] -= f32(cost)
+	cost := f32(20)
+	if team == .Neutral || WorldConsumeResource(w, team, WorldSectorAtPosition(w, origin), .Munitions, cost) < cost do return INVALID_STRIKE_ID
 	id := StrikeId(uint(len(w.strikes) + 1))
-	strike := ArtilleryStrike{id, team, origin, WorldClampPosition(w, target), 0, 0.75, 120, 6, 0.8}
+	strike := ArtilleryStrike{id, team, origin, Vec2Clamp(target, Vec2{}, w.max_size), 0, 0.75, 120, 6, 0.8}
 	append(&w.strikes, strike)
 	return id
 }
@@ -85,7 +86,7 @@ ArtilleryImpact :: proc(w: ^World, shell: ArtilleryShell) {
 		}
 		if UnitIsAlive(unit) && unit.state != .Wounded {
 			push := Vec2Scale(Vec2Normalize(Vec2Sub(unit.pos, shell.target)), 2 * falloff)
-			unit.pos = WorldClampPosition(w, Vec2Add(unit.pos, push))
+			unit.pos = Vec2Clamp(Vec2Add(unit.pos, push), Vec2{}, w.max_size)
 			unit.velocity = push
 		}
 	}

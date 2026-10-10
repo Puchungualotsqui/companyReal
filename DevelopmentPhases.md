@@ -101,19 +101,19 @@ This document tracks the implementation order. Each phase should be playable or 
 
 ## Phase 7: Physical Logistics Vertical Slice
 
-- [ ] Replace the global team supply pool with local inventories.
-- [ ] Add materials, fuel, and munitions as resource categories.
-- [ ] Add resource sites, mines, refineries, factories, warehouses, and forward depots.
-- [ ] Add production inputs and outputs for buildings.
-- [ ] Add aggregated cargo lots or convoys with quantities and destinations.
-- [ ] Add sector-based logistics routes and route capacity.
-- [ ] Add route travel time, local storage limits, and production buffering.
-- [ ] Allow enemy presence and destroyed infrastructure to interrupt routes.
-- [ ] Add cargo loss, convoy destruction, and route warnings.
-- [ ] Add automatic transport assignment and high-level logistics priorities.
-- [ ] Add resource stockpile requests for sectors, factories, and unit groups.
-- [ ] Show nearby logistics as visible transport units, cargo, and wrecks.
-- [ ] Add headless tests for production starvation, route interruption, and recovery.
+- [x] Replace the global team supply pool with local sector inventories.
+- [x] Add materials, fuel, and munitions as resource categories.
+- [x] Add resource sites, refineries, factories, warehouses, and forward depots.
+- [x] Add production inputs and outputs for buildings.
+- [x] Add aggregated cargo lots with quantities and destinations.
+- [x] Add sector-based logistics routes and storage capacity.
+- [x] Add route travel time, local storage limits, and production buffering through queues.
+- [-] Allow enemy presence and destroyed infrastructure to interrupt routes.
+- [-] Add cargo loss, convoy destruction, and player-facing route warnings.
+- [x] Add automatic transport assignment and high-level logistics priorities.
+- [x] Add resource stockpile requests for sectors and production demand.
+- [x] Show nearby cargo and cargo wreck effects.
+- [x] Add headless tests for production starvation, route interruption, cargo loss, and recovery.
 
 **Exit:** A two-faction scenario can produce units, move resources between sectors, suffer a logistics disruption, and recover without the player ordering every transport individually.
 

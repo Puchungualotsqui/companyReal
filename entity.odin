@@ -29,11 +29,7 @@ UnitSpawn :: proc(w: ^World, squad: SquadId, team: Team, type: UnitType, pos, fo
 	return id
 }
 
-SquadSpawn :: proc(w: ^World, team: Team, type: UnitType, count: int, pos: Vec2) -> SquadId {
-	return SquadSpawnOwned(w, INVALID_PLAYER_ID, team, type, count, pos)
-}
-
-SquadSpawnOwned :: proc(w: ^World, owner: PlayerId, team: Team, type: UnitType, count: int, pos: Vec2) -> SquadId {
+SquadSpawn :: proc(w: ^World, team: Team, type: UnitType, count: int, pos: Vec2, owner := INVALID_PLAYER_ID) -> SquadId {
 	id := SquadId(uint(len(w.squads) + 1))
 	squad := Squad{id, owner, team, type, make([dynamic]UnitId), Order{.Idle, pos, INVALID_UNIT_ID}}
 	append(&w.squads, squad)
@@ -50,16 +46,13 @@ SquadFormationOffset :: proc(index: int) -> Vec2 {
 	return Vec2{f32(index % 4) - 1.5, f32(index / 4) - 0.5}
 }
 
-SquadSetMove :: proc(w: ^World, id: SquadId, target: Vec2) { SquadSetOrder(w, id, Order{.Move, target, INVALID_UNIT_ID}) }
-SquadSetAttack :: proc(w: ^World, id: SquadId, target: UnitId) { SquadSetOrder(w, id, Order{.Attack, Vec2{}, target}) }
-SquadSetIdle :: proc(w: ^World, id: SquadId) { SquadSetOrder(w, id, Order{.Idle, Vec2{}, INVALID_UNIT_ID}) }
 
 SquadCanControl :: proc(squad: Squad, player: PlayerId) -> bool { return squad.owner == player && player != INVALID_PLAYER_ID }
 
 SquadSetMoveForPlayer :: proc(w: ^World, player: PlayerId, id: SquadId, target: Vec2) -> bool {
 	squad := SquadGet(w, id)
 	if squad == nil || !SquadCanControl(squad^, player) do return false
-	SquadSetMove(w, id, target)
+	SquadSetOrder(w, id, Order{.Move, target, INVALID_UNIT_ID})
 	return true
 }
 
@@ -74,7 +67,7 @@ SquadSetAttackForPlayer :: proc(w: ^World, player: PlayerId, id: SquadId, target
 	case .A, .B:
 		if squad.team == unit.team do return false
 	}
-	SquadSetAttack(w, id, target)
+	SquadSetOrder(w, id, Order{.Attack, Vec2{}, target})
 	return true
 }
 
@@ -103,6 +96,7 @@ WorldStep :: proc(w: ^World) {
 	WorldUpdateSquads(w)
 	WorldUpdateSectors(w, w.step)
 	WorldUpdateBuildings(w, w.step)
+	WorldUpdateLogistics(w, w.step)
 	WorldUpdateArtillery(w, w.step)
 	WorldUpdateSupply(w, w.step)
 }
@@ -188,7 +182,7 @@ UnitCanAttack :: proc(attacker, target: Unit) -> bool {
 }
 
 UnitMoveTo :: proc(w: ^World, unit: ^Unit, target: Vec2, dt: f32) {
-	destination := WorldClampPosition(w, target)
+	destination := Vec2Clamp(target, Vec2{}, w.max_size)
 	delta := Vec2Sub(destination, unit.pos)
 	distance := Vec2Length(delta)
 	travel := UnitMoveSpeed(w, unit^) * dt
@@ -199,7 +193,7 @@ UnitMoveTo :: proc(w: ^World, unit: ^Unit, target: Vec2, dt: f32) {
 	}
 	unit.state = .Moving
 	unit.velocity = Vec2Scale(Vec2Normalize(delta), UnitMoveSpeed(w, unit^))
-	unit.pos = WorldClampPosition(w, Vec2Add(unit.pos, Vec2Scale(unit.velocity, dt)))
+	unit.pos = Vec2Clamp(Vec2Add(unit.pos, Vec2Scale(unit.velocity, dt)), Vec2{}, w.max_size)
 }
 
 UnitDamage :: proc(w: ^World, unit: ^Unit, damage, suppression: f32) {
@@ -269,13 +263,13 @@ UnitRetreat :: proc(w: ^World, unit: ^Unit, dt: f32) {
 	}
 	unit.state = .Retreating
 	unit.velocity = Vec2Scale(Vec2Normalize(delta), UnitMoveSpeed(w, unit^) * 1.25)
-	unit.pos = WorldClampPosition(w, Vec2Add(unit.pos, Vec2Scale(unit.velocity, dt)))
+	unit.pos = Vec2Clamp(Vec2Add(unit.pos, Vec2Scale(unit.velocity, dt)), Vec2{}, w.max_size)
 }
 
 UnitWoundedUpdate :: proc(w: ^World, unit: ^Unit, dt: f32) {
 	unit.velocity = Vec2{}
 	if !WorldCanResupply(w, unit^) do return
-	heal := WorldConsumeSupply(w, unit.team, 6 * dt)
+	heal := WorldConsumeResource(w, unit.team, WorldSectorAtPosition(w, unit.pos), .Materials, 6 * dt)
 	unit.health = min(unit.max_health, unit.health + heal)
 	if unit.health >= unit.max_health * 0.5 {
 		unit.morale = max(unit.morale, 0.5)
@@ -308,18 +302,12 @@ WorldCanResupply :: proc(w: ^World, unit: Unit) -> bool {
 	return WorldSectorSupplied(w, sector_id, unit.team)
 }
 
-WorldConsumeSupply :: proc(w: ^World, team: Team, amount: f32) -> f32 {
-	index := TeamIndex(team)
-	provided := min(w.team_supply[index], max(0, amount))
-	w.team_supply[index] -= provided
-	return provided
-}
 
 WorldUpdateSupply :: proc(w: ^World, dt: f32) {
 	for &unit in w.units {
 		if !UnitIsAlive(unit) || unit.state == .Attacking || !WorldCanResupply(w, unit) do continue
 		amount := min(unit.max_ammo - unit.ammo, 5 * dt)
-		unit.ammo += WorldConsumeSupply(w, unit.team, amount)
+		unit.ammo += WorldConsumeResource(w, unit.team, WorldSectorAtPosition(w, unit.pos), .Munitions, amount)
 	}
 }
 
@@ -338,8 +326,7 @@ SquadReinforce :: proc(w: ^World, id: SquadId, count: int) -> int {
 	cost := stats.health * 0.1
 	spawned := 0
 	for index: int = 0; index < count; index += 1 {
-		if w.team_supply[TeamIndex(squad.team)] < cost do break
-		w.team_supply[TeamIndex(squad.team)] -= cost
+		if WorldConsumeResource(w, squad.team, WorldSectorAtPosition(w, position), .Materials, cost) < cost do break
 		offset := SquadFormationOffset(len(squad.units))
 		unit_id := UnitSpawn(w, id, squad.team, squad.type, Vec2Add(position, offset), offset)
 		append(&squad.units, unit_id)
@@ -348,7 +335,6 @@ SquadReinforce :: proc(w: ^World, id: SquadId, count: int) -> int {
 	return spawned
 }
 
-WorldClampPosition :: proc(w: ^World, pos: Vec2) -> Vec2 { return Vec2Clamp(pos, Vec2{}, w.max_size) }
 
 SquadIsAlive :: proc(w: ^World, id: SquadId) -> bool {
 	squad := SquadGet(w, id)
@@ -396,7 +382,7 @@ WorldUpdateSectors :: proc(w: ^World, dt: f32) {
 			if UnitIsAlive(unit) && UnitInRect(unit, sector.bounds) do presence[TeamIndex(unit.team)] += 1
 		}
 		for building in w.buildings {
-			if building.complete && building.type == .Defense && BuildingSector(w, building) == sector.id do presence[TeamIndex(building.team)] += 2
+			if building.complete && building.type == .Defense && WorldSectorAtPosition(w, building.pos) == sector.id do presence[TeamIndex(building.team)] += 2
 		}
 		leader := WorldSectorLeader(presence)
 		switch leader {

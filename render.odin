@@ -59,6 +59,13 @@ DrawBoard :: proc(world: World, camera: ViewCamera, selected: SquadId) {
 		rl.DrawLine(i32(origin.x), i32(origin.y), i32(position.x), i32(position.y), UnitTeamColor(shell.team))
 		rl.DrawRectangle(i32(position.x) - 2, i32(position.y) - 2, 4, 4, COLOR_SELECTION)
 	}
+	for cargo in world.cargo {
+		position := ViewCameraWorldToScreen(camera, WorldCargoPosition(&world, cargo))
+		size := max(4, i32(5 * camera.zoom))
+		color := ResourceColor(cargo.resource)
+		if cargo.blocked_time > 0 do color = COLOR_SELECTION
+		rl.DrawRectangle(i32(position.x) - size / 2, i32(position.y) - size / 2, size, size, color)
+	}
 	for effect in world.effects {
 		position := ViewCameraWorldToScreen(camera, effect.pos)
 		size := max(4, i32(effect.size * camera.zoom))
@@ -110,6 +117,18 @@ DrawBoard :: proc(world: World, camera: ViewCamera, selected: SquadId) {
 		if unit.squad == selected do rl.DrawRectangle(cell_x, cell_y, cell_size, cell_size, COLOR_PLAYER_CELL)
 		rl.DrawTextCodepoint(rl.GetFontDefault(), UnitDefaultChar(unit.type), rl.Vector2{f32(cell_x) + f32(cell_size) * 0.25, f32(cell_y) - f32(font_size) * 0.1}, f32(font_size), color)
 	}
+}
+
+ResourceColor :: proc(resource: ResourceType) -> rl.Color {
+	switch resource {
+	case .Materials:
+		return rl.Color{180, 180, 180, 255}
+	case .Fuel:
+		return rl.Color{220, 150, 40, 255}
+	case .Munitions:
+		return rl.Color{220, 60, 60, 255}
+	}
+	unreachable()
 }
 
 UnitTeamColor :: proc(team: Team) -> rl.Color {
