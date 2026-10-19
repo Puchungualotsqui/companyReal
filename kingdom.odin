@@ -13,6 +13,16 @@ Kingdom :: struct {
 Town :: struct {
 	x, y: int,
 	citizens: int,
+	wood: f32,
+	growthTimer, constructionProgress: f32,
+	builders, waterCollectors, farmers: int,
+	homes, farmlands: int,
+	farmlandOutput: f32,
+	foodPotential, waterPotential: f32,
+	waterAccess: f32,
+	waterAccessTerrainRevision: u64,
+	waterAccessCached: bool,
+	foodShortage, waterShortage: f32,
 }
 
 TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
@@ -29,8 +39,10 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 	if !ok do return 0, false
 
 	w.kingdoms[kingdomSlot].towns[i] = Town{
-		x, y,
-		0,
+		x = x,
+		y = y,
+		citizens = 0,
+		wood = 35,
 	}
 	w.kingdoms[kingdomSlot].townUsed[i] = true
 	return i, true

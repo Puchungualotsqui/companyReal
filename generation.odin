@@ -158,6 +158,8 @@ WorldGenerate :: proc(w: ^World, settings: WorldGenerationSettings) {
 					tile_type = .Desert
 				} else if moisture > 0.57 {
 					tile_type = .Forest
+				} else if moisture > 0.44 {
+					tile_type = .FertileGround
 				} else {
 					tile_type = .Ground
 				}
@@ -223,7 +225,7 @@ WorldGenerateLakes :: proc(w: ^World, settings: WorldGenerationSettings) {
 				shore := 0.75+shore_noise*0.5
 				if w.ground[x][y].type != .Water &&
 					along*along/(radius_x*radius_x)+across*across/(radius_y*radius_y) <= shore*shore {
-					w.ground[x][y].type = .Water
+					w.ground[x][y].type = .FreshWater
 				}
 			}
 		}
@@ -246,7 +248,7 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 		for y in 0..<world_height {
 			index := x*world_height+y
 			distance[index] = -1
-			if w.ground[x][y].type == .Water {
+			if w.ground[x][y].type == .Water || w.ground[x][y].type == .FreshWater {
 				distance[index] = 0
 				queue[tail] = index
 				tail += 1
@@ -335,7 +337,7 @@ WorldGenerateBeaches :: proc(w: ^World, beach_width: int, seed: u64) {
 	for x in 0..<world_width {
 		for y in 0..<world_height {
 			tile_type := w.ground[x][y].type
-			if tile_type == .Water || tile_type == .River do continue
+			if tile_type == .Water || tile_type == .FreshWater || tile_type == .River do continue
 
 			// Broad noise makes continuous sandy bays and rocky or vegetated shores.
 			shore := WorldPeriodicNoise(x, y, world_width, world_height,
@@ -500,6 +502,9 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdom_count: int, seed: u64) -> b
 
 	for kingdom_index in 0..<kingdom_count {
 		if _, ok := KingdomSpawn(w, chosen_x[kingdom_index], chosen_y[kingdom_index]); !ok {
+			return false
+		}
+		if !TownSpawnInitialWorkers(w, kingdom_index, w.kingdoms[kingdom_index].capitalSlot) {
 			return false
 		}
 	}

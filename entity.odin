@@ -11,11 +11,14 @@ Building :: struct {
 BuildingType :: union {
 	Wall,
 	TownHall,
+	Home,
+	Farmland,
 }
 
 Wall :: struct {}
-
 TownHall :: struct {}
+Home :: struct {}
+Farmland :: struct {}
 
 // width, height
 BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
@@ -24,6 +27,10 @@ BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
 		return 1, 1
 	case TownHall:
 		return 4, 4
+	case Home:
+		return 1, 1
+	case Farmland:
+		return 2, 2
 	}
 	unreachable()
 }
@@ -34,42 +41,51 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 		return 300
 	case TownHall:
 		return 1000
+	case Home, Farmland:
+		return 100
 	}
 	unreachable()
 }
 
 BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 	switch tType {
-	case .Water, .River:
+	case .Water, .FreshWater, .River:
+		return false
+
+	case .Ground, .FertileGround:
 		switch _ in bType {
-		case Wall, TownHall:
+		case Farmland:
+			return true
+		case Wall, TownHall, Home:
+			return true
+		}
+
+	case .Forest, .Hill, .Desert, .Sand:
+		switch _ in bType {
+		case Wall, TownHall, Home:
+			return true
+		case Farmland:
 			return false
-		}
-
-	case .Ground, .Forest, .Hill, .Desert:
-		switch _ in bType {
-		case Wall, TownHall:
-			return true
-		}
-
-	case .Sand:
-		switch _ in bType {
-		case Wall, TownHall:
-			return true
 		}
 	}
 	unreachable()
 }
 
+WorkerTaskState :: enum {
+	Idle,
+	TravelingToSource,
+	Gathering,
+	ReturningToTown,
+}
+
 Unit :: struct {
 	x, y: f32,
 	health: f32,
-	speed: f32,
 	cooldown: f32,
-	damage: f32,
 	type: UnitType,
 	kingdome: int,
 	town: int,
+	effects: [UnitEffects]bool,
 	//
 	path: [dynamic]int,
 	pathTargetX, pathTargetY: int,
@@ -78,13 +94,30 @@ Unit :: struct {
 	pathReady, pathFound: bool,
 }
 
+UnitEffects :: enum {
+	NoHome,
+	NoWater,
+	NoFood,
+}
+
 UnitType :: union {
 	Villager,
+	Builder,
+	WaterCollector,
+	Farmer,
 	Knight,
 	Giant,
 }
 
+
 Villager :: struct {}
+Builder :: struct {
+	taskState: WorkerTaskState,
+	carriedResource: f32,
+	taskSequence: int,
+}
+WaterCollector :: struct {}
+Farmer :: struct {}
 Knight :: struct {}
 Giant :: struct {}
 
@@ -94,7 +127,7 @@ UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 		return 50
 	case Giant:
 		return 100
-	case Villager:
+	case Villager, Builder, WaterCollector, Farmer:
 		return 15
 	}
 	unreachable()
@@ -108,6 +141,8 @@ UnitDefaultSpeed :: proc(type: UnitType) -> f32 {
 		return 7.5
 	case Villager:
 		return 12
+	case Builder, WaterCollector, Farmer:
+		return 5
 	}
 	unreachable()
 }
@@ -118,7 +153,7 @@ UnitDefaultCooldown :: proc(type: UnitType) -> f32 {
 		return 1
 	case Giant:
 		return 1.75
-	case Villager:
+	case Villager, Builder, WaterCollector, Farmer:
 		return 0
 	}
 	unreachable()
@@ -130,7 +165,7 @@ UnitDefaultRange :: proc(type: UnitType) -> f32 {
 		return 0.75
 	case Giant:
 		return 0.80
-	case Villager:
+	case Villager, Builder, WaterCollector, Farmer:
 		return 0
 	}
 	unreachable()
@@ -142,7 +177,7 @@ UnitDefaultVision :: proc(type: UnitType) -> f32 {
 		return 25
 	case Giant:
 		return 40
-	case Villager:
+	case Villager, Builder, WaterCollector, Farmer:
 		return 30
 	}
 	unreachable()
@@ -154,7 +189,7 @@ UnitDefaultDamage :: proc(type: UnitType) -> f32 {
 		return 15
 	case Giant:
 		return 30
-	case Villager:
+	case Villager, Builder, WaterCollector, Farmer:
 		return 0
 	}
 	unreachable()
@@ -162,21 +197,12 @@ UnitDefaultDamage :: proc(type: UnitType) -> f32 {
 
 UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
 	switch tType {
-	case .Water:
-		switch _ in uType {
-		case Knight, Giant, Villager:
-			return false
-		}
+	case .Water, .FreshWater:
+		return false
 
-	case .Ground, .Forest, .Hill, .Desert, .River:
+	case .Ground, .FertileGround, .Forest, .Hill, .Desert, .River, .Sand:
 		switch _ in uType {
-		case Knight, Giant, Villager:
-			return true
-		}
-
-	case .Sand:
-		switch _ in uType {
-		case Knight, Giant, Villager:
+		case Knight, Giant, Villager, Builder, WaterCollector, Farmer:
 			return true
 		}
 	}
@@ -213,7 +239,10 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 	}
 	if !unit.pathFound do return false
 
-	remaining := unit.speed * delta_time
+	speed := UnitDefaultSpeed(unit.type)
+	if unit.effects[.NoWater] do speed *= 0.7
+
+	remaining := speed * delta_time
 	if remaining < 0 do remaining = 0
 	for unit.pathIndex < len(unit.path) {
 		waypoint := unit.path[unit.pathIndex]

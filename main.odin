@@ -15,7 +15,9 @@ main :: proc() {
 	defer WorldRendererDeinit(&view.renderer)
 
 	for !rl.WindowShouldClose() {
-		WorldViewUpdate(world, &view, rl.GetFrameTime())
+		delta_time := rl.GetFrameTime()
+		WorldUpdate(world, delta_time)
+		WorldViewUpdate(world, &view, delta_time)
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.Color{38, 68, 91, 255})
 		WorldRender(world, view.renderer, view.camera)

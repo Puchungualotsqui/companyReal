@@ -13,6 +13,8 @@ World :: struct {
 	kingdomUsed: [KINGDOMS_CAPACITY]bool,
 	maxX, maxY: uint,
 	navigationRevision: u64,
+	simulationTime: f32,
+	simulationAccumulator: f32,
 	terrainRevision: u64,
 	ground: [dynamic][dynamic]Tile,
 }
@@ -50,8 +52,10 @@ Tile :: struct {
 
 TileType :: enum {
 	Water,
+	FreshWater,
 	River,
 	Ground,
+	FertileGround,
 	Sand,
 	Forest,
 	Hill,
@@ -87,12 +91,22 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.units.x[i] = x
 	w.units.y[i] = y
 	w.units.health[i] = UnitDefaultHealth(type)
-	w.units.speed[i] = UnitDefaultSpeed(type)
 	w.units.cooldown[i] = UnitDefaultCooldown(type)
-	w.units.damage[i] = UnitDefaultDamage(type)
 	w.units.type[i] = type
+	switch _ in type {
+	case Builder:
+		w.units.type[i] = Builder{taskState = .Idle, carriedResource = 0, taskSequence = 0}
+	case WaterCollector:
+		w.units.type[i] = WaterCollector{}
+	case Villager, Farmer, Knight, Giant:
+	}
 	w.units.kingdome[i] = kingdomSlot
 	w.units.town[i] = townSlot
+	w.units[i].effects = [UnitEffects]bool{
+		.NoHome = false,
+		.NoWater = false,
+		.NoFood = false,
+	}
 
 	w.units[i].path = make([dynamic]int, 0, 250)
 	w.units[i].pathTargetX = 0
@@ -203,7 +217,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 				}
 			}
 		}
-	case Wall:
+	case Wall, Home, Farmland:
 	}
 
 	w.buildingUsed[slot] = false

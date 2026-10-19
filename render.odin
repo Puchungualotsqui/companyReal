@@ -166,10 +166,14 @@ WorldTileColor :: proc(tile_type: TileType) -> rl.Color {
 	switch tile_type {
 	case .Water:
 		return rl.Color{48, 83, 112, 255}
+	case .FreshWater:
+		return rl.Color{69, 130, 153, 255}
 	case .River:
 		return rl.Color{78, 133, 155, 255}
 	case .Ground:
 		return rl.Color{100, 128, 88, 255}
+	case .FertileGround:
+		return rl.Color{126, 151, 88, 255}
 	case .Sand:
 		return rl.Color{215, 194, 140, 255}
 	case .Forest:
