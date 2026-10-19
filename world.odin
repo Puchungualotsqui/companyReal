@@ -13,11 +13,14 @@ World :: struct {
 	kingdomUsed: [KINGDOMS_CAPACITY]bool,
 	maxX, maxY: uint,
 	navigationRevision: u64,
+	terrainRevision: u64,
 	ground: [dynamic][dynamic]Tile,
 }
 
 WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerationSettings) -> bool {
-	if kingdoms == 0 || kingdoms > uint(KINGDOMS_CAPACITY) do return false
+	if maxX == 0 || maxY == 0 || kingdoms == 0 || kingdoms > uint(KINGDOMS_CAPACITY) {
+		return false
+	}
 
 	w.maxX = maxX
 	w.maxY = maxY
@@ -25,7 +28,6 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	for &x in w.ground {
 		x = make([dynamic]Tile, maxY)
 	}
-
 	WorldGenerate(w, settings)
 	return WorldSpawnInitialKingdoms(w, int(kingdoms), settings.seed)
 }
@@ -62,6 +64,7 @@ WorldTileSet :: proc(w: ^World, x, y: int, tile_type: TileType) -> bool {
 	if w.ground[wrapped_x][wrapped_y].type != tile_type {
 		w.ground[wrapped_x][wrapped_y].type = tile_type
 		w.navigationRevision += 1
+		w.terrainRevision += 1
 	}
 	return true
 }
