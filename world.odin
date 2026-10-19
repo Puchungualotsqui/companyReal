@@ -59,8 +59,6 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
 	w.units.health[i] = UnitDefaultHealth(type)
 	w.units.speed[i] = UnitDefaultSpeed(type)
 	w.units.cooldown[i] = UnitDefaultCooldown(type)
-	w.units.range[i] = UnitDefaultRange(type)
-	w.units.vision[i] = UnitDefaultVision(type)
 	w.units.damage[i] = UnitDefaultDamage(type)
 	w.units.type[i] = type
 	w.unitUsed[i] = true
@@ -97,7 +95,6 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType) -> (int, bool) {
 
 	w.buildings.x[i] = x
 	w.buildings.y[i] = y
-	w.buildings.width[i], w.buildings.height[i] = BuildingTileSize(type)
 	w.buildings.health[i] = BuildingDefaultHealth(type)
 	w.buildings.type[i] = type
 	w.buildingUsed[i] = true
@@ -160,8 +157,9 @@ WorldTileOccupied :: proc(w: ^World, x, y: int) -> bool {
 		}
 		building_x := w.buildings.x[i]
 		building_y := w.buildings.y[i]
-		if x >= building_x && x < building_x + w.buildings.width[i] &&
-			y >= building_y && y < building_y + w.buildings.height[i] {
+		width, height := BuildingTileSize(w.buildings[i].type)
+		if x >= building_x && x < building_x + width &&
+			y >= building_y && y < building_y + height {
 			return true
 		}
 	}
@@ -198,8 +196,7 @@ WorldBuildingCollides :: proc(w: ^World, x, y: int, type: BuildingType) -> bool 
 		}
 		building_x := w.buildings.x[i]
 		building_y := w.buildings.y[i]
-		building_width := w.buildings.width[i]
-		building_height := w.buildings.height[i]
+		building_width, building_height := BuildingTileSize(w.buildings[i].type)
 
 		if x < building_x + building_width && x + width > building_x &&
 			y < building_y + building_height && y + height > building_y {
