@@ -51,7 +51,7 @@ BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 			return true
 		}
 
-	case .Desert:
+	case .Sand:
 		switch _ in bType {
 		case Wall, TownHall:
 			return true
@@ -155,7 +155,7 @@ UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
 			return true
 		}
 
-	case .Desert:
+	case .Sand:
 		switch _ in uType {
 		case Knight, Giant:
 			return true

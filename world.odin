@@ -15,13 +15,15 @@ World :: struct {
 	ground: [dynamic][dynamic]Tile,
 }
 
-WorldInit :: proc(w: ^World, maxX, maxY: uint) {
+WorldInit :: proc(w: ^World, maxX, maxY: uint, settings: WorldGenerationSettings) {
 	w.maxX = maxX
 	w.maxY = maxY
 	w.ground = make([dynamic][dynamic]Tile, maxX)
 	for &x in w.ground {
 		x = make([dynamic]Tile, maxY)
 	}
+
+	WorldGenerate(w, settings)
 }
 
 WorldDeinit :: proc(w: ^World) {
@@ -38,7 +40,7 @@ Tile :: struct {
 TileType :: enum {
 	Water,
 	Ground,
-	Desert,
+	Sand,
 }
 
 UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
