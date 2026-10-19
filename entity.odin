@@ -28,7 +28,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, health: f32, type: BuildingType) -> 
 	w.buildings.x[i] = x
 	w.buildings.y[i] = y
 	w.buildings.width[i], w.buildings.height[i] = BuildingTileSize(type)
-	w.buildings.health[i] = health
+	w.buildings.health[i] = BuildingDefaultHealth(type)
 	w.buildings.type[i] = type
 	w.building_count += 1
 	return id
