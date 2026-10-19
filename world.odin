@@ -16,7 +16,9 @@ World :: struct {
 	ground: [dynamic][dynamic]Tile,
 }
 
-WorldInit :: proc(w: ^World, maxX, maxY: uint, settings: WorldGenerationSettings) {
+WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerationSettings) -> bool {
+	if kingdoms == 0 || kingdoms > uint(KINGDOMS_CAPACITY) do return false
+
 	w.maxX = maxX
 	w.maxY = maxY
 	w.ground = make([dynamic][dynamic]Tile, maxX)
@@ -25,6 +27,7 @@ WorldInit :: proc(w: ^World, maxX, maxY: uint, settings: WorldGenerationSettings
 	}
 
 	WorldGenerate(w, settings)
+	return WorldSpawnInitialKingdoms(w, int(kingdoms), settings.seed)
 }
 
 WorldDeinit :: proc(w: ^World) {

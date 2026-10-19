@@ -155,3 +155,102 @@ WorldNoiseHash :: proc(x, y: int, seed: u64) -> f32 {
 WorldLerp :: proc(a, b, t: f32) -> f32 {
 	return a + (b-a)*t
 }
+
+WorldSpawnInitialKingdoms :: proc(w: ^World, kingdom_count: int, seed: u64) -> bool {
+	world_width := int(w.maxX)
+	world_height := int(w.maxY)
+	if world_width <= 0 || world_height <= 0 || kingdom_count <= 0 ||
+		kingdom_count > KINGDOMS_CAPACITY {
+		return false
+	}
+
+	building_width, building_height := BuildingTileSize(TownHall{})
+	node_count := world_width * world_height
+	occupied := make([dynamic]bool, node_count)
+	defer delete(occupied)
+	for tile in 0..<node_count {
+		occupied[tile] = false
+	}
+
+	for building_slot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[building_slot] do continue
+		building_x := w.buildings.x[building_slot]
+		building_y := w.buildings.y[building_slot]
+		width, height := BuildingTileSize(w.buildings[building_slot].type)
+		for x in max(building_x, 0)..<min(building_x+width, world_width) {
+			for y in max(building_y, 0)..<min(building_y+height, world_height) {
+				occupied[x*world_height+y] = true
+			}
+		}
+	}
+
+	chosen_x: [KINGDOMS_CAPACITY]int
+	chosen_y: [KINGDOMS_CAPACITY]int
+	for kingdom_index in 0..<kingdom_count {
+		best_x := -1
+		best_y := -1
+		best_distance := -1
+		best_tie_break := f32(-1.0)
+
+		for x in 0..<world_width {
+			for y in 0..<world_height {
+				if !WorldBuildingOverTile(w, x, y, TownHall{}) do continue
+
+				is_occupied := false
+				for tile_x in x ..< (x + building_width) {
+					for tile_y in y ..< (y + building_height) {
+						if occupied[tile_x*world_height+tile_y] {
+							is_occupied = true
+							break
+						}
+					}
+					if is_occupied do break
+				}
+				if is_occupied do continue
+
+				candidate_distance := 0
+				if kingdom_index == 0 {
+					candidate_distance = int(WorldNoiseHash(x, y, seed+u64(kingdom_index)+101)*1_000_000)
+				} else {
+					candidate_distance = world_width*world_width + world_height*world_height
+					center_x := x + building_width/2
+					center_y := y + building_height/2
+					for previous in 0..<kingdom_index {
+						delta_x := center_x - (chosen_x[previous] + building_width/2)
+						delta_y := center_y - (chosen_y[previous] + building_height/2)
+						if delta_x < 0 do delta_x = -delta_x
+						if delta_y < 0 do delta_y = -delta_y
+						delta_x = min(delta_x, world_width-delta_x)
+						delta_y = min(delta_y, world_height-delta_y)
+						distance := delta_x*delta_x + delta_y*delta_y
+						if distance < candidate_distance do candidate_distance = distance
+					}
+				}
+				tie_break := WorldNoiseHash(x, y, seed+u64(kingdom_index)*7919+313)
+				if candidate_distance > best_distance ||
+					(candidate_distance == best_distance && tie_break > best_tie_break) {
+					best_x = x
+					best_y = y
+					best_distance = candidate_distance
+					best_tie_break = tie_break
+				}
+			}
+		}
+
+		if best_x < 0 do return false
+		chosen_x[kingdom_index] = best_x
+		chosen_y[kingdom_index] = best_y
+		for x in best_x ..< (best_x + building_width) {
+			for y in best_y ..< (best_y + building_height) {
+				occupied[x*world_height+y] = true
+			}
+		}
+	}
+
+	for kingdom_index in 0..<kingdom_count {
+		if _, ok := KingdomSpawn(w, chosen_x[kingdom_index], chosen_y[kingdom_index]); !ok {
+			return false
+		}
+	}
+	return true
+}

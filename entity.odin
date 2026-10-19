@@ -68,6 +68,7 @@ Unit :: struct {
 	damage: f32,
 	type: UnitType,
 	town: Town,
+	//
 	path: [dynamic]int,
 	pathTargetX, pathTargetY: int,
 	pathRevision: u64,
