@@ -74,6 +74,7 @@ Unit :: struct {
 
 UnitType :: union {
 	Knight,
+	Giant,
 }
 
 Knight :: struct {}
@@ -84,6 +85,8 @@ UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 	switch t in type {
 	case Knight:
 		return 50
+	case Giant:
+		return 100
 	}
 	unreachable()
 }
@@ -92,6 +95,8 @@ UnitDefaultSpeed :: proc(type: UnitType) -> f32 {
 	switch t in type {
 	case Knight:
 		return 10
+	case Giant:
+		return 7.5
 	}
 	unreachable()
 }
@@ -100,6 +105,8 @@ UnitDefaultCooldown :: proc(type: UnitType) -> f32 {
 	switch t in type {
 	case Knight:
 		return 1
+	case Giant:
+		return 1.75
 	}
 	unreachable()
 }
@@ -108,6 +115,8 @@ UnitDefaultRange :: proc(type: UnitType) -> f32 {
 	switch t in type {
 	case Knight:
 		return 0.75
+	case Giant:
+		return 0.80
 	}
 	unreachable()
 }
@@ -116,6 +125,8 @@ UnitDefaultVision :: proc(type: UnitType) -> f32 {
 	switch t in type {
 	case Knight:
 		return 25
+	case Giant:
+		return 40
 	}
 	unreachable()
 }
@@ -124,6 +135,32 @@ UnitDefaultDamage :: proc(type: UnitType) -> f32 {
 	switch t in type {
 	case Knight:
 		return 15
+	case Giant:
+		return 30
 	}
+	unreachable()
+}
+
+UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
+	switch tType {
+	case .Water:
+		switch _ in uType {
+		case Knight, Giant:
+			return false
+		}
+
+	case .Ground:
+		switch _ in uType {
+		case Knight, Giant:
+			return true
+		}
+
+	case .Desert:
+		switch _ in uType {
+		case Knight, Giant:
+			return true
+		}
+	}
+
 	unreachable()
 }
