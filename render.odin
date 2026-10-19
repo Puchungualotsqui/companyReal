@@ -154,6 +154,12 @@ WorldRender :: proc(w: ^World, renderer: WorldRenderer, camera: rl.Camera2D) {
 		}
 	}
 	rl.EndMode2D()
+
+	night_amount := WorldNightAmount(w)
+	if night_amount > 0 {
+		alpha := u8(night_amount*150)
+		rl.DrawRectangle(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight(), rl.Color{16, 20, 42, alpha})
+	}
 }
 
 WorldFloor :: proc(value: f32) -> int {

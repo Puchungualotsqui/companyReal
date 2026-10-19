@@ -3,17 +3,36 @@ package main
 import "core:math"
 
 TOWN_SIMULATION_STEP :: 0.25
+WORLD_DAY_LENGTH_SECONDS :: 7*60.0
 
 WorldUpdate :: proc(w: ^World, delta_time: f32) {
 	if delta_time <= 0 do return
-	w.simulationTime += delta_time
 	w.simulationAccumulator += delta_time
 	for w.simulationAccumulator >= TOWN_SIMULATION_STEP {
+		w.simulationTime += TOWN_SIMULATION_STEP
+		w.dayTime += TOWN_SIMULATION_STEP
+		if w.dayTime >= f32(WORLD_DAY_LENGTH_SECONDS) {
+			w.dayTime -= f32(WORLD_DAY_LENGTH_SECONDS)
+			w.dayNumber += 1
+		}
 		WorldUnitUpdate(w, TOWN_SIMULATION_STEP)
 		WorldBuildingUpdate(w, TOWN_SIMULATION_STEP)
 		WorldKingdomUpdate(w, TOWN_SIMULATION_STEP)
 		w.simulationAccumulator -= TOWN_SIMULATION_STEP
 	}
+}
+
+WorldTimeOfDay :: proc(w: ^World) -> f32 {
+	return w.dayTime*24/f32(WORLD_DAY_LENGTH_SECONDS)
+}
+
+WorldNightAmount :: proc(w: ^World) -> f32 {
+	hour := WorldTimeOfDay(w)
+	if hour >= 22 do return 0.55
+	if hour >= 20 do return 0.55*(hour-20)/2
+	if hour < 5 do return 0.55
+	if hour < 7 do return 0.55*(7-hour)/2
+	return 0
 }
 
 WorldTownExists :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {

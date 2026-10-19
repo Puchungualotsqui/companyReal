@@ -15,6 +15,8 @@ World :: struct {
 	navigationRevision: u64,
 	simulationTime: f32,
 	simulationAccumulator: f32,
+	dayTime: f32,
+	dayNumber: int,
 	terrainRevision: u64,
 	ground: [dynamic][dynamic]Tile,
 }
@@ -26,6 +28,7 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 
 	w.maxX = maxX
 	w.maxY = maxY
+	w.dayTime = f32(WORLD_DAY_LENGTH_SECONDS)*6/24
 	w.ground = make([dynamic][dynamic]Tile, maxX)
 	for &x in w.ground {
 		x = make([dynamic]Tile, maxY)
@@ -94,12 +97,22 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.units.cooldown[i] = UnitDefaultCooldown(type)
 	w.units.type[i] = type
 	switch _ in type {
+	case Villager:
+		w.units.type[i] = Villager{}
+		w.units[i].state = StatePacific.Roaming
 	case Builder:
-		w.units.type[i] = Builder{taskState = .Idle, carriedResource = 0, taskSequence = 0}
+		w.units.type[i] = Builder{carriedResource = 0, taskSequence = 0}
+		w.units[i].state = StatePacific.Roaming
 	case WaterCollector:
-		w.units.type[i] = WaterCollector{}
-	case Villager, Farmer, Knight, Giant:
+		w.units.type[i] = WaterCollector{carriedResource = 0, taskSequence = 0}
+		w.units[i].state = StatePacific.Roaming
+	case Farmer:
+		w.units.type[i] = Farmer{workedToday = false, workDay = -1}
+		w.units[i].state = StatePacific.Roaming
+	case Knight, Giant:
+		w.units[i].state = StateWarrior.Idle
 	}
+	w.units[i].sleepOffsetHours = WorldNoiseHash(i, kingdomSlot+townSlot*101, u64(i)+401)-0.5
 	w.units.kingdome[i] = kingdomSlot
 	w.units.town[i] = townSlot
 	w.units[i].effects = [UnitEffects]bool{

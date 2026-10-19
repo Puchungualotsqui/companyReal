@@ -78,6 +78,9 @@ Unit :: struct {
 	type: UnitType,
 	kingdome: int,
 	town: int,
+	state: UnitState,
+	sleepOffsetHours: f32,
+	roamSequence: int,
 	effects: [UnitEffects]bool,
 	//
 	path: [dynamic]int,
@@ -102,23 +105,39 @@ UnitType :: union {
 	Giant,
 }
 
+UnitState :: union {
+	StatePacific,
+	StateWarrior,
+}
+
+StatePacific :: enum {
+	Roaming,
+	Traveling,
+	Working,
+	Returning,
+	GoingHome,
+	Sleeping,
+}
+
+StateWarrior :: enum {
+	Idle,
+	Moving,
+	Attacking,
+}
 
 Villager :: struct {}
-
 Builder :: struct {
-	taskState: WorkerTaskState,
 	carriedResource: f32,
 	taskSequence: int,
 }
-WorkerTaskState :: enum {
-	Idle,
-	TravelingToSource,
-	Gathering,
-	ReturningToTown,
+WaterCollector :: struct {
+	carriedResource: f32,
+	taskSequence: int,
 }
-
-WaterCollector :: struct {}
-Farmer :: struct {}
+Farmer :: struct {
+	workedToday: bool,
+	workDay: int,
+}
 Knight :: struct {}
 Giant :: struct {}
 
