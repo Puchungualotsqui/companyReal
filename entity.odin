@@ -5,6 +5,7 @@ Building :: struct {
 	width, height: int,
 	health: f32,
 	type: BuildingType,
+	town: Town,
 }
 
 BuildingType :: union {
@@ -15,27 +16,6 @@ BuildingType :: union {
 Wall :: struct {}
 
 TownHall :: struct {}
-
-BuildingSpawn :: proc(w: ^World, x, y: int, health: f32, type: BuildingType) -> (int, bool) {
-	i := -1
-	for slot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[slot] {
-			i = slot
-			break
-		}
-	}
-	if i < 0 {
-		return 0, false
-	}
-
-	w.buildings.x[i] = x
-	w.buildings.y[i] = y
-	w.buildings.width[i], w.buildings.height[i] = BuildingTileSize(type)
-	w.buildings.health[i] = health
-	w.buildings.type[i] = type
-	w.buildingUsed[i] = true
-	return i, true
-}
 
 BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
 	switch t in type {
@@ -57,6 +37,29 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 	unreachable()
 }
 
+BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
+	switch tType {
+	case .Water:
+		switch _ in bType {
+		case Wall, TownHall:
+			return false
+		}
+
+	case .Ground:
+		switch _ in bType {
+		case Wall, TownHall:
+			return true
+		}
+
+	case .Desert:
+		switch _ in bType {
+		case Wall, TownHall:
+			return true
+		}
+	}
+	unreachable()
+}
+
 Unit :: struct {
 	x, y: f32,
 	health: f32,
@@ -66,6 +69,7 @@ Unit :: struct {
 	vision: f32,
 	damage: f32,
 	type: UnitType,
+	town: Town,
 }
 
 UnitType :: union {
@@ -75,30 +79,6 @@ UnitType :: union {
 Knight :: struct {}
 
 Giant :: struct {}
-
-UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
-	i := -1
-	for slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[slot] {
-			i = slot
-			break
-		}
-	}
-	if i < 0 {
-		return 0, false
-	}
-	w.units.x[i] = x
-	w.units.y[i] = y
-	w.units.health[i] = UnitDefaultHealth(type)
-	w.units.speed[i] = UnitDefaultSpeed(type)
-	w.units.cooldown[i] = UnitDefaultCooldown(type)
-	w.units.range[i] = UnitDefaultRange(type)
-	w.units.vision[i] = UnitDefaultVision(type)
-	w.units.damage[i] = UnitDefaultDamage(type)
-	w.units.type[i] = type
-	w.unitUsed[i] = true
-	return i, true
-}
 
 UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 	switch t in type {
