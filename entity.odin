@@ -3,6 +3,7 @@ package main
 Building :: struct {
 	entity: EntityId,
 	x, y: int,
+	width, height: int,
 	health: f32,
 	type: BuildingType,
 }
@@ -16,7 +17,7 @@ Wall :: struct {}
 
 TownHall :: struct {}
 
-BuildingSpawn :: proc(w: ^World, x, y: int, health: f32) -> EntityId {
+BuildingSpawn :: proc(w: ^World, x, y: int, health: f32, type: BuildingType) -> EntityId {
 	if w.building_count >= BUILDING_CAPACITY {
 		return INVALID_ENTITY_ID
 	}
@@ -26,9 +27,21 @@ BuildingSpawn :: proc(w: ^World, x, y: int, health: f32) -> EntityId {
 	w.buildings.entity[i] = id
 	w.buildings.x[i] = x
 	w.buildings.y[i] = y
+	w.buildings.width[i], w.buildings.height[i] = BuildingTileSize(type)
 	w.buildings.health[i] = health
+	w.buildings.type[i] = type
 	w.building_count += 1
 	return id
+}
+
+BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
+	switch t in type {
+	case Wall:
+		return 1, 1
+	case TownHall:
+		return 4, 4
+	}
+	unreachable()
 }
 
 BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
