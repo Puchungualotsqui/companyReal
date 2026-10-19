@@ -7,13 +7,7 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	town_slot := w.units[unit_slot].town
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return
 
-	builder: Builder
-	switch variant in w.units[unit_slot].type {
-	case Builder:
-		builder = variant
-	case Villager, WaterCollector, Farmer, Knight, Giant:
-		return
-	}
+	builder := &w.units[unit_slot].type.(Builder)
 
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if builder.taskState == .Idle && town.wood < 15 {
@@ -66,7 +60,6 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	}
 
 	if builder.taskState == .Idle do town.builders += 1
-	w.units[unit_slot].type = builder
 }
 
 UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
