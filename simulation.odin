@@ -64,10 +64,8 @@ WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
 			UnitUpdateWaterCollector(w, unit_slot, delta_time)
 		case Farmer:
 			UnitUpdateFarmer(w, unit_slot, delta_time)
-		case Knight:
-			UnitUpdateKnight(w, unit_slot, delta_time)
-		case Giant:
-			UnitUpdateGiant(w, unit_slot, delta_time)
+		case Knight, Giant:
+			UnitUpdateWarrior(w, unit_slot, delta_time)
 		}
 	}
 }

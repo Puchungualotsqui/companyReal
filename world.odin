@@ -109,7 +109,11 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	case Farmer:
 		w.units.type[i] = Farmer{workedToday = false, workDay = -1}
 		w.units[i].state = StatePacific.Roaming
-	case Knight, Giant:
+	case Knight:
+		w.units.type[i] = Knight{escortTarget = -1, taskSequence = 0}
+		w.units[i].state = StateWarrior.Idle
+	case Giant:
+		w.units.type[i] = Giant{escortTarget = -1, taskSequence = 0}
 		w.units[i].state = StateWarrior.Idle
 	}
 	w.units[i].sleepOffsetHours = WorldNoiseHash(i, kingdomSlot+townSlot*101, u64(i)+401)-0.5

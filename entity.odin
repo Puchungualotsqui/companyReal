@@ -122,6 +122,7 @@ StatePacific :: enum {
 StateWarrior :: enum {
 	Idle,
 	Moving,
+	Escorting,
 	Attacking,
 }
 
@@ -138,8 +139,14 @@ Farmer :: struct {
 	workedToday: bool,
 	workDay: int,
 }
-Knight :: struct {}
-Giant :: struct {}
+Knight :: struct {
+	escortTarget: int,
+	taskSequence: int,
+}
+Giant :: struct {
+	escortTarget: int,
+	taskSequence: int,
+}
 
 UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 	switch t in type {
