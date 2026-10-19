@@ -35,7 +35,7 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 WorldDeinit :: proc(w: ^World) {
 	for i in 0..<UNIT_CAPACITY {
 		if w.unitUsed[i] {
-			UnitDelete(w, i)
+			UnitDespawn(w, i)
 		}
 	}
 	for &x in w.ground {
@@ -73,7 +73,7 @@ WorldTileSet :: proc(w: ^World, x, y: int, tile_type: TileType) -> bool {
 	return true
 }
 
-UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
+UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: int) -> (int, bool) {
 	i := -1
 	for slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[slot] {
@@ -91,6 +91,9 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
 	w.units.cooldown[i] = UnitDefaultCooldown(type)
 	w.units.damage[i] = UnitDefaultDamage(type)
 	w.units.type[i] = type
+	w.units.kingdome[i] = kingdomSlot
+	w.units.town[i] = townSlot
+
 	w.units[i].path = make([dynamic]int, 0, 250)
 	w.units[i].pathTargetX = 0
 	w.units[i].pathTargetY = 0
@@ -98,6 +101,9 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
 	w.units[i].pathIndex = 0
 	w.units[i].pathReady = false
 	w.units[i].pathFound = false
+
+	w.kingdoms[kingdomSlot].towns[townSlot].citizens += 1
+
 	w.unitUsed[i] = true
 
 	return i, true
@@ -110,16 +116,24 @@ UnitGet :: proc(w: ^World, slot: int) -> (int, bool) {
 	return slot, true
 }
 
-UnitDelete :: proc(w: ^World, slot: int) -> bool {
+UnitDespawn :: proc(w: ^World, slot: int) -> bool {
 	if slot < 0 || slot >= UNIT_CAPACITY || !w.unitUsed[slot] {
 		return false
+	}
+	kingdom_slot := w.units[slot].kingdome
+	town_slot := w.units[slot].town
+	if kingdom_slot >= 0 && kingdom_slot < KINGDOMS_CAPACITY &&
+		town_slot >= 0 && town_slot < TOWN_CAPACITY &&
+		w.kingdoms[kingdom_slot].townUsed[town_slot] &&
+		w.kingdoms[kingdom_slot].towns[town_slot].citizens > 0 {
+		w.kingdoms[kingdom_slot].towns[town_slot].citizens -= 1
 	}
 	delete(w.units[slot].path)
 	w.unitUsed[slot] = false
 	return true
 }
 
-BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType) -> (int, bool) {
+BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, townSlot: int) -> (int, bool) {
 	if !WorldBuildingValid(w, x, y, type) do return 0, false
 	i := -1
 	for slot in 0..<BUILDING_CAPACITY {
@@ -134,6 +148,9 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType) -> (int, bool) {
 	w.buildings.y[i] = y
 	w.buildings.health[i] = BuildingDefaultHealth(type)
 	w.buildings.type[i] = type
+	w.buildings.kingdom[i] = kingdomSlot
+	w.buildings.town[i] = townSlot
+
 	w.buildingUsed[i] = true
 	w.navigationRevision += 1
 	return i, true
@@ -146,10 +163,49 @@ BuildingGet :: proc(w: ^World, slot: int) -> (int, bool) {
 	return slot, true
 }
 
-BuildingDelete :: proc(w: ^World, slot: int) -> bool {
+BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] {
 		return false
 	}
+
+	switch _ in w.buildings[slot].type {
+	case TownHall:
+		kingdom_slot := w.buildings[slot].kingdom
+		town_slot := w.buildings[slot].town
+		if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY ||
+			town_slot < 0 || town_slot >= TOWN_CAPACITY ||
+			!w.kingdomUsed[kingdom_slot] || !w.kingdoms[kingdom_slot].townUsed[town_slot] {
+			return false
+		}
+
+		if w.kingdoms[kingdom_slot].capitalSlot == town_slot {
+			if !KingdomAbsorb(w, kingdom_slot, destroyerKingdom, town_slot, slot) do return false
+		} else {
+			w.kingdoms[kingdom_slot].townUsed[town_slot] = false
+			for unit_slot in 0..<UNIT_CAPACITY {
+				if !w.unitUsed[unit_slot] || w.units[unit_slot].kingdome != kingdom_slot ||
+					w.units[unit_slot].town != town_slot {
+					continue
+				}
+
+				new_town := KingdomChooseTownForUnit(w, kingdom_slot, unit_slot, slot)
+				w.units[unit_slot].town = new_town
+				if new_town >= 0 {
+					w.kingdoms[kingdom_slot].towns[new_town].citizens += 1
+				}
+			}
+			w.kingdoms[kingdom_slot].towns[town_slot].citizens = 0
+			for building_slot in 0..<BUILDING_CAPACITY {
+				if building_slot != slot && w.buildingUsed[building_slot] &&
+					w.buildings[building_slot].kingdom == kingdom_slot &&
+					w.buildings[building_slot].town == town_slot {
+					w.buildings[building_slot].town = -1
+				}
+			}
+		}
+	case Wall:
+	}
+
 	w.buildingUsed[slot] = false
 	w.navigationRevision += 1
 	return true
@@ -181,7 +237,7 @@ KingdomGet :: proc(w: ^World, slot: int) -> (int, bool) {
 	return slot, true
 }
 
-KingdomDelete :: proc(w: ^World, slot: int) -> bool {
+KingdomDespawn :: proc(w: ^World, slot: int) -> bool {
 	if slot < 0 || slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[slot] {
 		return false
 	}

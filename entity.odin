@@ -4,7 +4,8 @@ Building :: struct {
 	x, y: int,
 	health: f32,
 	type: BuildingType,
-	town: Town,
+	kingdom: int,
+	town: int,
 }
 
 BuildingType :: union {
@@ -67,7 +68,8 @@ Unit :: struct {
 	cooldown: f32,
 	damage: f32,
 	type: UnitType,
-	town: Town,
+	kingdome: int,
+	town: int,
 	//
 	path: [dynamic]int,
 	pathTargetX, pathTargetY: int,
@@ -77,12 +79,13 @@ Unit :: struct {
 }
 
 UnitType :: union {
+	Villager,
 	Knight,
 	Giant,
 }
 
+Villager :: struct {}
 Knight :: struct {}
-
 Giant :: struct {}
 
 UnitDefaultHealth :: proc(type: UnitType) -> f32 {
@@ -91,6 +94,8 @@ UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 		return 50
 	case Giant:
 		return 100
+	case Villager:
+		return 15
 	}
 	unreachable()
 }
@@ -101,6 +106,8 @@ UnitDefaultSpeed :: proc(type: UnitType) -> f32 {
 		return 10
 	case Giant:
 		return 7.5
+	case Villager:
+		return 12
 	}
 	unreachable()
 }
@@ -111,6 +118,8 @@ UnitDefaultCooldown :: proc(type: UnitType) -> f32 {
 		return 1
 	case Giant:
 		return 1.75
+	case Villager:
+		return 0
 	}
 	unreachable()
 }
@@ -121,6 +130,8 @@ UnitDefaultRange :: proc(type: UnitType) -> f32 {
 		return 0.75
 	case Giant:
 		return 0.80
+	case Villager:
+		return 0
 	}
 	unreachable()
 }
@@ -131,6 +142,8 @@ UnitDefaultVision :: proc(type: UnitType) -> f32 {
 		return 25
 	case Giant:
 		return 40
+	case Villager:
+		return 30
 	}
 	unreachable()
 }
@@ -141,6 +154,8 @@ UnitDefaultDamage :: proc(type: UnitType) -> f32 {
 		return 15
 	case Giant:
 		return 30
+	case Villager:
+		return 0
 	}
 	unreachable()
 }
@@ -149,19 +164,19 @@ UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
 	switch tType {
 	case .Water:
 		switch _ in uType {
-		case Knight, Giant:
+		case Knight, Giant, Villager:
 			return false
 		}
 
 	case .Ground, .Forest, .Hill, .Desert, .River:
 		switch _ in uType {
-		case Knight, Giant:
+		case Knight, Giant, Villager:
 			return true
 		}
 
 	case .Sand:
 		switch _ in uType {
-		case Knight, Giant:
+		case Knight, Giant, Villager:
 			return true
 		}
 	}
