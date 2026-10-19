@@ -5,6 +5,15 @@ Building :: struct {
 	health: f32,
 }
 
+BuildingSpawn :: proc(w: ^World, x, y: int, health: f32) -> EntityId {
+	id := WorldCreateEntity(w)
+	append(&w.buildings, BuildingComponent{
+		entity = id,
+		data = Building{x = x, y = y, health = health},
+	})
+	return id
+}
+
 Unit :: struct {
 	x, y: f32,
 	health: f32,
@@ -25,7 +34,20 @@ Knight :: struct {}
 Giant :: struct {}
 
 UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> EntityId {
-
+	id := WorldCreateEntity(w)
+	unit := Unit{
+		x = x,
+		y = y,
+		health = UnitDefaultHealth(type),
+		speed = UnitDefaultSpeed(type),
+		cooldown = UnitDefaultCooldown(type),
+		range = UnitDefaultRange(type),
+		vision = UnitDefaultVision(type),
+		damage = UnitDefaultDamage(type),
+		type = type,
+	}
+	append(&w.units, UnitComponent{entity = id, data = unit})
+	return id
 }
 
 UnitDefaultHealth :: proc(type: UnitType) -> f32 {
