@@ -39,13 +39,13 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 
 BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 	switch tType {
-	case .Water:
+	case .Water, .River:
 		switch _ in bType {
 		case Wall, TownHall:
 			return false
 		}
 
-	case .Ground:
+	case .Ground, .Forest, .Hill, .Desert:
 		switch _ in bType {
 		case Wall, TownHall:
 			return true
@@ -153,7 +153,7 @@ UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
 			return false
 		}
 
-	case .Ground:
+	case .Ground, .Forest, .Hill, .Desert, .River:
 		switch _ in uType {
 		case Knight, Giant:
 			return true

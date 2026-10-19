@@ -50,8 +50,12 @@ Tile :: struct {
 
 TileType :: enum {
 	Water,
+	River,
 	Ground,
 	Sand,
+	Forest,
+	Hill,
+	Desert,
 }
 
 WorldTileSet :: proc(w: ^World, x, y: int, tile_type: TileType) -> bool {
