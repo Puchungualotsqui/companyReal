@@ -19,7 +19,7 @@ TownHall :: struct {}
 BuildingSpawn :: proc(w: ^World, x, y: int, health: f32, type: BuildingType) -> (int, bool) {
 	i := -1
 	for slot in 0..<BUILDING_CAPACITY {
-		if !w.building_used[slot] {
+		if !w.buildingUsed[slot] {
 			i = slot
 			break
 		}
@@ -33,7 +33,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, health: f32, type: BuildingType) -> 
 	w.buildings.width[i], w.buildings.height[i] = BuildingTileSize(type)
 	w.buildings.health[i] = health
 	w.buildings.type[i] = type
-	w.building_used[i] = true
+	w.buildingUsed[i] = true
 	return i, true
 }
 
@@ -79,7 +79,7 @@ Giant :: struct {}
 UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
 	i := -1
 	for slot in 0..<UNIT_CAPACITY {
-		if !w.unit_used[slot] {
+		if !w.unitUsed[slot] {
 			i = slot
 			break
 		}
@@ -96,7 +96,7 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
 	w.units.vision[i] = UnitDefaultVision(type)
 	w.units.damage[i] = UnitDefaultDamage(type)
 	w.units.type[i] = type
-	w.unit_used[i] = true
+	w.unitUsed[i] = true
 	return i, true
 }
 

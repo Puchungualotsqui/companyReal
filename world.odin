@@ -4,21 +4,20 @@ UNIT_CAPACITY :: 10_000
 BUILDING_CAPACITY :: 5_000
 
 World :: struct {
-
 	units: #soa [UNIT_CAPACITY]Unit,
-	unit_used: [UNIT_CAPACITY]bool,
+	unitUsed: [UNIT_CAPACITY]bool,
 	buildings: #soa [BUILDING_CAPACITY]Building,
-	building_used: [BUILDING_CAPACITY]bool,
+	buildingUsed: [BUILDING_CAPACITY]bool,
 	maxX, maxY: uint,
 }
 
 WorldInit :: proc(w: ^World, maxX, maxY: uint) {
 
 	for i in 0..<UNIT_CAPACITY {
-		w.unit_used[i] = false
+		w.unitUsed[i] = false
 	}
 	for i in 0..<BUILDING_CAPACITY {
-		w.building_used[i] = false
+		w.buildingUsed[i] = false
 	}
 
 	w.maxX = maxX
@@ -26,38 +25,38 @@ WorldInit :: proc(w: ^World, maxX, maxY: uint) {
 }
 
 UnitGet :: proc(w: ^World, slot: int) -> (int, bool) {
-	if slot < 0 || slot >= UNIT_CAPACITY || !w.unit_used[slot] {
+	if slot < 0 || slot >= UNIT_CAPACITY || !w.unitUsed[slot] {
 		return 0, false
 	}
 	return slot, true
 }
 
 UnitDelete :: proc(w: ^World, slot: int) -> bool {
-	if slot < 0 || slot >= UNIT_CAPACITY || !w.unit_used[slot] {
+	if slot < 0 || slot >= UNIT_CAPACITY || !w.unitUsed[slot] {
 		return false
 	}
-	w.unit_used[slot] = false
+	w.unitUsed[slot] = false
 	return true
 }
 
 BuildingGet :: proc(w: ^World, slot: int) -> (int, bool) {
-	if slot < 0 || slot >= BUILDING_CAPACITY || !w.building_used[slot] {
+	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] {
 		return 0, false
 	}
 	return slot, true
 }
 
 BuildingDelete :: proc(w: ^World, slot: int) -> bool {
-	if slot < 0 || slot >= BUILDING_CAPACITY || !w.building_used[slot] {
+	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] {
 		return false
 	}
-	w.building_used[slot] = false
+	w.buildingUsed[slot] = false
 	return true
 }
 
 WorldTileOccupied :: proc(w: ^World, x, y: int) -> bool {
 	for i in 0..<BUILDING_CAPACITY {
-		if !w.building_used[i] {
+		if !w.buildingUsed[i] {
 			continue
 		}
 		building_x := w.buildings.x[i]
@@ -77,7 +76,7 @@ WorldBuildingCollides :: proc(w: ^World, x, y, width, height: int) -> bool {
 	}
 
 	for i in 0..<BUILDING_CAPACITY {
-		if !w.building_used[i] {
+		if !w.buildingUsed[i] {
 			continue
 		}
 		building_x := w.buildings.x[i]
