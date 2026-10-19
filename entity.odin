@@ -69,6 +69,10 @@ Unit :: struct {
 	type: UnitType,
 	town: Town,
 	path: [dynamic]int,
+	pathTargetX, pathTargetY: int,
+	pathRevision: u64,
+	pathIndex: int,
+	pathReady, pathFound: bool,
 }
 
 UnitType :: union {
@@ -172,28 +176,36 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 	world_height := int(w.maxY)
 	if world_width <= 0 || world_height <= 0 do return false
 
-	unit_type := w.units.type[unit_index]
-	unit_x := WorldWrapPosition(w.units.x[unit_index], f32(world_width))
-	unit_y := WorldWrapPosition(w.units.y[unit_index], f32(world_height))
-	start_x := WorldWrapCoordinate(int(unit_x), world_width)
-	start_y := WorldWrapCoordinate(int(unit_y), world_height)
+	unit := &w.units[unit_index]
+	unit_x := WorldWrapPosition(unit.x, f32(world_width))
+	unit_y := WorldWrapPosition(unit.y, f32(world_height))
 	target_x := WorldWrapCoordinate(goal_x, world_width)
 	target_y := WorldWrapCoordinate(goal_y, world_height)
 
-	path := &w.units[unit_slot].path
-	found := AStar(w, unit_type, start_x, start_y, target_x, target_y, path)
-	if !found do return false
+	needs_path := !unit.pathReady || unit.pathTargetX != target_x ||
+		unit.pathTargetY != target_y || unit.pathRevision != w.navigationRevision
+	if needs_path {
+		start_x := WorldWrapCoordinate(int(unit_x), world_width)
+		start_y := WorldWrapCoordinate(int(unit_y), world_height)
+		unit.pathFound = AStar(w, unit.type, start_x, start_y, target_x, target_y, &unit.path)
+		unit.pathTargetX = target_x
+		unit.pathTargetY = target_y
+		unit.pathRevision = w.navigationRevision
+		unit.pathReady = true
+		unit.pathIndex = 1
+		if len(unit.path) == 1 do unit.pathIndex = 0
+	}
+	if !unit.pathFound do return false
 
-	remaining := w.units.speed[unit_index] * delta_time
-	first_waypoint := 1
-
-	if len(path) == 1 do first_waypoint = 0
-	for waypoint_index in first_waypoint..<len(path) {
-		waypoint := path[waypoint_index]
+	remaining := unit.speed * delta_time
+	if remaining < 0 do remaining = 0
+	for unit.pathIndex < len(unit.path) {
+		waypoint := unit.path[unit.pathIndex]
 		destination_x := f32(waypoint/world_height) + 0.5
 		destination_y := f32(waypoint%world_height) + 0.5
 		delta_x := WorldShortestWrappedDelta(destination_x-unit_x, f32(world_width))
 		delta_y := WorldShortestWrappedDelta(destination_y-unit_y, f32(world_height))
+		reached_waypoint := true
 
 		if delta_x != 0 {
 			distance_x := delta_x
@@ -206,9 +218,11 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 				if delta_x < 0 do step = -step
 				unit_x = WorldWrapPosition(unit_x+step, f32(world_width))
 				remaining = 0
+				reached_waypoint = false
+			} else {
+				reached_waypoint = false
 			}
 		}
-		if remaining <= 0 && delta_y == 0 { break }
 
 		if delta_y != 0 {
 			distance_y := delta_y
@@ -221,16 +235,17 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 				if delta_y < 0 do step = -step
 				unit_y = WorldWrapPosition(unit_y+step, f32(world_height))
 				remaining = 0
+				reached_waypoint = false
+			} else {
+				reached_waypoint = false
 			}
 		}
-		if remaining <= 0 { break }
+
+		if !reached_waypoint do break
+		unit.pathIndex += 1
 	}
 
-	w.units.x[unit_index] = unit_x
-	w.units.y[unit_index] = unit_y
-
-	target_position_x := f32(target_x) + 0.5
-	target_position_y := f32(target_y) + 0.5
-	return WorldShortestWrappedDelta(target_position_x-unit_x, f32(world_width)) == 0 &&
-		WorldShortestWrappedDelta(target_position_y-unit_y, f32(world_height)) == 0
+	unit.x = unit_x
+	unit.y = unit_y
+	return unit.pathIndex >= len(unit.path)
 }

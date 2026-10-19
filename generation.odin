@@ -56,6 +56,7 @@ WorldGenerate :: proc(w: ^World, settings: WorldGenerationSettings) {
 
 	WorldGenerateLakes(w, settings)
 	WorldGenerateBeaches(w, settings.beachWidth)
+	w.navigationRevision += 1
 }
 
 WorldGenerateLakes :: proc(w: ^World, settings: WorldGenerationSettings) {

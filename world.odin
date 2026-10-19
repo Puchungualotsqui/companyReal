@@ -12,6 +12,7 @@ World :: struct {
 	kingdoms: #soa [KINGDOMS_CAPACITY]Kingdom,
 	kingdomUsed: [KINGDOMS_CAPACITY]bool,
 	maxX, maxY: uint,
+	navigationRevision: u64,
 	ground: [dynamic][dynamic]Tile,
 }
 
@@ -48,6 +49,20 @@ TileType :: enum {
 	Sand,
 }
 
+WorldTileSet :: proc(w: ^World, x, y: int, tile_type: TileType) -> bool {
+	world_width := int(w.maxX)
+	world_height := int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return false
+
+	wrapped_x := WorldWrapCoordinate(x, world_width)
+	wrapped_y := WorldWrapCoordinate(y, world_height)
+	if w.ground[wrapped_x][wrapped_y].type != tile_type {
+		w.ground[wrapped_x][wrapped_y].type = tile_type
+		w.navigationRevision += 1
+	}
+	return true
+}
+
 UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
 	i := -1
 	for slot in 0..<UNIT_CAPACITY {
@@ -67,6 +82,12 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
 	w.units.damage[i] = UnitDefaultDamage(type)
 	w.units.type[i] = type
 	w.units[i].path = make([dynamic]int, 0, 250)
+	w.units[i].pathTargetX = 0
+	w.units[i].pathTargetY = 0
+	w.units[i].pathRevision = 0
+	w.units[i].pathIndex = 0
+	w.units[i].pathReady = false
+	w.units[i].pathFound = false
 	w.unitUsed[i] = true
 
 	return i, true
@@ -104,6 +125,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType) -> (int, bool) {
 	w.buildings.health[i] = BuildingDefaultHealth(type)
 	w.buildings.type[i] = type
 	w.buildingUsed[i] = true
+	w.navigationRevision += 1
 	return i, true
 }
 
@@ -119,6 +141,7 @@ BuildingDelete :: proc(w: ^World, slot: int) -> bool {
 		return false
 	}
 	w.buildingUsed[slot] = false
+	w.navigationRevision += 1
 	return true
 }
 
