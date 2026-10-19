@@ -1,7 +1,6 @@
 package main
 
 Building :: struct {
-	entity: EntityId,
 	x, y: int,
 	width, height: int,
 	health: f32,
@@ -17,21 +16,25 @@ Wall :: struct {}
 
 TownHall :: struct {}
 
-BuildingSpawn :: proc(w: ^World, x, y: int, health: f32, type: BuildingType) -> EntityId {
-	if w.building_count >= BUILDING_CAPACITY {
-		return INVALID_ENTITY_ID
+BuildingSpawn :: proc(w: ^World, x, y: int, health: f32, type: BuildingType) -> (int, bool) {
+	i := -1
+	for slot in 0..<BUILDING_CAPACITY {
+		if !w.building_used[slot] {
+			i = slot
+			break
+		}
+	}
+	if i < 0 {
+		return 0, false
 	}
 
-	i := w.building_count
-	id := EntityId(i + 1)
-	w.buildings.entity[i] = id
 	w.buildings.x[i] = x
 	w.buildings.y[i] = y
 	w.buildings.width[i], w.buildings.height[i] = BuildingTileSize(type)
-	w.buildings.health[i] = BuildingDefaultHealth(type)
+	w.buildings.health[i] = health
 	w.buildings.type[i] = type
-	w.building_count += 1
-	return id
+	w.building_used[i] = true
+	return i, true
 }
 
 BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
@@ -55,7 +58,6 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 }
 
 Unit :: struct {
-	entity: EntityId,
 	x, y: f32,
 	health: f32,
 	speed: f32,
@@ -74,14 +76,17 @@ Knight :: struct {}
 
 Giant :: struct {}
 
-UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> EntityId {
-	if w.unit_count >= UNIT_CAPACITY {
-		return INVALID_ENTITY_ID
+UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
+	i := -1
+	for slot in 0..<UNIT_CAPACITY {
+		if !w.unit_used[slot] {
+			i = slot
+			break
+		}
 	}
-
-	i := w.unit_count
-	id := EntityId(i + 1)
-	w.units.entity[i] = id
+	if i < 0 {
+		return 0, false
+	}
 	w.units.x[i] = x
 	w.units.y[i] = y
 	w.units.health[i] = UnitDefaultHealth(type)
@@ -91,8 +96,8 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> EntityId {
 	w.units.vision[i] = UnitDefaultVision(type)
 	w.units.damage[i] = UnitDefaultDamage(type)
 	w.units.type[i] = type
-	w.unit_count += 1
-	return id
+	w.unit_used[i] = true
+	return i, true
 }
 
 UnitDefaultHealth :: proc(type: UnitType) -> f32 {
