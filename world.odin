@@ -49,6 +49,21 @@ BuildingDelete :: proc(w: ^World, slot: int) -> bool {
 	return true
 }
 
+KingdomGet :: proc(w: ^World, slot: int) -> (int, bool) {
+	if slot < 0 || slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[slot] {
+		return 0, false
+	}
+	return slot, true
+}
+
+KingdomDelete :: proc(w: ^World, slot: int) -> bool {
+	if slot < 0 || slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[slot] {
+		return false
+	}
+	w.kingdomUsed[slot] = false
+	return true
+}
+
 WorldTileOccupied :: proc(w: ^World, x, y: int) -> bool {
 	for i in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[i] {
