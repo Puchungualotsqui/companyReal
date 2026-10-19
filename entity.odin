@@ -68,6 +68,7 @@ Unit :: struct {
 	damage: f32,
 	type: UnitType,
 	town: Town,
+	path: [dynamic]int,
 }
 
 UnitType :: union {
@@ -179,14 +180,13 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 	target_x := WorldWrapCoordinate(goal_x, world_width)
 	target_y := WorldWrapCoordinate(goal_y, world_height)
 
-	path, found := AStar(w, unit_type, start_x, start_y, target_x, target_y)
-	if !found {
-		delete(path)
-		return false
-	}
+	path := &w.units[unit_slot].path
+	found := AStar(w, unit_type, start_x, start_y, target_x, target_y, path)
+	if !found do return false
 
 	remaining := w.units.speed[unit_index] * delta_time
 	first_waypoint := 1
+
 	if len(path) == 1 do first_waypoint = 0
 	for waypoint_index in first_waypoint..<len(path) {
 		waypoint := path[waypoint_index]
@@ -228,7 +228,6 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 
 	w.units.x[unit_index] = unit_x
 	w.units.y[unit_index] = unit_y
-	delete(path)
 
 	target_position_x := f32(target_x) + 0.5
 	target_position_y := f32(target_y) + 0.5

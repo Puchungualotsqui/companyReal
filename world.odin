@@ -27,6 +27,11 @@ WorldInit :: proc(w: ^World, maxX, maxY: uint, settings: WorldGenerationSettings
 }
 
 WorldDeinit :: proc(w: ^World) {
+	for i in 0..<UNIT_CAPACITY {
+		if w.unitUsed[i] {
+			UnitDelete(w, i)
+		}
+	}
 	for &x in w.ground {
 		delete(x)
 	}
@@ -61,7 +66,9 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> (int, bool) {
 	w.units.cooldown[i] = UnitDefaultCooldown(type)
 	w.units.damage[i] = UnitDefaultDamage(type)
 	w.units.type[i] = type
+	w.units[i].path = make([dynamic]int, 0, 250)
 	w.unitUsed[i] = true
+
 	return i, true
 }
 
@@ -76,6 +83,7 @@ UnitDelete :: proc(w: ^World, slot: int) -> bool {
 	if slot < 0 || slot >= UNIT_CAPACITY || !w.unitUsed[slot] {
 		return false
 	}
+	delete(w.units[slot].path)
 	w.unitUsed[slot] = false
 	return true
 }
@@ -89,9 +97,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType) -> (int, bool) {
 			break
 		}
 	}
-	if i < 0 {
-		return 0, false
-	}
+	if i < 0 do return 0, false
 
 	w.buildings.x[i] = x
 	w.buildings.y[i] = y
