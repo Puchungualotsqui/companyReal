@@ -3,7 +3,17 @@ package main
 Building :: struct {
 	x, y: int,
 	health: f32,
+	type: BuildingType,
 }
+
+BuildingType :: union {
+	Wall,
+	TownHall,
+}
+
+Wall :: struct {}
+
+TownHall :: struct {}
 
 BuildingSpawn :: proc(w: ^World, x, y: int, health: f32) -> EntityId {
 	id := WorldCreateEntity(w)
@@ -12,6 +22,16 @@ BuildingSpawn :: proc(w: ^World, x, y: int, health: f32) -> EntityId {
 		data = Building{x = x, y = y, health = health},
 	})
 	return id
+}
+
+BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
+	switch t in type {
+	case Wall:
+		return 300
+	case TownHall:
+		return 1000
+	}
+	unreachable()
 }
 
 Unit :: struct {
