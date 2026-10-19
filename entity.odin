@@ -71,13 +71,6 @@ BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 	unreachable()
 }
 
-WorkerTaskState :: enum {
-	Idle,
-	TravelingToSource,
-	Gathering,
-	ReturningToTown,
-}
-
 Unit :: struct {
 	x, y: f32,
 	health: f32,
@@ -111,11 +104,19 @@ UnitType :: union {
 
 
 Villager :: struct {}
+
 Builder :: struct {
 	taskState: WorkerTaskState,
 	carriedResource: f32,
 	taskSequence: int,
 }
+WorkerTaskState :: enum {
+	Idle,
+	TravelingToSource,
+	Gathering,
+	ReturningToTown,
+}
+
 WaterCollector :: struct {}
 Farmer :: struct {}
 Knight :: struct {}
