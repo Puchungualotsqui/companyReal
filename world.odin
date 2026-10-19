@@ -2,24 +2,19 @@ package main
 
 UNIT_CAPACITY :: 10_000
 BUILDING_CAPACITY :: 5_000
+KINGDOMS_CAPACITY :: 5
 
 World :: struct {
 	units: #soa [UNIT_CAPACITY]Unit,
 	unitUsed: [UNIT_CAPACITY]bool,
 	buildings: #soa [BUILDING_CAPACITY]Building,
 	buildingUsed: [BUILDING_CAPACITY]bool,
+	kingdoms: #soa [KINGDOMS_CAPACITY]Kingdom,
+	kingdomUsed: [KINGDOMS_CAPACITY]bool,
 	maxX, maxY: uint,
 }
 
 WorldInit :: proc(w: ^World, maxX, maxY: uint) {
-
-	for i in 0..<UNIT_CAPACITY {
-		w.unitUsed[i] = false
-	}
-	for i in 0..<BUILDING_CAPACITY {
-		w.buildingUsed[i] = false
-	}
-
 	w.maxX = maxX
 	w.maxY = maxY
 }
