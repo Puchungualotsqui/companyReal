@@ -4,53 +4,30 @@ EntityId :: distinct uint
 
 INVALID_ENTITY_ID : EntityId : 0
 
-UnitComponent :: struct {
-	entity: EntityId,
-	data: Unit,
-}
-
-BuildingComponent :: struct {
-	entity: EntityId,
-	data: Building,
-}
+UNIT_CAPACITY :: 10_000
+BUILDING_CAPACITY :: 5_000
 
 World :: struct {
-	next_entity_id: uint,
-	units: [dynamic]UnitComponent,
-	buildings: [dynamic]BuildingComponent,
+	unit_count: int,
+	building_count: int,
+	units: #soa [UNIT_CAPACITY]Unit,
+	buildings: #soa [BUILDING_CAPACITY]Building,
 }
 
-WorldInit :: proc(w: ^World) {
-	w.next_entity_id = 1
-	w.units = make([dynamic]UnitComponent, 0, 100)
-	w.buildings = make([dynamic]BuildingComponent, 0, 100)
-}
-
-WorldDeinit :: proc(w: ^World) {
-	delete(w.units)
-	delete(w.buildings)
-}
-
-WorldCreateEntity :: proc(w: ^World) -> EntityId {
-	id := EntityId(w.next_entity_id)
-	w.next_entity_id += 1
-	return id
-}
-
-UnitGet :: proc(w: ^World, id: EntityId) -> (^Unit, bool) {
-	for i in 0..<len(w.units) {
-		if w.units[i].entity == id {
-			return &w.units[i].data, true
+UnitGet :: proc(w: ^World, id: EntityId) -> (int, bool) {
+	for i in 0..<w.unit_count {
+		if w.units.entity[i] == id {
+			return i, true
 		}
 	}
-	return nil, false
+	return 0, false
 }
 
-BuildingGet :: proc(w: ^World, id: EntityId) -> (^Building, bool) {
-	for i in 0..<len(w.buildings) {
-		if w.buildings[i].entity == id {
-			return &w.buildings[i].data, true
+BuildingGet :: proc(w: ^World, id: EntityId) -> (int, bool) {
+	for i in 0..<w.building_count {
+		if w.buildings.entity[i] == id {
+			return i, true
 		}
 	}
-	return nil, false
+	return 0, false
 }

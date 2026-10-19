@@ -1,6 +1,7 @@
 package main
 
 Building :: struct {
+	entity: EntityId,
 	x, y: int,
 	health: f32,
 	type: BuildingType,
@@ -16,11 +17,17 @@ Wall :: struct {}
 TownHall :: struct {}
 
 BuildingSpawn :: proc(w: ^World, x, y: int, health: f32) -> EntityId {
-	id := WorldCreateEntity(w)
-	append(&w.buildings, BuildingComponent{
-		entity = id,
-		data = Building{x = x, y = y, health = health},
-	})
+	if w.building_count >= BUILDING_CAPACITY {
+		return INVALID_ENTITY_ID
+	}
+
+	i := w.building_count
+	id := EntityId(i + 1)
+	w.buildings.entity[i] = id
+	w.buildings.x[i] = x
+	w.buildings.y[i] = y
+	w.buildings.health[i] = health
+	w.building_count += 1
 	return id
 }
 
@@ -35,6 +42,7 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 }
 
 Unit :: struct {
+	entity: EntityId,
 	x, y: f32,
 	health: f32,
 	speed: f32,
@@ -54,19 +62,23 @@ Knight :: struct {}
 Giant :: struct {}
 
 UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32) -> EntityId {
-	id := WorldCreateEntity(w)
-	unit := Unit{
-		x = x,
-		y = y,
-		health = UnitDefaultHealth(type),
-		speed = UnitDefaultSpeed(type),
-		cooldown = UnitDefaultCooldown(type),
-		range = UnitDefaultRange(type),
-		vision = UnitDefaultVision(type),
-		damage = UnitDefaultDamage(type),
-		type = type,
+	if w.unit_count >= UNIT_CAPACITY {
+		return INVALID_ENTITY_ID
 	}
-	append(&w.units, UnitComponent{entity = id, data = unit})
+
+	i := w.unit_count
+	id := EntityId(i + 1)
+	w.units.entity[i] = id
+	w.units.x[i] = x
+	w.units.y[i] = y
+	w.units.health[i] = UnitDefaultHealth(type)
+	w.units.speed[i] = UnitDefaultSpeed(type)
+	w.units.cooldown[i] = UnitDefaultCooldown(type)
+	w.units.range[i] = UnitDefaultRange(type)
+	w.units.vision[i] = UnitDefaultVision(type)
+	w.units.damage[i] = UnitDefaultDamage(type)
+	w.units.type[i] = type
+	w.unit_count += 1
 	return id
 }
 
