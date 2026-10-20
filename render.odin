@@ -30,7 +30,8 @@ WorldRenderer :: struct {
 
 WorldView :: struct {
 	renderer: WorldRenderer,
-	camera: rl.Camera2D,
+	camera:   rl.Camera2D,
+	ui:       UIState,
 }
 
 WorldViewInit :: proc(w: ^World) -> WorldView {
@@ -77,6 +78,7 @@ WorldCameraFocus :: proc(w: ^World) -> (f32, f32) {
 WorldViewUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32) {
 	WorldRendererUpdate(w, &view.renderer)
 	WorldCameraUpdate(w, &view.camera, delta_time)
+	WorldUIUpdate(w, view, view.camera)
 }
 
 
@@ -256,6 +258,29 @@ WorldLerpColor :: proc(a, b: rl.Color, t: f32) -> rl.Color {
 	}
 }
 
+// Position used for drawing and picking, interpolated between simulation ticks.
+UnitRenderPosition :: proc(w: ^World, unit_slot: int) -> (x, y: f32) {
+	x = w.units.x[unit_slot]
+	y = w.units.y[unit_slot]
+	alpha := clamp(w.simulationAccumulator/TOWN_SIMULATION_STEP, 0, 1)
+	if alpha <= 0 do return
+	world_width := f32(w.maxX)
+	world_height := f32(w.maxY)
+	x = WorldWrapPosition(
+		w.units.previousX[unit_slot]+
+		WorldShortestWrappedDelta(w.units.x[unit_slot]-w.units.previousX[unit_slot], world_width)*
+			alpha,
+		world_width,
+	)
+	y = WorldWrapPosition(
+		w.units.previousY[unit_slot]+
+		WorldShortestWrappedDelta(w.units.y[unit_slot]-w.units.previousY[unit_slot], world_height)*
+			alpha,
+		world_height,
+	)
+	return
+}
+
 WorldRenderSprites :: proc(
 	w: ^World,
 	renderer: ^WorldRenderer,
@@ -272,7 +297,6 @@ WorldRenderSprites :: proc(
 	view_max_x := camera.target.x+half_view_width
 	view_min_y := camera.target.y-half_view_height
 	view_max_y := camera.target.y+half_view_height
-	interpolation := clamp(w.simulationAccumulator/TOWN_SIMULATION_STEP, 0, 1)
 	bob_time := w.simulationTime+w.simulationAccumulator
 	shadow_source := rl.Rectangle{0, 0, f32(renderer.sprites.shadow.width), f32(renderer.sprites.shadow.height)}
 	night := WorldNightAmount(w)
@@ -308,12 +332,15 @@ WorldRenderSprites :: proc(
 				if BuildingWalkable(w.buildings[building_slot].type) {
 					base_y = -1e9
 				} else {
-					shadow_height := clamp(height*0.8, 0.6, 4)
+					shadow_width := width*1.2
+					// Contact shadow for small buildings, longer cast shadow for big ones.
+					lip := 0.35*math.pow(height, 1.44)
+					shadow_height := lip/0.8
 					append(&renderer.shadows, RenderQuad{
 						dest = rl.Rectangle{
-							x = offset_x+building_x-0.7,
+							x = offset_x+building_x-(shadow_width-width)*0.5,
 							y = offset_y+building_y+height-shadow_height*0.2,
-							width = width+1.4,
+							width = shadow_width,
 							height = shadow_height,
 						},
 						alpha = 220,
@@ -349,28 +376,7 @@ WorldRenderSprites :: proc(
 
 				kind := UnitKindOf(w.units[unit_slot].type)
 				scale := UnitSpriteScale(kind)
-				unit_x := w.units[unit_slot].x
-				unit_y := w.units[unit_slot].y
-				if interpolation > 0 {
-					unit_x = WorldWrapPosition(
-						w.units[unit_slot].previousX+
-						WorldShortestWrappedDelta(
-							w.units[unit_slot].x-w.units[unit_slot].previousX,
-							world_width,
-						)*
-							interpolation,
-						world_width,
-					)
-					unit_y = WorldWrapPosition(
-						w.units[unit_slot].previousY+
-						WorldShortestWrappedDelta(
-							w.units[unit_slot].y-w.units[unit_slot].previousY,
-							world_height,
-						)*
-							interpolation,
-						world_height,
-					)
-				}
+				unit_x, unit_y := UnitRenderPosition(w, unit_slot)
 				if unit_x+scale+1 < min_x || unit_x-1 > max_x ||
 					unit_y+1 < min_y || unit_y-scale-1 > max_y {
 					continue

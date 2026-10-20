@@ -21,6 +21,7 @@ main :: proc() {
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.Color{38, 68, 91, 255})
 		WorldRender(world, &view.renderer, view.camera)
+		WorldUIDraw(world, &view.renderer, view.camera, &view.ui)
 		rl.EndDrawing()
 	}
 }
