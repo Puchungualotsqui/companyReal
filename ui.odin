@@ -39,6 +39,7 @@ UI_PANEL_WIDTH : f32 : 380
 UI_MARGIN : f32 : 16
 UI_PAD : f32 : 14
 UI_TEXT_SIZE : f32 : 20
+UI_TITLE_SIZE : f32 : 30
 UI_HEADER_H : f32 : 92
 UI_DESC_Y : f32 : 102
 UI_STAT_Y : f32 : 136
@@ -68,16 +69,81 @@ UIStat :: struct {
 	label, value: cstring,
 }
 
+UI_FONT_BODY_DATA :: #load("assets/fonts/PixelifySans-Regular.ttf")
+UI_FONT_TITLE_DATA :: #load("assets/fonts/PixelifySans-Bold.ttf")
+
 @(private = "file")
-ui_font_ready: bool
+ui_fonts: struct {
+	body, title: rl.Font,
+	loaded:      bool,
+}
+
+// raylib rasterizes glyphs with anti-aliasing; the UI is pixel art, so the
+// atlas is thresholded to hard alpha edges before it is used. The image keeps
+// its native layout because UpdateTexture reinterprets the raw bytes.
+@(private = "file")
+ui_font_crisp :: proc(font: ^rl.Font) {
+	image := rl.LoadImageFromTexture(font.texture)
+	defer rl.UnloadImage(image)
+	pixels := cast([^]u8)image.data
+	pixel_count := int(image.width)*int(image.height)
+
+	#partial switch image.format {
+	case .UNCOMPRESSED_GRAY_ALPHA:
+		for index in 0 ..< pixel_count {
+			alpha := &pixels[index*2+1]
+			alpha^ = alpha^ < 128 ? 0 : 255
+		}
+	case .UNCOMPRESSED_GRAYSCALE:
+		for index in 0 ..< pixel_count {
+			value := &pixels[index]
+			value^ = value^ < 128 ? 0 : 255
+		}
+	case .UNCOMPRESSED_R8G8B8A8:
+		for index in 0 ..< pixel_count {
+			alpha := &pixels[index*4+3]
+			alpha^ = alpha^ < 128 ? 0 : 255
+		}
+	case:
+		return
+	}
+	rl.UpdateTexture(font.texture, image.data)
+}
+
+@(private = "file")
+ui_font_load :: proc(data: []u8, size: i32) -> rl.Font {
+	font := rl.LoadFontFromMemory(".ttf", raw_data(data), i32(len(data)), size, nil, 0)
+	if font.texture.id == 0 do return rl.GetFontDefault()
+	ui_font_crisp(&font)
+	rl.SetTextureFilter(font.texture, .POINT)
+	return font
+}
+
+@(private = "file")
+ui_font_init :: proc() {
+	if ui_fonts.loaded do return
+	ui_fonts.body = ui_font_load(UI_FONT_BODY_DATA, i32(UI_TEXT_SIZE))
+	ui_fonts.title = ui_font_load(UI_FONT_TITLE_DATA, i32(UI_TITLE_SIZE))
+	ui_fonts.loaded = true
+}
 
 ui_font :: proc() -> rl.Font {
-	font := rl.GetFontDefault()
-	if !ui_font_ready {
-		rl.SetTextureFilter(font.texture, .POINT)
-		ui_font_ready = true
-	}
-	return font
+	ui_font_init()
+	return ui_fonts.body
+}
+
+ui_title_font :: proc() -> rl.Font {
+	ui_font_init()
+	return ui_fonts.title
+}
+
+WorldUIDeinit :: proc() {
+	if !ui_fonts.loaded do return
+	// A failed load falls back to the shared default font, which must not be freed.
+	default_texture := rl.GetFontDefault().texture.id
+	if ui_fonts.body.texture.id != default_texture do rl.UnloadFont(ui_fonts.body)
+	if ui_fonts.title.texture.id != default_texture do rl.UnloadFont(ui_fonts.title)
+	ui_fonts = {}
 }
 
 ui_text :: proc(text: cstring, x, y: f32, color: rl.Color) {
@@ -85,7 +151,7 @@ ui_text :: proc(text: cstring, x, y: f32, color: rl.Color) {
 }
 
 ui_title :: proc(text: cstring, x, y: f32, color: rl.Color) {
-	rl.DrawTextEx(ui_font(), text, rl.Vector2{x, y}, 30, 1, color)
+	rl.DrawTextEx(ui_title_font(), text, rl.Vector2{x, y}, UI_TITLE_SIZE, 1, color)
 }
 
 ui_text_right :: proc(text: cstring, right, y: f32, color: rl.Color) {

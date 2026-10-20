@@ -13,6 +13,7 @@ main :: proc() {
 	rl.SetTargetFPS(60)
 	view := WorldViewInit(world)
 	defer WorldRendererDeinit(&view.renderer)
+	defer WorldUIDeinit()
 
 	for !rl.WindowShouldClose() {
 		delta_time := rl.GetFrameTime()
