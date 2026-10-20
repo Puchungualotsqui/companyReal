@@ -8,6 +8,7 @@ DECORATION_FIRE_RADIUS :: 2.5
 DECORATION_FIRE_CHUNK_RADIUS :: 3
 DECORATION_FIRE_SPREAD :: 0.08
 DECORATION_FIRE_DAMAGE :: 0.35
+DECORATION_REGROW_SECONDS :: 90
 
 DecorationKind :: enum {
 	Tree,
@@ -32,11 +33,12 @@ ALL_DECORATION_KINDS := [8]DecorationKind {
 }
 
 Decoration :: struct {
-	x, y:    f32,
-	kind:    DecorationKind,
-	variant: u8,
-	health:  f32,
-	fire:    f32,
+	x, y:        f32,
+	kind:        DecorationKind,
+	variant:     u8,
+	health:      f32,
+	fire:        f32,
+	regrowTimer: f32,
 }
 
 DecorationHealth :: proc(kind: DecorationKind) -> f32 {
@@ -61,6 +63,44 @@ DecorationIsFlammable :: proc(kind: DecorationKind) -> bool {
 	return kind != .Rock
 }
 
+DecorationChoppable :: proc(kind: DecorationKind) -> bool {
+	switch kind {
+	case .Tree, .Pine, .Bush:
+		return true
+	case .Rock, .Flowers, .Cactus, .Reed, .Stump:
+		return false
+	}
+	return false
+}
+
+DecorationChopSeconds :: proc(kind: DecorationKind) -> f32 {
+	switch kind {
+	case .Tree:
+		return 4
+	case .Pine:
+		return 3
+	case .Bush:
+		return 1.2
+	case .Rock, .Flowers, .Cactus, .Reed, .Stump:
+		return 0
+	}
+	return 0
+}
+
+DecorationWoodYield :: proc(kind: DecorationKind) -> f32 {
+	switch kind {
+	case .Tree:
+		return 6
+	case .Pine:
+		return 4
+	case .Bush:
+		return 1
+	case .Rock, .Flowers, .Cactus, .Reed, .Stump:
+		return 0
+	}
+	return 0
+}
+
 WorldDecorationSpawn :: proc(w: ^World, x, y: f32, kind: DecorationKind, variant: u8) -> (int, bool) {
 	slot := -1
 	for step in 0 ..< DECORATION_CAPACITY {
@@ -78,7 +118,9 @@ WorldDecorationSpawn :: proc(w: ^World, x, y: f32, kind: DecorationKind, variant
 	w.decorations.variant[slot] = variant
 	w.decorations.health[slot] = DecorationHealth(kind)
 	w.decorations.fire[slot] = 0
+	w.decorations.regrowTimer[slot] = 0
 	w.decorationUsed[slot] = true
+	if kind == .Stump do w.decorationStumps += 1
 	w.decorationCursor = (slot+1)%DECORATION_CAPACITY
 	SpatialDecorationInsert(w, slot)
 	return slot, true
@@ -87,8 +129,52 @@ WorldDecorationSpawn :: proc(w: ^World, x, y: f32, kind: DecorationKind, variant
 WorldDecorationDespawn :: proc(w: ^World, slot: int) -> bool {
 	if slot < 0 || slot >= DECORATION_CAPACITY || !w.decorationUsed[slot] do return false
 	if w.decorations.fire[slot] > 0 do w.decorationBurning -= 1
+	if w.decorations.kind[slot] == .Stump do w.decorationStumps -= 1
 	SpatialDecorationRemove(w, slot)
 	w.decorationUsed[slot] = false
+	return true
+}
+
+// Fells a harvested decoration: trunks keep a stump so the forest can regrow.
+DecorationFell :: proc(w: ^World, slot: int) {
+	switch w.decorations.kind[slot] {
+	case .Tree, .Pine:
+		w.decorations.kind[slot] = .Stump
+		w.decorations.variant[slot] = 0
+		w.decorations.health[slot] = DecorationHealth(.Stump)
+		w.decorations.fire[slot] = 0
+		w.decorations.regrowTimer[slot] = 0
+		w.decorationStumps += 1
+	case .Bush, .Flowers, .Cactus, .Reed, .Stump:
+		WorldDecorationDespawn(w, slot)
+	case .Rock:
+	}
+}
+
+// Regrows a stump into a tree once it has rested long enough. Roads and
+// buildings keep the ground claimed, so the stump is dropped instead.
+DecorationRegrowth :: proc(w: ^World, slot: int, delta_time: f32) -> bool {
+	if slot < 0 || slot >= DECORATION_CAPACITY || !w.decorationUsed[slot] do return false
+	if w.decorations.kind[slot] != .Stump do return false
+	if w.decorations.fire[slot] > 0 do return false
+
+	tile_x := int(w.decorations.x[slot])
+	tile_y := int(w.decorations.y[slot])
+	if WorldTileOccupied(w, tile_x, tile_y) {
+		WorldDecorationDespawn(w, slot)
+		return false
+	}
+
+	w.decorations.regrowTimer[slot] += delta_time
+	if w.decorations.regrowTimer[slot] < DECORATION_REGROW_SECONDS do return false
+
+	kind := DecorationKind.Tree
+	if WorldNoiseHash(tile_x, tile_y, 0xA11CE) < 0.35 do kind = .Pine
+	w.decorations.kind[slot] = kind
+	w.decorations.variant[slot] = u8(int(WorldNoiseHash(tile_y, tile_x, 0xA11CF)*4) & 3)
+	w.decorations.health[slot] = DecorationHealth(kind)
+	w.decorations.regrowTimer[slot] = 0
+	w.decorationStumps -= 1
 	return true
 }
 
@@ -100,10 +186,11 @@ WorldDecorationIgnite :: proc(w: ^World, slot: int, intensity: f32) {
 	w.decorationBurning += 1
 }
 
-WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) {
+WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> f32 {
 	chunk_size := w.spatial.chunkSize
-	if chunk_size <= 0 || width <= 0 || height <= 0 do return
+	if chunk_size <= 0 || width <= 0 || height <= 0 do return 0
 
+	harvested: f32 = 0
 	first_chunk_x := x/chunk_size
 	last_chunk_x := (x+width-1)/chunk_size
 	first_chunk_y := y/chunk_size
@@ -120,43 +207,39 @@ WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) {
 				decoration_y := int(w.decorations.y[slot])
 				if decoration_x >= x && decoration_x < x+width &&
 					decoration_y >= y && decoration_y < y+height {
+					harvested += DecorationWoodYield(w.decorations.kind[slot])
 					WorldDecorationDespawn(w, slot)
 				}
 				slot = next
 			}
 		}
 	}
+	return harvested
 }
 
 WorldDecorationUpdate :: proc(w: ^World, delta_time: f32) {
-	if w.decorationBurning == 0 do return
+	if w.decorationBurning == 0 && w.decorationStumps == 0 do return
 
 	for slot in 0 ..< DECORATION_CAPACITY {
 		if !w.decorationUsed[slot] do continue
 		intensity := w.decorations.fire[slot]
-		if intensity <= 0 do continue
-
-		kind := w.decorations.kind[slot]
-		w.decorations.health[slot] -= DECORATION_FIRE_DAMAGE*intensity*delta_time
-		if w.decorations.health[slot] <= 0 {
-			DecorationBurnOut(w, slot, kind)
+		if intensity > 0 {
+			w.decorations.health[slot] -= DECORATION_FIRE_DAMAGE*intensity*delta_time
+			if w.decorations.health[slot] <= 0 {
+				DecorationBurnOut(w, slot)
+				continue
+			}
+			DecorationSpreadFire(w, slot, intensity, delta_time)
 			continue
 		}
-		DecorationSpreadFire(w, slot, intensity, delta_time)
+		DecorationRegrowth(w, slot, delta_time)
 	}
 }
 
-DecorationBurnOut :: proc(w: ^World, slot: int, kind: DecorationKind) {
+DecorationBurnOut :: proc(w: ^World, slot: int) {
 	w.decorations.fire[slot] = 0
 	w.decorationBurning -= 1
-	switch kind {
-	case .Tree, .Pine, .Bush:
-		w.decorations.kind[slot] = .Stump
-		w.decorations.variant[slot] = 0
-		w.decorations.health[slot] = DecorationHealth(.Stump)
-	case .Rock, .Flowers, .Cactus, .Reed, .Stump:
-		WorldDecorationDespawn(w, slot)
-	}
+	DecorationFell(w, slot)
 }
 
 DecorationSpreadFire :: proc(w: ^World, slot: int, intensity: f32, delta_time: f32) {

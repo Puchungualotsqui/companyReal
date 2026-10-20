@@ -52,7 +52,7 @@ MilestoneOption :: struct {
 	unlocks: bit_set[BuildingKind],
 }
 
-TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Wall}
+TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Wall, .Path}
 
 TOWN_MILESTONE_OPTIONS := [TOWN_MILESTONE_COUNT][2]MilestoneOption{
 	{

@@ -69,7 +69,7 @@ C_ARCANE_GLOW := rl.Color{128, 226, 255, 255}
 
 C_WHITE := rl.Color{238, 238, 244, 255}
 
-ALL_BUILDING_KINDS := [12]BuildingKind{
+ALL_BUILDING_KINDS := [13]BuildingKind{
 	.TownHall,
 	.Home,
 	.Farmland,
@@ -82,6 +82,7 @@ ALL_BUILDING_KINDS := [12]BuildingKind{
 	.SiegeWorkshop,
 	.TurtlePen,
 	.ThievesGuild,
+	.Path,
 }
 
 ALL_UNIT_KINDS := [11]UnitKind{
@@ -346,7 +347,7 @@ BuildingHasNightLight :: proc(kind: BuildingKind) -> bool {
 	switch kind {
 	case .TownHall, .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .ThievesGuild:
 		return true
-	case .Farmland, .Wall, .Bridge, .Cannon, .TurtlePen:
+	case .Farmland, .Wall, .Bridge, .Cannon, .TurtlePen, .Path:
 		return false
 	}
 	unreachable()
@@ -424,8 +425,40 @@ draw_building_sprite :: proc(kind: BuildingKind, accent: rl.Color) -> Art {
 		draw_turtle_pen(&art, accent)
 	case .ThievesGuild:
 		draw_thieves_guild(&art, accent)
+	case .Path:
+		draw_path(&art, accent)
 	}
 	return art
+}
+
+draw_path :: proc(art: ^Art, accent: rl.Color) {
+	worn := c_shade(C_DIRT, 1.12)
+	art_rect(art, 0, 0, PIXELS_PER_TILE, PIXELS_PER_TILE, C_DIRT)
+	art_rect(art, 0, 5, PIXELS_PER_TILE, 6, worn)
+	art_rect(art, 5, 0, 6, PIXELS_PER_TILE, worn)
+
+	for i in 0..<30 {
+		x := int(WorldNoiseHash(i, 11, 0xB01)*PIXELS_PER_TILE)
+		y := int(WorldNoiseHash(11, i, 0xB02)*PIXELS_PER_TILE)
+		color := C_DIRT_DARK
+		if WorldNoiseHash(x, y, 0xB03) < 0.35 do color = C_WOOD_LIGHT
+		art_pixel(art, x, y, color)
+	}
+	for i in 0..<5 {
+		x := 1+int(WorldNoiseHash(i, 17, 0xB04)*13)
+		y := 1+int(WorldNoiseHash(17, i, 0xB05)*13)
+		art_rect(art, x, y, 2, 1, C_STONE_DARK)
+		art_pixel(art, x, y, C_STONE)
+	}
+
+	// Ragged rim so the road blends into grass instead of reading as a slab.
+	for i in 0..<PIXELS_PER_TILE {
+		if WorldNoiseHash(i, 0, 0xB11) < 0.6 do art_pixel(art, i, 0, C_CLEAR)
+		if WorldNoiseHash(i, 1, 0xB12) < 0.6 do art_pixel(art, i, PIXELS_PER_TILE-1, C_CLEAR)
+		if WorldNoiseHash(2, i, 0xB13) < 0.6 do art_pixel(art, 0, i, C_CLEAR)
+		if WorldNoiseHash(3, i, 0xB14) < 0.6 do art_pixel(art, PIXELS_PER_TILE-1, i, C_CLEAR)
+	}
+	art_pixel(art, 13, 2, accent)
 }
 
 draw_home :: proc(art: ^Art, accent: rl.Color) {

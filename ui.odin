@@ -213,6 +213,8 @@ UIBuildingName :: proc(kind: BuildingKind) -> cstring {
 		return "Turtle Pen"
 	case .ThievesGuild:
 		return "Thieves' Guild"
+	case .Path:
+		return "Path"
 	}
 	unreachable()
 }
@@ -271,6 +273,8 @@ UIBuildingDescription :: proc(kind: BuildingKind) -> cstring {
 		return "Trains turtles."
 	case .ThievesGuild:
 		return "Trains rogues."
+	case .Path:
+		return "A trodden road. Units move faster."
 	}
 	unreachable()
 }
@@ -323,7 +327,7 @@ UIUnitFromTraining :: proc(kind: BuildingKind) -> UnitKind {
 		return .Turtle
 	case .ThievesGuild:
 		return .Rogue
-	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon:
+	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Path:
 		return .Villager
 	}
 	unreachable()

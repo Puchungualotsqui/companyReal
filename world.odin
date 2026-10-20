@@ -13,6 +13,7 @@ World :: struct {
 	decorationUsed: [DECORATION_CAPACITY]bool,
 	decorationCursor: int,
 	decorationBurning: int,
+	decorationStumps: int,
 	kingdoms: #soa [KINGDOMS_CAPACITY]Kingdom,
 	kingdomUsed: [KINGDOMS_CAPACITY]bool,
 	maxX, maxY: uint,
@@ -202,7 +203,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 	w.buildings.town[i] = townSlot
 
 	width, height := BuildingTileSize(type)
-	WorldDecorationClearRect(w, x, y, width, height)
+	cleared_wood := WorldDecorationClearRect(w, x, y, width, height)
 	world_height := int(w.maxY)
 	for tile_x in x ..< x+width {
 		for tile_y in y ..< y+height {
@@ -217,6 +218,8 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 		kind := BuildingKindOf(type)
 		town.buildingCounts[kind] += 1
 		if town.buildingSlots[kind] < 0 do town.buildingSlots[kind] = i
+		// Trees felled to clear the site are not wasted.
+		town.wood += cleared_wood
 	}
 	w.navigationRevision += 1
 	return i, true
@@ -272,7 +275,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 				}
 			}
 		}
-	case Bridge, Cannon, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Wall, Home, Farmland:
+	case Bridge, Cannon, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Wall, Home, Farmland, Path:
 	}
 
 	width, height := BuildingTileSize(w.buildings[slot].type)

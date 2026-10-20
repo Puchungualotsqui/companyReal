@@ -5,6 +5,12 @@ import "core:math"
 FLOW_FIELD_CAPACITY :: 16
 FLOW_FIELD_MAX_STEPS :: 8
 
+// Path tiles are cheap to route through and slightly faster to walk on.
+PATH_SPEED_MULTIPLIER :: 1.25
+PATH_STEP_COST :: 3
+PLAIN_STEP_COST :: 4
+PATH_HEURISTIC_COST :: 3
+
 FlowDirection :: enum u8 {
 	Blocked,
 	None,
@@ -74,7 +80,7 @@ AStar :: proc(w: ^World, unit_type: UnitType, start_x, start_y, goal_x, goal_y: 
 
 	start_index := wrapped_start_x*world_height + wrapped_start_y
 	goal_index := wrapped_goal_x*world_height + wrapped_goal_y
-	infinity := node_count + 1
+	infinity := node_count*PLAIN_STEP_COST+1
 
 	came_from := w.navigationCameFrom
 	g_score := w.navigationDistance
@@ -106,7 +112,7 @@ AStar :: proc(w: ^World, unit_type: UnitType, start_x, start_y, goal_x, goal_y: 
 	for open_count > 0 {
 		best_position := 0
 		best_index := open_set[0]
-		best_score := g_score[best_index] + WorldWrapHeuristic(
+		best_score := g_score[best_index] + PATH_HEURISTIC_COST*WorldWrapHeuristic(
 			best_index/world_height,
 			best_index%world_height,
 			wrapped_goal_x,
@@ -116,7 +122,7 @@ AStar :: proc(w: ^World, unit_type: UnitType, start_x, start_y, goal_x, goal_y: 
 		)
 		for position in 1..<open_count {
 			candidate := open_set[position]
-			candidate_score := g_score[candidate] + WorldWrapHeuristic(
+			candidate_score := g_score[candidate] + PATH_HEURISTIC_COST*WorldWrapHeuristic(
 				candidate/world_height,
 				candidate%world_height,
 				wrapped_goal_x,
@@ -165,7 +171,7 @@ AStar :: proc(w: ^World, unit_type: UnitType, start_x, start_y, goal_x, goal_y: 
 				is_closed[next_index] = false
 			}
 			if is_closed[next_index] do continue
-			tentative_score := g_score[best_index] + 1
+			tentative_score := g_score[best_index] + WorldStepCost(w, next_x, next_y)
 			if tentative_score >= g_score[next_index] do continue
 
 			came_from[next_index] = best_index
@@ -347,8 +353,7 @@ FlowFieldCompute :: proc(w: ^World, field: ^FlowField) -> bool {
 
 UnitFollowFlowField :: proc(w: ^World, unit_slot: int, field: ^FlowField, delta_time: f32) -> FlowFollowResult {
 	unit := &w.units[unit_slot]
-	speed := UnitDefaultSpeed(unit.type)
-	if unit.effects[.NoWater] do speed *= 0.7
+	speed := UnitMoveSpeed(w, unit_slot, UnitDefaultSpeed(unit.type))
 
 	remaining := speed*delta_time
 	world_width := int(w.maxX)
@@ -446,6 +451,32 @@ WorldTileWalkable :: proc(w: ^World, x, y: int, unit_type: UnitType) -> bool {
 		return BuildingWalkable(w.buildings[building_slot].type)
 	}
 	return UnitValidTileType(unit_type, w.ground[wrapped_x][wrapped_y].type)
+}
+
+WorldTileHasPath :: proc(w: ^World, x, y: int) -> bool {
+	world_width := int(w.maxX)
+	world_height := int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return false
+	wrapped_x := WorldWrapCoordinate(x, world_width)
+	wrapped_y := WorldWrapCoordinate(y, world_height)
+	slot := w.tileBuilding[wrapped_x*world_height+wrapped_y]
+	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] do return false
+	return BuildingKindOf(w.buildings[slot].type) == .Path
+}
+
+WorldStepCost :: proc(w: ^World, x, y: int) -> int {
+	if WorldTileHasPath(w, x, y) do return PATH_STEP_COST
+	return PLAIN_STEP_COST
+}
+
+// Base speed adjusted by the tile the unit is standing on.
+UnitMoveSpeed :: proc(w: ^World, unit_slot: int, base_speed: f32) -> f32 {
+	speed := base_speed
+	if w.units[unit_slot].effects[.NoWater] do speed *= 0.7
+	tile_x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
+	tile_y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
+	if WorldTileHasPath(w, tile_x, tile_y) do speed *= PATH_SPEED_MULTIPLIER
+	return speed
 }
 
 WorldWrapCoordinate :: proc(coordinate, size: int) -> int {

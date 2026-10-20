@@ -45,7 +45,7 @@ WorldBuildingUpdate :: proc(w: ^World, delta_time: f32) {
 		}
 
 		switch _ in w.buildings[building_slot].type {
-		case TownHall, Wall, Bridge, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild:
+		case TownHall, Wall, Bridge, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path:
 		case Home:
 			BuildingUpdateHome(w, building_slot, delta_time)
 		case Farmland:

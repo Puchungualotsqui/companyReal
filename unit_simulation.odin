@@ -24,7 +24,8 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 		}
 	}
 	if state^ == .Roaming && town.wood < TOWN_WOOD_TARGET {
-		if x, y, found := UnitFindResourceTarget(w, unit_slot, builder.taskSequence); found {
+		if x, y, decoration, found := UnitFindResourceTarget(w, unit_slot, builder.taskSequence); found {
+			builder.targetDecoration = decoration
 			w.units[unit_slot].pathTargetX = x
 			w.units[unit_slot].pathTargetY = y
 			w.units[unit_slot].pathReady = false
@@ -38,36 +39,67 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 		UnitUpdateRoaming(w, unit_slot, delta_time)
 	case .Traveling:
 		if UnitMoveToTarget(w, unit_slot, delta_time) {
-			state^ = .Working
-			w.units[unit_slot].cooldown = 1
+			if builder.targetDecoration >= 0 && builder.targetDecoration < DECORATION_CAPACITY &&
+				w.decorationUsed[builder.targetDecoration] &&
+				DecorationChoppable(w.decorations.kind[builder.targetDecoration]) {
+				state^ = .Working
+				w.units[unit_slot].cooldown = DecorationChopSeconds(
+					w.decorations.kind[builder.targetDecoration],
+				)
+			} else {
+				builder.targetDecoration = -1
+				state^ = .Roaming
+				w.units[unit_slot].pathReady = false
+				builder.taskSequence += 1
+			}
 		} else if !w.units[unit_slot].pathFound {
 			state^ = .Roaming
 			w.units[unit_slot].pathReady = false
+			builder.targetDecoration = -1
 			builder.taskSequence += 1
 		}
 	case .Working:
+		if builder.targetDecoration < 0 || builder.targetDecoration >= DECORATION_CAPACITY ||
+			!w.decorationUsed[builder.targetDecoration] {
+			builder.targetDecoration = -1
+			state^ = .Roaming
+			w.units[unit_slot].pathReady = false
+			builder.taskSequence += 1
+			break
+		}
+
 		w.units[unit_slot].cooldown -= delta_time
 		if w.units[unit_slot].cooldown <= 0 {
-			builder.carriedResource = 5
-			if x, y, found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot); found {
-				w.units[unit_slot].pathTargetX = x
-				w.units[unit_slot].pathTargetY = y
-				w.units[unit_slot].pathReady = false
-				state^ = .Returning
+			carried := DecorationWoodYield(w.decorations.kind[builder.targetDecoration])
+			DecorationFell(w, builder.targetDecoration)
+			builder.targetDecoration = -1
+			if carried > 0 {
+				builder.carriedResource = carried
+				if x, y, found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot); found {
+					w.units[unit_slot].pathTargetX = x
+					w.units[unit_slot].pathTargetY = y
+					w.units[unit_slot].pathReady = false
+					state^ = .Returning
+				} else {
+					builder.carriedResource = 0
+					state^ = .Roaming
+				}
 			} else {
-				builder.carriedResource = 0
 				state^ = .Roaming
+				builder.taskSequence += 1
 			}
 		}
 	case .Returning:
 		if UnitMoveToTarget(w, unit_slot, delta_time) {
 			town.wood += builder.carriedResource
 			builder.carriedResource = 0
+			builder.targetDecoration = -1
 			builder.taskSequence += 1
 			state^ = .Roaming
 			w.units[unit_slot].pathReady = false
 		} else if !w.units[unit_slot].pathFound {
 			builder.carriedResource = 0
+			builder.targetDecoration = -1
 			builder.taskSequence += 1
 			state^ = .Roaming
 			w.units[unit_slot].pathReady = false
@@ -412,37 +444,79 @@ UnitFindRoamingTarget :: proc(w: ^World, unit_slot, sequence: int) -> (int, int,
 	return 0, 0, false
 }
 
-UnitFindResourceTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int, int, bool) {
+// Finds the nearest harvestable tree decoration around the unit. Nearby
+// spatial buckets are searched first; the linear scan is only a fallback for
+// towns that have already cleared everything close to them.
+UnitFindResourceTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int, int, int, bool) {
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return 0, 0, false
-	unit_x := WorldWrapPosition(w.units[unit_slot].x, f32(world_width))
-	unit_y := WorldWrapPosition(w.units[unit_slot].y, f32(world_height))
-	best_x, best_y := 0, 0
+	chunk_size := w.spatial.chunkSize
+	if world_width <= 0 || world_height <= 0 || chunk_size <= 0 do return 0, 0, -1, false
+
+	unit_x := int(WorldWrapPosition(w.units.x[unit_slot], f32(world_width)))
+	unit_y := int(WorldWrapPosition(w.units.y[unit_slot], f32(world_height)))
+	seed := u64(unit_slot+task_sequence*1009)
+	best_slot := -1
 	best_distance_squared: f32 = 0
 	best_score: f32 = -1
-	found_forest := false
-	seed := u64(unit_slot+task_sequence*1009)
-	for source_x in 0..<world_width {
-		for source_y in 0..<world_height {
-			if w.ground[source_x][source_y].type != .Forest do continue
-			delta_x := WorldShortestWrappedDelta(f32(source_x)-unit_x, f32(world_width))
-			delta_y := WorldShortestWrappedDelta(f32(source_y)-unit_y, f32(world_height))
-			distance_squared := delta_x*delta_x + delta_y*delta_y
+
+	center_chunk_x := unit_x/chunk_size
+	center_chunk_y := unit_y/chunk_size
+	for radius in 1..=4 {
+		for chunk_y in center_chunk_y-radius ..= center_chunk_y+radius {
+			wrapped_y := WorldWrapCoordinate(chunk_y, w.spatial.chunksY)
+			for chunk_x in center_chunk_x-radius ..= center_chunk_x+radius {
+				wrapped_x := WorldWrapCoordinate(chunk_x, w.spatial.chunksX)
+				chunk := wrapped_x*w.spatial.chunksY+wrapped_y
+				for slot := w.spatial.decorationHead[chunk]; slot >= 0;
+					slot = w.spatial.decorationNext[slot] {
+					if !DecorationChoppable(w.decorations.kind[slot]) do continue
+					source_x := int(w.decorations.x[slot])
+					source_y := int(w.decorations.y[slot])
+					if WorldTileOccupied(w, source_x, source_y) do continue
+					if !WorldTileWalkable(w, source_x, source_y, w.units[unit_slot].type) do continue
+
+					delta_x := WorldShortestWrappedDelta(f32(source_x)-f32(unit_x), f32(world_width))
+					delta_y := WorldShortestWrappedDelta(f32(source_y)-f32(unit_y), f32(world_height))
+					distance_squared := delta_x*delta_x+delta_y*delta_y
+					score := WorldNoiseHash(source_x, source_y, seed)
+					if best_slot >= 0 && (distance_squared > best_distance_squared ||
+						(distance_squared == best_distance_squared && score <= best_score)) {
+						continue
+					}
+					best_slot = slot
+					best_distance_squared = distance_squared
+					best_score = score
+				}
+			}
+		}
+	}
+
+	if best_slot < 0 {
+		for slot in 0..<DECORATION_CAPACITY {
+			if !w.decorationUsed[slot] do continue
+			if !DecorationChoppable(w.decorations.kind[slot]) do continue
+			source_x := int(w.decorations.x[slot])
+			source_y := int(w.decorations.y[slot])
+			if WorldTileOccupied(w, source_x, source_y) do continue
+			if !WorldTileWalkable(w, source_x, source_y, w.units[unit_slot].type) do continue
+
+			delta_x := WorldShortestWrappedDelta(f32(source_x)-f32(unit_x), f32(world_width))
+			delta_y := WorldShortestWrappedDelta(f32(source_y)-f32(unit_y), f32(world_height))
+			distance_squared := delta_x*delta_x+delta_y*delta_y
 			score := WorldNoiseHash(source_x, source_y, seed)
-			if found_forest && (distance_squared > best_distance_squared ||
+			if best_slot >= 0 && (distance_squared > best_distance_squared ||
 				(distance_squared == best_distance_squared && score <= best_score)) {
 				continue
 			}
-			if WorldTileOccupied(w, source_x, source_y) do continue
-			if !UnitValidTileType(w.units[unit_slot].type, w.ground[source_x][source_y].type) do continue
-			best_x, best_y = source_x, source_y
+			best_slot = slot
 			best_distance_squared = distance_squared
 			best_score = score
-			found_forest = true
 		}
 	}
-	return best_x, best_y, found_forest
+
+	if best_slot < 0 do return 0, 0, -1, false
+	return int(w.decorations.x[best_slot]), int(w.decorations.y[best_slot]), best_slot, true
 }
 
 UnitFindWaterTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int, int, bool) {

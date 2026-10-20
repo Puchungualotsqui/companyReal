@@ -22,6 +22,7 @@ BuildingKind :: enum {
 	SiegeWorkshop,
 	TurtlePen,
 	ThievesGuild,
+	Path,
 }
 
 BuildingType :: union {
@@ -37,6 +38,7 @@ BuildingType :: union {
 	SiegeWorkshop,
 	TurtlePen,
 	ThievesGuild,
+	Path,
 }
 
 TownHall :: struct {}
@@ -51,6 +53,7 @@ GiantPen :: struct {}
 SiegeWorkshop :: struct {}
 TurtlePen :: struct {}
 ThievesGuild :: struct {}
+Path :: struct {}
 
 BuildingKindOf :: proc(type: BuildingType) -> BuildingKind {
 	switch _ in type {
@@ -78,6 +81,8 @@ BuildingKindOf :: proc(type: BuildingType) -> BuildingKind {
 		return .TurtlePen
 	case ThievesGuild:
 		return .ThievesGuild
+	case Path:
+		return .Path
 	}
 	unreachable()
 }
@@ -108,6 +113,8 @@ BuildingTypeFromKind :: proc(kind: BuildingKind) -> BuildingType {
 		return TurtlePen{}
 	case .ThievesGuild:
 		return ThievesGuild{}
+	case .Path:
+		return Path{}
 	}
 	unreachable()
 }
@@ -135,6 +142,8 @@ BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
 		return 4, 3
 	case ThievesGuild:
 		return 2, 3
+	case Path:
+		return 1, 1
 	}
 	unreachable()
 }
@@ -159,6 +168,8 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 		return 350
 	case ThievesGuild:
 		return 250
+	case Path:
+		return 80
 	}
 	unreachable()
 }
@@ -189,6 +200,8 @@ BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
 		return 30
 	case .ThievesGuild:
 		return 30
+	case .Path:
+		return 1
 	}
 	unreachable()
 }
@@ -211,7 +224,7 @@ BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 			return false
 		}
 
-	case TownHall, Home, Wall, Cannon, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild:
+	case TownHall, Home, Wall, Cannon, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path:
 		switch tType {
 		case .Ground, .FertileGround, .Forest, .Hill, .Desert, .Sand:
 			return true
@@ -224,7 +237,7 @@ BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 
 BuildingWalkable :: proc(type: BuildingType) -> bool {
 	switch _ in type {
-	case Bridge:
+	case Bridge, Path:
 		return true
 	case TownHall, Home, Farmland, Wall, Cannon, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild:
 		return false
@@ -234,7 +247,7 @@ BuildingWalkable :: proc(type: BuildingType) -> bool {
 
 BuildingIsManual :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .Wall, .Bridge, .Cannon:
+	case .Wall, .Bridge, .Cannon, .Path:
 		return true
 	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
 		return false
@@ -246,7 +259,7 @@ BuildingIsTraining :: proc(kind: BuildingKind) -> bool {
 	switch kind {
 	case .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
 		return true
-	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon:
+	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Path:
 		return false
 	}
 	unreachable()
@@ -383,8 +396,9 @@ StateConverting :: struct {
 
 Villager :: struct {}
 Builder :: struct {
-	carriedResource: f32,
-	taskSequence: int,
+	carriedResource:  f32,
+	taskSequence:     int,
+	targetDecoration: int,
 }
 WaterCollector :: struct {
 	carriedResource: f32,
@@ -688,7 +702,7 @@ UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
 		unit.type = Villager{}
 		unit.state = StatePacific.Roaming
 	case Builder:
-		unit.type = Builder{carriedResource = 0, taskSequence = 0}
+		unit.type = Builder{carriedResource = 0, taskSequence = 0, targetDecoration = -1}
 		unit.state = StatePacific.Roaming
 	case WaterCollector:
 		unit.type = WaterCollector{carriedResource = 0, taskSequence = 0}
@@ -756,8 +770,7 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 	}
 	if !unit.pathFound do return false
 
-	speed := UnitDefaultSpeed(unit.type)
-	if unit.effects[.NoWater] do speed *= 0.7
+	speed := UnitMoveSpeed(w, unit_slot, UnitDefaultSpeed(unit.type))
 
 	remaining := speed * delta_time
 	if remaining < 0 do remaining = 0
