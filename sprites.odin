@@ -297,21 +297,26 @@ art_grain :: proc(art: ^Art, seed: u64) {
 
 create_shadow_texture :: proc() -> rl.Texture2D {
 	width := 64
-	height := 32
+	height := 64
 	image := rl.GenImageColor(i32(width), i32(height), C_CLEAR)
 	for y in 0..<height {
 		for x in 0..<width {
 			nx := (f32(x)+0.5)/f32(width)*2-1
 			ny := (f32(y)+0.5)/f32(height)*2-1
-			distance := nx*nx+ny*ny
-			if distance >= 1 do continue
-			alpha := u8((1-distance)*(1-distance)*120)
+			// Wide plateau with soft edges, fading from the caster to the ground.
+			horizontal := clamp((1-abs(nx))/0.35, 0, 1)
+			horizontal = horizontal*horizontal*(3-2*horizontal)
+			vertical := clamp(1-(ny+1)*0.5, 0, 1)
+			vertical = vertical*vertical*(3-2*vertical)
+			alpha := u8(horizontal*vertical*235)
+			if alpha == 0 do continue
 			rl.ImageDrawPixel(&image, i32(x), i32(y), rl.Color{18, 16, 24, alpha})
 		}
 	}
 	texture := rl.LoadTextureFromImage(image)
 	rl.UnloadImage(image)
 	rl.SetTextureFilter(texture, .BILINEAR)
+	rl.SetTextureWrap(texture, .CLAMP)
 	return texture
 }
 

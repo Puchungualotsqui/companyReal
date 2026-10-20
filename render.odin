@@ -250,25 +250,15 @@ WorldRenderSprites :: proc(
 				if BuildingWalkable(w.buildings[building_slot].type) {
 					base_y = -1e9
 				} else {
-					shadow_height := clamp(height*0.6, 0.7, 3.2)
+					shadow_height := clamp(height*0.8, 0.6, 4)
 					append(&renderer.shadows, RenderShadow{
 						dest = rl.Rectangle{
-							x = offset_x+building_x-0.55,
-							y = offset_y+building_y+height-shadow_height*0.4,
-							width = width+1.1,
+							x = offset_x+building_x-0.7,
+							y = offset_y+building_y+height-shadow_height*0.2,
+							width = width+1.4,
 							height = shadow_height,
 						},
-						alpha = 150,
-					})
-					contact_height := clamp(height*0.22, 0.35, 0.9)
-					append(&renderer.shadows, RenderShadow{
-						dest = rl.Rectangle{
-							x = offset_x+building_x-0.2,
-							y = offset_y+building_y+height-contact_height*0.55,
-							width = width+0.4,
-							height = contact_height,
-						},
-						alpha = 230,
+						alpha = 220,
 					})
 				}
 				append(&renderer.items, RenderItem{

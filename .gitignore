@@ -12,3 +12,4 @@ base_test.exe
 run_test.exe
 run_out.txt
 run_err.txt
+shadow_test.exe
