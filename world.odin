@@ -9,6 +9,10 @@ World :: struct {
 	unitUsed: [UNIT_CAPACITY]bool,
 	buildings: #soa [BUILDING_CAPACITY]Building,
 	buildingUsed: [BUILDING_CAPACITY]bool,
+	decorations: #soa [DECORATION_CAPACITY]Decoration,
+	decorationUsed: [DECORATION_CAPACITY]bool,
+	decorationCursor: int,
+	decorationBurning: int,
 	kingdoms: #soa [KINGDOMS_CAPACITY]Kingdom,
 	kingdomUsed: [KINGDOMS_CAPACITY]bool,
 	maxX, maxY: uint,
@@ -63,6 +67,11 @@ WorldDeinit :: proc(w: ^World) {
 	for i in 0..<UNIT_CAPACITY {
 		if w.unitUsed[i] {
 			UnitDespawn(w, i)
+		}
+	}
+	for i in 0..<DECORATION_CAPACITY {
+		if w.decorationUsed[i] {
+			WorldDecorationDespawn(w, i)
 		}
 	}
 	SpatialIndexDeinit(w)
@@ -193,6 +202,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 	w.buildings.town[i] = townSlot
 
 	width, height := BuildingTileSize(type)
+	WorldDecorationClearRect(w, x, y, width, height)
 	world_height := int(w.maxY)
 	for tile_x in x ..< x+width {
 		for tile_y in y ..< y+height {

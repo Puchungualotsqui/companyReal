@@ -43,9 +43,11 @@ UI_HEADER_H : f32 : 92
 UI_DESC_Y : f32 : 102
 UI_STAT_Y : f32 : 136
 UI_STAT_H : f32 : 24
-UI_TOWN_DIVIDER : f32 : 242
-UI_TOWN_LABEL_Y : f32 : 250
-UI_ROWS_TOP : f32 : 282
+UI_GROWTH_Y : f32 : 240
+UI_GROWTH_H : f32 : 20
+UI_TOWN_DIVIDER : f32 : 266
+UI_TOWN_LABEL_Y : f32 : 274
+UI_ROWS_TOP : f32 : 306
 UI_ROW_HEIGHT : f32 : 36
 UI_BUTTON : f32 : 20
 
@@ -333,6 +335,7 @@ UIPanelHeight :: proc(w: ^World, ui: ^UIState) -> f32 {
 			rows := UIConversionRowCount(w, ui.selection)
 			return UI_ROWS_TOP + f32(rows)*UI_ROW_HEIGHT + UI_PAD
 		}
+		return UI_GROWTH_Y+UI_GROWTH_H+UI_PAD
 	}
 	return UI_STAT_Y + f32(UIStatCount(w, ui.selection))*UI_STAT_H + UI_PAD
 }
@@ -587,12 +590,16 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 	case .None:
 	}
 
-	stats: [4]UIStat
+	stats: [5]UIStat
 	stat_count := UIFillStats(w, ui, &stats)
 	for i in 0..<stat_count {
 		y := panel.y+UI_STAT_Y+f32(i)*UI_STAT_H
 		ui_text(stats[i].label, panel.x+UI_PAD, y, UI_COLOR_DIM)
 		ui_text(stats[i].value, panel.x+UI_PAD+104, y, UI_COLOR_TEXT)
+	}
+
+	if UISelectionTownHall(w, ui.selection) {
+		UIDrawGrowthBar(w, panel, kingdom, town)
 	}
 
 	if UISelectionTownHall(w, ui.selection) && kingdom == PLAYER_KINGDOM {
@@ -623,7 +630,7 @@ UIDrawPortrait :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, box: r
 	rl.DrawTexturePro(texture, source, dest, rl.Vector2{0, 0}, 0, rl.WHITE)
 }
 
-UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[4]UIStat) -> int {
+UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[5]UIStat) -> int {
 	switch ui.selection.kind {
 	case .Unit:
 		unit := w.units[ui.selection.slot]
@@ -639,7 +646,14 @@ UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[4]UIStat) -> int {
 			t := &w.kingdoms[building.kingdom].towns[building.town]
 			stats[1] = {"Citizens", fmt.ctprintf("%d", t.citizens)}
 			stats[2] = {"Wood", fmt.ctprintf("%d", int(t.wood))}
-			stats[3] = {"Milestones", fmt.ctprintf("%d / %d", t.milestonesReached, TOWN_MILESTONE_COUNT)}
+			if t.milestonesReached < TOWN_MILESTONE_COUNT {
+				stats[3] = {
+					"Milestone",
+					fmt.ctprintf("%d / %d", t.citizens, TOWN_MILESTONES[t.milestonesReached]),
+				}
+			} else {
+				stats[3] = {"Milestone", "Complete"}
+			}
 			return 4
 		}
 		if BuildingIsTraining(kind) {
@@ -651,6 +665,34 @@ UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[4]UIStat) -> int {
 	case .None:
 	}
 	return 0
+}
+
+UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
+	if !WorldTownExists(w, kingdom, town) do return
+	t := &w.kingdoms[kingdom].towns[town]
+
+	y := panel.y+UI_GROWTH_Y
+	ui_text("Next villager", panel.x+UI_PAD, y, UI_COLOR_DIM)
+
+	bar := rl.Rectangle{
+		panel.x+UI_PAD+126,
+		y+6,
+		panel.width-2*UI_PAD-126,
+		9,
+	}
+	progress: f32 = 0
+	if t.growthTime > 0 {
+		progress = clamp((t.growthTimer+w.simulationAccumulator)/t.growthTime, 0, 1)
+	}
+
+	rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
+	if progress > 0 {
+		rl.DrawRectangleRec(
+			rl.Rectangle{bar.x, bar.y, bar.width*progress, bar.height},
+			UI_COLOR_GOLD,
+		)
+	}
+	rl.DrawRectangleLinesEx(bar, 1, UI_COLOR_BORDER_INNER)
 }
 
 UIDrawConversions :: proc(

@@ -1151,11 +1151,195 @@ draw_unit_rogue :: proc(art: ^Art, accent: rl.Color) {
 // Sprite set
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Decorations
+// ---------------------------------------------------------------------------
+
+draw_decoration_sprite :: proc(kind: DecorationKind) -> Art {
+	switch kind {
+	case .Tree:
+		art := art_init(20, 30)
+		draw_decoration_tree(&art)
+		return art
+	case .Pine:
+		art := art_init(20, 34)
+		draw_decoration_pine(&art)
+		return art
+	case .Bush:
+		art := art_init(16, 12)
+		draw_decoration_bush(&art)
+		return art
+	case .Rock:
+		art := art_init(16, 10)
+		draw_decoration_rock(&art)
+		return art
+	case .Flowers:
+		art := art_init(16, 8)
+		draw_decoration_flowers(&art)
+		return art
+	case .Cactus:
+		art := art_init(16, 20)
+		draw_decoration_cactus(&art)
+		return art
+	case .Reed:
+		art := art_init(16, 14)
+		draw_decoration_reed(&art)
+		return art
+	case .Stump:
+		art := art_init(16, 10)
+		draw_decoration_stump(&art)
+		return art
+	}
+	return art_init(1, 1)
+}
+
+draw_decoration_tree :: proc(art: ^Art) {
+	draw_shadow(art, 10, 28, 6, 2)
+
+	art_rect(art, 9, 18, 3, 12, C_OUTLINE)
+	art_rect(art, 10, 19, 1, 10, C_WOOD_DARK)
+	art_pixel(art, 11, 20, C_WOOD)
+
+	art_circle(art, 10, 10, 8, C_OUTLINE)
+	art_circle(art, 5, 15, 5, C_OUTLINE)
+	art_circle(art, 15, 15, 5, C_OUTLINE)
+
+	art_circle(art, 10, 10, 7, C_LEAF_DARKEST)
+	art_circle(art, 5, 15, 4, C_LEAF_DARKEST)
+	art_circle(art, 15, 15, 4, C_LEAF_DARKEST)
+
+	art_circle(art, 8, 9, 6, C_LEAF_DARK)
+	art_circle(art, 13, 10, 5, C_LEAF_DARK)
+	art_circle(art, 6, 15, 3, C_LEAF_DARK)
+
+	art_circle(art, 8, 8, 4, C_LEAF)
+	art_circle(art, 12, 7, 3, C_LEAF)
+	art_pixel(art, 6, 5, C_LEAF_LIGHT)
+	art_pixel(art, 7, 4, C_LEAF_LIGHT)
+	art_pixel(art, 11, 6, C_LEAF_LIGHT)
+	art_pixel(art, 15, 13, C_LEAF_LIGHT)
+	art_pixel(art, 4, 14, C_LEAF_LIGHT)
+}
+
+draw_decoration_pine :: proc(art: ^Art) {
+	draw_shadow(art, 10, 32, 6, 2)
+
+	art_rect(art, 9, 25, 3, 9, C_OUTLINE)
+	art_rect(art, 10, 26, 1, 8, C_WOOD_DARK)
+
+	art_triangle(art, 10, 13, 0, 27, 20, 27, C_OUTLINE)
+	art_triangle(art, 10, 15, 2, 27, 18, 27, C_LEAF_DARKEST)
+	art_triangle(art, 10, 7, 1, 21, 19, 21, C_OUTLINE)
+	art_triangle(art, 10, 9, 3, 21, 17, 21, C_LEAF_DARKEST)
+	art_triangle(art, 10, 1, 4, 13, 16, 13, C_OUTLINE)
+	art_triangle(art, 10, 3, 5, 13, 15, 13, C_LEAF_DARK)
+
+	art_line(art, 10, 4, 10, 12, C_LEAF)
+	art_line(art, 10, 10, 10, 20, C_LEAF_DARK)
+	art_pixel(art, 9, 7, C_LEAF_LIGHT)
+	art_pixel(art, 9, 14, C_LEAF)
+	art_pixel(art, 13, 19, C_LEAF_DARKEST)
+	art_pixel(art, 9, 22, C_LEAF_DARKEST)
+}
+
+draw_decoration_bush :: proc(art: ^Art) {
+	draw_shadow(art, 8, 10, 4, 1)
+
+	art_circle(art, 4, 8, 4, C_OUTLINE)
+	art_circle(art, 11, 8, 4, C_OUTLINE)
+	art_circle(art, 8, 5, 4, C_OUTLINE)
+	art_circle(art, 4, 8, 3, C_LEAF_DARKEST)
+	art_circle(art, 11, 8, 3, C_LEAF_DARKEST)
+	art_circle(art, 8, 5, 3, C_LEAF_DARKEST)
+	art_circle(art, 5, 7, 2, C_LEAF_DARK)
+	art_circle(art, 10, 7, 2, C_LEAF_DARK)
+	art_circle(art, 8, 5, 2, C_LEAF)
+	art_pixel(art, 7, 4, C_LEAF_LIGHT)
+}
+
+draw_decoration_rock :: proc(art: ^Art) {
+	draw_shadow(art, 8, 8, 5, 1)
+
+	outline := [6]Point{{2, 8}, {4, 3}, {11, 2}, {14, 6}, {12, 8}, {3, 8}}
+	art_polygon(art, outline[:], C_OUTLINE)
+	fill := [5]Point{{3, 7}, {5, 4}, {10, 3}, {13, 6}, {11, 7}}
+	art_polygon(art, fill[:], C_STONE_DARK)
+	art_rect(art, 5, 4, 5, 1, C_STONE)
+	art_pixel(art, 11, 4, C_STONE_LIGHT)
+	art_pixel(art, 4, 7, C_STONE_DARKEST)
+}
+
+draw_decoration_flowers :: proc(art: ^Art) {
+	positions := [6][2]int{{2, 5}, {5, 3}, {8, 6}, {11, 3}, {13, 5}, {14, 6}}
+	colors := [6]rl.Color{C_WHITE, C_GOLD_LIGHT, C_ROOF_LIGHT, C_ARCANE_LIGHT, C_WHITE, C_GOLD_LIGHT}
+	for position, index in positions {
+		x := position[0]
+		y := position[1]
+		draw_flower(art, x, y, colors[index])
+	}
+}
+
+draw_flower :: proc(art: ^Art, x, y: int, color: rl.Color) {
+	art_rect(art, x, y+1, 1, 2, C_LEAF_DARK)
+	art_pixel(art, x-1, y, color)
+	art_pixel(art, x+1, y, color)
+	art_pixel(art, x, y-1, color)
+	art_pixel(art, x, y+1, color)
+	art_pixel(art, x, y, C_GOLD_LIGHT)
+}
+
+draw_decoration_cactus :: proc(art: ^Art) {
+	draw_shadow(art, 8, 18, 4, 2)
+
+	art_rect(art, 1, 9, 5, 3, C_OUTLINE)
+	art_rect(art, 2, 10, 4, 1, C_LEAF_DARK)
+	art_rect(art, 1, 6, 3, 4, C_OUTLINE)
+	art_rect(art, 2, 7, 1, 3, C_LEAF_DARK)
+
+	art_rect(art, 10, 6, 5, 3, C_OUTLINE)
+	art_rect(art, 10, 7, 4, 1, C_LEAF_DARK)
+	art_rect(art, 12, 3, 3, 4, C_OUTLINE)
+	art_rect(art, 13, 4, 1, 3, C_LEAF_DARK)
+
+	art_rect(art, 6, 2, 5, 17, C_OUTLINE)
+	art_rect(art, 7, 3, 3, 15, C_LEAF_DARK)
+	art_rect(art, 8, 4, 1, 13, C_LEAF)
+	art_pixel(art, 7, 5, C_LEAF_LIGHT)
+	art_pixel(art, 7, 11, C_LEAF_LIGHT)
+	art_pixel(art, 9, 8, C_LEAF_LIGHT)
+}
+
+draw_decoration_reed :: proc(art: ^Art) {
+	draw_shadow(art, 8, 12, 4, 1)
+
+	art_line(art, 3, 12, 2, 5, C_LEAF_DARK)
+	art_rect(art, 2, 3, 1, 2, C_WOOD_DARK)
+	art_line(art, 6, 12, 6, 4, C_LEAF_DARK)
+	art_rect(art, 6, 2, 1, 2, C_WOOD)
+	art_line(art, 9, 12, 10, 6, C_LEAF_DARK)
+	art_rect(art, 10, 4, 1, 2, C_WOOD_DARK)
+	art_line(art, 12, 12, 13, 7, C_LEAF_DARK)
+	art_rect(art, 13, 5, 1, 2, C_WOOD)
+	art_pixel(art, 6, 6, C_LEAF_LIGHT)
+}
+
+draw_decoration_stump :: proc(art: ^Art) {
+	draw_shadow(art, 8, 8, 5, 1)
+
+	art_ellipse(art, 8, 6, 5, 3, C_OUTLINE)
+	art_ellipse(art, 8, 6, 4, 2, C_WOOD_DARK)
+	art_ellipse(art, 8, 6, 2, 1, C_WOOD)
+	art_pixel(art, 7, 6, C_WOOD_LIGHT)
+	art_rect(art, 4, 8, 2, 1, C_WOOD_DARKEST)
+	art_rect(art, 11, 8, 2, 1, C_WOOD_DARKEST)
+}
+
 SpriteSet :: struct {
-	building: [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
-	unit:     [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
-	shadow:   rl.Texture2D,
-	glow:     rl.Texture2D,
+	building:   [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
+	unit:       [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
+	decoration: [DecorationKind]rl.Texture2D,
+	shadow:     rl.Texture2D,
+	glow:       rl.Texture2D,
 }
 
 SpriteSetInit :: proc() -> SpriteSet {
@@ -1176,6 +1360,12 @@ SpriteSetInit :: proc() -> SpriteSet {
 			rl.UnloadImage(art.image)
 		}
 	}
+	for kind in ALL_DECORATION_KINDS {
+		art := draw_decoration_sprite(kind)
+		art_grain(&art, u64(kind)+301)
+		set.decoration[kind] = art_to_texture(art)
+		rl.UnloadImage(art.image)
+	}
 	return set
 }
 
@@ -1192,6 +1382,11 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 			if set.unit[faction][kind].id != 0 {
 				rl.UnloadTexture(set.unit[faction][kind])
 			}
+		}
+	}
+	for kind in ALL_DECORATION_KINDS {
+		if set.decoration[kind].id != 0 {
+			rl.UnloadTexture(set.decoration[kind])
 		}
 	}
 }

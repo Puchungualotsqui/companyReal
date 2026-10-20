@@ -258,6 +258,10 @@ WorldLerpColor :: proc(a, b: rl.Color, t: f32) -> rl.Color {
 	}
 }
 
+// Decorations are only a pixel or two tall below this zoom, so drawing them
+// would cost more than it adds.
+DECORATION_MIN_ZOOM : f32 : 4
+
 // Position used for drawing and picking, interpolated between simulation ticks.
 UnitRenderPosition :: proc(w: ^World, unit_slot: int) -> (x, y: f32) {
 	x = w.units.x[unit_slot]
@@ -365,6 +369,59 @@ WorldRenderSprites :: proc(
 					dest = rl.Rectangle{offset_x+building_x, offset_y+building_y, width, height},
 					texture = renderer.sprites.building[faction][kind],
 				})
+			}
+
+			if camera.zoom >= DECORATION_MIN_ZOOM && w.spatial.chunkSize > 0 {
+				chunks_x := w.spatial.chunksX
+				chunks_y := w.spatial.chunksY
+				first_chunk_x := WorldFloor(min_x/f32(w.spatial.chunkSize))-1
+				last_chunk_x := WorldFloor(max_x/f32(w.spatial.chunkSize))+1
+				first_chunk_y := WorldFloor(min_y/f32(w.spatial.chunkSize))-1
+				last_chunk_y := WorldFloor(max_y/f32(w.spatial.chunkSize))+1
+				if last_chunk_x-first_chunk_x >= chunks_x {
+					first_chunk_x = 0
+					last_chunk_x = chunks_x-1
+				}
+				if last_chunk_y-first_chunk_y >= chunks_y {
+					first_chunk_y = 0
+					last_chunk_y = chunks_y-1
+				}
+
+				for chunk_y in first_chunk_y ..= last_chunk_y {
+					wrapped_y := WorldWrapCoordinate(chunk_y, chunks_y)
+					for chunk_x in first_chunk_x ..= last_chunk_x {
+						wrapped_x := WorldWrapCoordinate(chunk_x, chunks_x)
+						chunk := wrapped_x*chunks_y+wrapped_y
+						for decoration_slot := w.spatial.decorationHead[chunk]; decoration_slot >= 0;
+							decoration_slot = w.spatial.decorationNext[decoration_slot] {
+							texture := renderer.sprites.decoration[w.decorations.kind[decoration_slot]]
+							if texture.id == 0 do continue
+
+							variant := w.decorations.variant[decoration_slot]
+							variant_scale := 0.94+f32((variant>>1)&3)*0.04
+							width := f32(texture.width)/PIXELS_PER_TILE*variant_scale
+							height := f32(texture.height)/PIXELS_PER_TILE*variant_scale
+							decoration_x := w.decorations.x[decoration_slot]
+							decoration_y := w.decorations.y[decoration_slot]
+							if decoration_x+width*0.5 < min_x || decoration_x-width*0.5 > max_x ||
+								decoration_y < min_y || decoration_y-height > max_y {
+								continue
+							}
+
+							append(&renderer.items, RenderItem{
+								base_y = decoration_y,
+								dest = rl.Rectangle{
+									offset_x+decoration_x-width*0.5,
+									offset_y+decoration_y-height,
+									width,
+									height,
+								},
+								texture = texture,
+								flip_x = (variant & 1) == 1,
+							})
+						}
+					}
+				}
 			}
 
 			for unit_slot in 0 ..< UNIT_CAPACITY {

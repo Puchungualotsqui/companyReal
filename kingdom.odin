@@ -80,7 +80,7 @@ Town :: struct {
 	hallSlot: int,
 	citizens: int,
 	wood: f32,
-	growthTimer, constructionProgress: f32,
+	growthTimer, growthTime, constructionProgress: f32,
 	builders, waterCollectors, farmers: int,
 	homes, farmlands: int,
 	farmlandOutput: f32,

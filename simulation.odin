@@ -17,6 +17,7 @@ WorldUpdate :: proc(w: ^World, delta_time: f32) {
 		}
 		WorldUnitUpdate(w, TOWN_SIMULATION_STEP)
 		WorldBuildingUpdate(w, TOWN_SIMULATION_STEP)
+		WorldDecorationUpdate(w, TOWN_SIMULATION_STEP)
 		WorldKingdomUpdate(w, TOWN_SIMULATION_STEP)
 		w.simulationAccumulator -= TOWN_SIMULATION_STEP
 	}
@@ -170,6 +171,7 @@ KingdomTownUpdate :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time: f
 	if can_grow {
 		limiting_supply := min(town.foodPotential, town.waterPotential)
 		growth_time := 30*population_need/limiting_supply
+		town.growthTime = growth_time
 		town.growthTimer += delta_time
 		if town.growthTimer >= growth_time {
 			if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) >= 0 {
@@ -178,6 +180,7 @@ KingdomTownUpdate :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time: f
 		}
 	} else {
 		town.growthTimer = 0
+		town.growthTime = 0
 	}
 
 	if town.builders > 0 {

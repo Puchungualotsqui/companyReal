@@ -5,15 +5,19 @@ package main
 SPATIAL_CHUNK_SIZE :: 16
 
 SpatialIndex :: struct {
-	chunkSize: int,
+	chunkSize:        int,
 	chunksX, chunksY: int,
-	unitHead: []int,
-	unitNext: [UNIT_CAPACITY]int,
-	unitPrev: [UNIT_CAPACITY]int,
-	unitChunk: [UNIT_CAPACITY]int,
-	buildingHead: []int,
-	buildingNext: [BUILDING_CAPACITY]int,
-	buildingChunk: [BUILDING_CAPACITY]int,
+	unitHead:         []int,
+	unitNext:         [UNIT_CAPACITY]int,
+	unitPrev:         [UNIT_CAPACITY]int,
+	unitChunk:        [UNIT_CAPACITY]int,
+	buildingHead:     []int,
+	buildingNext:     [BUILDING_CAPACITY]int,
+	buildingChunk:    [BUILDING_CAPACITY]int,
+	decorationHead:   []int,
+	decorationNext:   [DECORATION_CAPACITY]int,
+	decorationPrev:   [DECORATION_CAPACITY]int,
+	decorationChunk:  [DECORATION_CAPACITY]int,
 }
 
 SpatialIndexInit :: proc(w: ^World) -> bool {
@@ -25,9 +29,11 @@ SpatialIndexInit :: proc(w: ^World) -> bool {
 	chunk_count := w.spatial.chunksX*w.spatial.chunksY
 	w.spatial.unitHead = make([]int, chunk_count)
 	w.spatial.buildingHead = make([]int, chunk_count)
+	w.spatial.decorationHead = make([]int, chunk_count)
 	for i in 0..<chunk_count {
 		w.spatial.unitHead[i] = -1
 		w.spatial.buildingHead[i] = -1
+		w.spatial.decorationHead[i] = -1
 	}
 	for i in 0..<UNIT_CAPACITY {
 		w.spatial.unitNext[i] = -1
@@ -38,12 +44,18 @@ SpatialIndexInit :: proc(w: ^World) -> bool {
 		w.spatial.buildingNext[i] = -1
 		w.spatial.buildingChunk[i] = -1
 	}
+	for i in 0..<DECORATION_CAPACITY {
+		w.spatial.decorationNext[i] = -1
+		w.spatial.decorationPrev[i] = -1
+		w.spatial.decorationChunk[i] = -1
+	}
 	return true
 }
 
 SpatialIndexDeinit :: proc(w: ^World) {
 	delete(w.spatial.unitHead)
 	delete(w.spatial.buildingHead)
+	delete(w.spatial.decorationHead)
 }
 
 SpatialChunkIndex :: proc(w: ^World, x, y: int) -> int {
@@ -134,6 +146,39 @@ SpatialBuildingRemove :: proc(w: ^World, building_slot: int) {
 	}
 	w.spatial.buildingNext[building_slot] = -1
 	w.spatial.buildingChunk[building_slot] = -1
+}
+
+// Decorations are static, so they are linked by their base tile and are never
+// moved between chunks.
+SpatialDecorationInsert :: proc(w: ^World, decoration_slot: int) {
+	chunk := SpatialChunkIndex(
+		w,
+		int(w.decorations.x[decoration_slot]),
+		int(w.decorations.y[decoration_slot]),
+	)
+	if chunk < 0 do return
+	head := w.spatial.decorationHead[chunk]
+	w.spatial.decorationNext[decoration_slot] = head
+	w.spatial.decorationPrev[decoration_slot] = -1
+	if head >= 0 do w.spatial.decorationPrev[head] = decoration_slot
+	w.spatial.decorationHead[chunk] = decoration_slot
+	w.spatial.decorationChunk[decoration_slot] = chunk
+}
+
+SpatialDecorationRemove :: proc(w: ^World, decoration_slot: int) {
+	chunk := w.spatial.decorationChunk[decoration_slot]
+	if chunk < 0 do return
+	previous := w.spatial.decorationPrev[decoration_slot]
+	next := w.spatial.decorationNext[decoration_slot]
+	if previous >= 0 {
+		w.spatial.decorationNext[previous] = next
+	} else {
+		w.spatial.decorationHead[chunk] = next
+	}
+	if next >= 0 do w.spatial.decorationPrev[next] = previous
+	w.spatial.decorationNext[decoration_slot] = -1
+	w.spatial.decorationPrev[decoration_slot] = -1
+	w.spatial.decorationChunk[decoration_slot] = -1
 }
 
 WorldUnitAtTile :: proc(w: ^World, x, y: int) -> bool {
