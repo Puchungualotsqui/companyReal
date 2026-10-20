@@ -20,7 +20,7 @@ main :: proc() {
 		WorldViewUpdate(world, &view, delta_time)
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.Color{38, 68, 91, 255})
-		WorldRender(world, view.renderer, view.camera)
+		WorldRender(world, &view.renderer, view.camera)
 		rl.EndDrawing()
 	}
 }

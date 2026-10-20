@@ -58,7 +58,7 @@ WorldGenerationSettingsDefault :: proc() -> WorldGenerationSettings {
 		seed = 1,
 		landThreshold = 0.08,
 		sandThreshold = 0.34,
-		biomeSize = 18,
+		biomeSize = 10,
 		islandCount = 85,
 		beachWidth = 2,
 		riverCount = 28,

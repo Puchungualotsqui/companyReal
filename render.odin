@@ -1,10 +1,24 @@
 package main
 
 import rl "vendor:raylib"
+import "core:math"
+import "core:slice"
+
+RenderItem :: struct {
+	base_y:  f32,
+	dest:    rl.Rectangle,
+	texture: rl.Texture2D,
+	flip_x:  bool,
+}
+
+RenderItemLess :: proc(a, b: RenderItem) -> bool {
+	return a.base_y < b.base_y
+}
 
 WorldRenderer :: struct {
-	terrainTexture: rl.Texture2D,
-	terrainRevision: u64,
+	terrain: TerrainRenderer,
+	sprites: SpriteSet,
+	items:   [dynamic]RenderItem,
 }
 
 WorldView :: struct {
@@ -15,23 +29,40 @@ WorldView :: struct {
 WorldViewInit :: proc(w: ^World) -> WorldView {
 	screen_width := f32(rl.GetScreenWidth())
 	screen_height := f32(rl.GetScreenHeight())
-	world_width := f32(w.maxX)
-	world_height := f32(w.maxY)
-	zoom := WorldCameraMinimumZoom(w, screen_width, screen_height)
-	if zoom <= 0 do zoom = 1
+	minimum_zoom := WorldCameraMinimumZoom(w, screen_width, screen_height)
+	zoom := WorldCameraDefaultZoom
+	if zoom < minimum_zoom do zoom = minimum_zoom
+	focus_x, focus_y := WorldCameraFocus(w)
 
 	return WorldView{
 		renderer = WorldRenderer{
-			terrainTexture = WorldCreateTerrainTexture(w),
-			terrainRevision = w.terrainRevision,
+			terrain = TerrainRendererInit(w),
+			sprites = SpriteSetInit(),
+			items = make([dynamic]RenderItem, 0, 2048),
 		},
 		camera = rl.Camera2D{
 			offset = rl.Vector2{screen_width*0.5, screen_height*0.5},
-			target = rl.Vector2{world_width*0.5, world_height*0.5},
+			target = rl.Vector2{focus_x, focus_y},
 			rotation = 0,
 			zoom = zoom,
 		},
 	}
+}
+
+// Sprites are authored at PIXELS_PER_TILE, so this zoom shows them 1:1.
+WorldCameraDefaultZoom : f32 : 16
+WorldCameraMaxZoom : f32 : 64
+
+WorldCameraFocus :: proc(w: ^World) -> (f32, f32) {
+	if w.kingdomUsed[0] && w.kingdoms[0].capitalSlot >= 0 {
+		town_slot := w.kingdoms[0].capitalSlot
+		if town_slot < TOWN_CAPACITY && w.kingdoms[0].townUsed[town_slot] {
+			town := w.kingdoms[0].towns[town_slot]
+			width, height := BuildingTileSize(TownHall{})
+			return f32(town.x)+f32(width)*0.5, f32(town.y)+f32(height)*0.5
+		}
+	}
+	return f32(w.maxX)*0.5, f32(w.maxY)*0.5
 }
 
 WorldViewUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32) {
@@ -41,32 +72,13 @@ WorldViewUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32) {
 
 
 WorldRendererUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
-	if renderer.terrainRevision == w.terrainRevision do return
-
-	rl.UnloadTexture(renderer.terrainTexture)
-	renderer.terrainTexture = WorldCreateTerrainTexture(w)
-	renderer.terrainRevision = w.terrainRevision
+	TerrainRendererUpdate(w, &renderer.terrain)
 }
 
 WorldRendererDeinit :: proc(renderer: ^WorldRenderer) {
-	rl.UnloadTexture(renderer.terrainTexture)
-}
-
-WorldCreateTerrainTexture :: proc(w: ^World) -> rl.Texture2D {
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	image := rl.GenImageColor(i32(world_width), i32(world_height), rl.BLACK)
-	defer rl.UnloadImage(image)
-
-	for x in 0..<world_width {
-		for y in 0..<world_height {
-			rl.ImageDrawPixel(&image, i32(x), i32(y), WorldTileColor(w.ground[x][y].type))
-		}
-	}
-
-	texture := rl.LoadTextureFromImage(image)
-	rl.SetTextureFilter(texture, .POINT)
-	return texture
+	TerrainRendererDeinit(&renderer.terrain)
+	SpriteSetDeinit(&renderer.sprites)
+	delete(renderer.items)
 }
 
 
@@ -107,7 +119,7 @@ WorldCameraUpdate :: proc(w: ^World, camera: ^rl.Camera2D, delta_time: f32) {
 
 		minimum_zoom := WorldCameraMinimumZoom(w, screen_width, screen_height)
 		if camera.zoom < minimum_zoom do camera.zoom = minimum_zoom
-		if camera.zoom > 32 do camera.zoom = 32
+		if camera.zoom > WorldCameraMaxZoom do camera.zoom = WorldCameraMaxZoom
 
 		mouse_world_after := rl.Vector2{
 			(mouse_screen.x-camera.offset.x)/camera.zoom + camera.target.x,
@@ -126,7 +138,7 @@ WorldCameraMinimumZoom :: proc(w: ^World, screen_width, screen_height: f32) -> f
 }
 
 
-WorldRender :: proc(w: ^World, renderer: WorldRenderer, camera: rl.Camera2D) {
+WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
 	if world_width <= 0 || world_height <= 0 do return
@@ -139,20 +151,38 @@ WorldRender :: proc(w: ^World, renderer: WorldRenderer, camera: rl.Camera2D) {
 	last_copy_x := WorldFloor((camera.target.x+half_view_width)/f32(world_width))
 	first_copy_y := WorldFloor((camera.target.y-half_view_height)/f32(world_height))
 	last_copy_y := WorldFloor((camera.target.y+half_view_height)/f32(world_height))
-	source := rl.Rectangle{0, 0, f32(world_width), f32(world_height)}
 
 	rl.BeginMode2D(camera)
-	for copy_x in first_copy_x ..< last_copy_x+1 {
-		for copy_y in first_copy_y ..< last_copy_y+1 {
-			destination := rl.Rectangle{
-				x = f32(copy_x*world_width),
-				y = f32(copy_y*world_height),
-				width = f32(world_width),
-				height = f32(world_height),
-			}
-			rl.DrawTexturePro(renderer.terrainTexture, source, destination, rl.Vector2{0, 0}, 0, rl.WHITE)
-		}
+	if camera.zoom >= TERRAIN_CHUNK_MIN_ZOOM {
+		TerrainRenderChunks(
+			w,
+			&renderer.terrain,
+			camera,
+			first_copy_x,
+			last_copy_x,
+			first_copy_y,
+			last_copy_y,
+		)
+	} else {
+		TerrainRenderLow(
+			&renderer.terrain,
+			f32(world_width),
+			f32(world_height),
+			first_copy_x,
+			last_copy_x,
+			first_copy_y,
+			last_copy_y,
+		)
 	}
+	WorldRenderSprites(
+		w,
+		renderer,
+		camera,
+		first_copy_x,
+		last_copy_x,
+		first_copy_y,
+		last_copy_y,
+	)
 	rl.EndMode2D()
 
 	night_amount := WorldNightAmount(w)
@@ -162,32 +192,118 @@ WorldRender :: proc(w: ^World, renderer: WorldRenderer, camera: rl.Camera2D) {
 	}
 }
 
+WorldRenderSprites :: proc(
+	w: ^World,
+	renderer: ^WorldRenderer,
+	camera: rl.Camera2D,
+	first_copy_x, last_copy_x, first_copy_y, last_copy_y: int,
+) {
+	world_width := f32(w.maxX)
+	world_height := f32(w.maxY)
+	screen_width := f32(rl.GetScreenWidth())
+	screen_height := f32(rl.GetScreenHeight())
+	half_view_width := screen_width / (2*camera.zoom)
+	half_view_height := screen_height / (2*camera.zoom)
+	view_min_x := camera.target.x-half_view_width
+	view_max_x := camera.target.x+half_view_width
+	view_min_y := camera.target.y-half_view_height
+	view_max_y := camera.target.y+half_view_height
+
+	for copy_x in first_copy_x ..< last_copy_x+1 {
+		offset_x := f32(copy_x)*world_width
+		for copy_y in first_copy_y ..< last_copy_y+1 {
+			offset_y := f32(copy_y)*world_height
+			min_x := view_min_x-offset_x
+			max_x := view_max_x-offset_x
+			min_y := view_min_y-offset_y
+			max_y := view_max_y-offset_y
+
+			clear(&renderer.items)
+
+			for building_slot in 0 ..< BUILDING_CAPACITY {
+				if !w.buildingUsed[building_slot] do continue
+				building_width, building_height := BuildingTileSize(w.buildings[building_slot].type)
+				building_x := f32(w.buildings.x[building_slot])
+				building_y := f32(w.buildings.y[building_slot])
+				width := f32(building_width)
+				height := f32(building_height)
+				if building_x+width < min_x || building_x > max_x ||
+					building_y+height < min_y || building_y > max_y {
+					continue
+				}
+
+				faction := FactionSpriteIndex(w.buildings.kingdom[building_slot])
+				kind := BuildingKindOf(w.buildings[building_slot].type)
+				base_y := building_y+height
+				if BuildingWalkable(w.buildings[building_slot].type) do base_y = -1e9
+				append(&renderer.items, RenderItem{
+					base_y = base_y,
+					dest = rl.Rectangle{offset_x+building_x, offset_y+building_y, width, height},
+					texture = renderer.sprites.building[faction][kind],
+				})
+			}
+
+			for unit_slot in 0 ..< UNIT_CAPACITY {
+				if !w.unitUsed[unit_slot] do continue
+				if w.units[unit_slot].type == nil do continue
+				if state, ok := w.units[unit_slot].state.(StateConverting); ok && state.inside {
+					continue
+				}
+
+				kind := UnitKindOf(w.units[unit_slot].type)
+				scale := UnitSpriteScale(kind)
+				unit_x := w.units[unit_slot].x
+				unit_y := w.units[unit_slot].y
+				if unit_x+scale+1 < min_x || unit_x-1 > max_x ||
+					unit_y+1 < min_y || unit_y-scale-1 > max_y {
+					continue
+				}
+
+				bob: f32 = 0
+				switch state in w.units[unit_slot].state {
+				case StatePacific:
+					if state != .Sleeping {
+						bob = math.sin(f32(unit_slot)*1.7+f32(w.simulationTime)*2.4)*0.03
+					}
+				case StateWarrior, StateConverting:
+					bob = math.sin(f32(unit_slot)*1.7+f32(w.simulationTime)*2.4)*0.03
+				}
+
+				faction := FactionSpriteIndex(w.units[unit_slot].kingdome)
+				flip_x := false
+				if w.units[unit_slot].pathReady {
+					delta_x := WorldShortestWrappedDelta(
+						f32(w.units[unit_slot].pathTargetX)+0.5-unit_x,
+						f32(w.maxX),
+					)
+					flip_x = delta_x < -0.5
+				}
+				append(&renderer.items, RenderItem{
+					base_y = unit_y+0.5,
+					dest = rl.Rectangle{
+						x = offset_x+unit_x-scale*0.5,
+						y = offset_y+unit_y+0.5-scale+bob,
+						width = scale,
+						height = scale,
+					},
+					texture = renderer.sprites.unit[faction][kind],
+					flip_x = flip_x,
+				})
+			}
+
+			slice.sort_by(renderer.items[:], RenderItemLess)
+			for item in renderer.items {
+				if item.texture.id == 0 do continue
+				source := rl.Rectangle{0, 0, f32(item.texture.width), f32(item.texture.height)}
+				if item.flip_x do source.width = -source.width
+				rl.DrawTexturePro(item.texture, source, item.dest, rl.Vector2{0, 0}, 0, rl.WHITE)
+			}
+		}
+	}
+}
+
 WorldFloor :: proc(value: f32) -> int {
 	result := int(value)
 	if f32(result) > value do result -= 1
 	return result
-}
-
-WorldTileColor :: proc(tile_type: TileType) -> rl.Color {
-	switch tile_type {
-	case .Water:
-		return rl.Color{48, 83, 112, 255}
-	case .FreshWater:
-		return rl.Color{69, 130, 153, 255}
-	case .River:
-		return rl.Color{78, 133, 155, 255}
-	case .Ground:
-		return rl.Color{100, 128, 88, 255}
-	case .FertileGround:
-		return rl.Color{126, 151, 88, 255}
-	case .Sand:
-		return rl.Color{215, 194, 140, 255}
-	case .Forest:
-		return rl.Color{52, 100, 66, 255}
-	case .Hill:
-		return rl.Color{126, 131, 110, 255}
-	case .Desert:
-		return rl.Color{191, 154, 95, 255}
-	}
-	unreachable()
 }

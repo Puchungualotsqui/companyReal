@@ -120,6 +120,8 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.units.y[i] = y
 	w.units.kingdome[i] = kingdomSlot
 	w.units.town[i] = townSlot
+	// UnitTypeInit requires the slot to be marked used.
+	w.unitUsed[i] = true
 	UnitTypeInit(w, i, type)
 	w.units[i].sleepOffsetHours = WorldNoiseHash(i, kingdomSlot+townSlot*101, u64(i)+401)-0.5
 	w.units[i].effects = [UnitEffects]bool{
@@ -138,7 +140,6 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 
 	w.kingdoms[kingdomSlot].towns[townSlot].citizens += 1
 
-	w.unitUsed[i] = true
 	SpatialUnitInsert(w, i)
 
 	return i, true
