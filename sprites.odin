@@ -278,6 +278,43 @@ art_to_texture :: proc(art: Art) -> rl.Texture2D {
 	return texture
 }
 
+// Sparse weathering so large flat surfaces (stone, timber, roof shingles) pick up
+// the same grain as the ground instead of reading as clean vector shapes.
+art_grain :: proc(art: ^Art, seed: u64) {
+	for y in 0..<art.height {
+		for x in 0..<art.width {
+			color := rl.GetImageColor(art.image, i32(x), i32(y))
+			if color[3] < 200 do continue
+			value := WorldNoiseHash(x, y, seed)
+			if value > 0.08 do continue
+			factor: f32 = 0.9
+			if WorldNoiseHash(y, x, seed+1) < 0.5 do factor = 1.1
+			if y > art.height-art.height/6 && WorldNoiseHash(x, y, seed+2) < 0.35 do factor = 0.84
+			art_pixel(art, x, y, c_shade(color, factor))
+		}
+	}
+}
+
+create_shadow_texture :: proc() -> rl.Texture2D {
+	width := 64
+	height := 32
+	image := rl.GenImageColor(i32(width), i32(height), C_CLEAR)
+	for y in 0..<height {
+		for x in 0..<width {
+			nx := (f32(x)+0.5)/f32(width)*2-1
+			ny := (f32(y)+0.5)/f32(height)*2-1
+			distance := nx*nx+ny*ny
+			if distance >= 1 do continue
+			alpha := u8((1-distance)*(1-distance)*120)
+			rl.ImageDrawPixel(&image, i32(x), i32(y), rl.Color{18, 16, 24, alpha})
+		}
+	}
+	texture := rl.LoadTextureFromImage(image)
+	rl.UnloadImage(image)
+	rl.SetTextureFilter(texture, .BILINEAR)
+	return texture
+}
+
 draw_shadow :: proc(art: ^Art, cx, cy, rx, ry: int) {
 	art_ellipse(art, cx, cy, rx, ry, C_SHADOW)
 }
@@ -1080,14 +1117,17 @@ draw_unit_rogue :: proc(art: ^Art, accent: rl.Color) {
 SpriteSet :: struct {
 	building: [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
 	unit:     [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
+	shadow:   rl.Texture2D,
 }
 
 SpriteSetInit :: proc() -> SpriteSet {
 	set: SpriteSet
+	set.shadow = create_shadow_texture()
 	for faction in 0 ..< SPRITE_FACTION_COUNT {
 		accent := FactionColor(faction)
 		for kind in ALL_BUILDING_KINDS {
 			art := draw_building_sprite(kind, accent)
+			art_grain(&art, u64(kind)+1)
 			set.building[faction][kind] = art_to_texture(art)
 			rl.UnloadImage(art.image)
 		}
@@ -1101,6 +1141,7 @@ SpriteSetInit :: proc() -> SpriteSet {
 }
 
 SpriteSetDeinit :: proc(set: ^SpriteSet) {
+	if set.shadow.id != 0 do rl.UnloadTexture(set.shadow)
 	for faction in 0 ..< SPRITE_FACTION_COUNT {
 		for kind in ALL_BUILDING_KINDS {
 			if set.building[faction][kind].id != 0 {

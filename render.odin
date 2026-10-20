@@ -11,6 +11,11 @@ RenderItem :: struct {
 	flip_x:  bool,
 }
 
+RenderShadow :: struct {
+	dest:  rl.Rectangle,
+	alpha: u8,
+}
+
 RenderItemLess :: proc(a, b: RenderItem) -> bool {
 	return a.base_y < b.base_y
 }
@@ -19,6 +24,7 @@ WorldRenderer :: struct {
 	terrain: TerrainRenderer,
 	sprites: SpriteSet,
 	items:   [dynamic]RenderItem,
+	shadows: [dynamic]RenderShadow,
 }
 
 WorldView :: struct {
@@ -39,6 +45,7 @@ WorldViewInit :: proc(w: ^World) -> WorldView {
 			terrain = TerrainRendererInit(w),
 			sprites = SpriteSetInit(),
 			items = make([dynamic]RenderItem, 0, 2048),
+			shadows = make([dynamic]RenderShadow, 0, 512),
 		},
 		camera = rl.Camera2D{
 			offset = rl.Vector2{screen_width*0.5, screen_height*0.5},
@@ -79,6 +86,7 @@ WorldRendererDeinit :: proc(renderer: ^WorldRenderer) {
 	TerrainRendererDeinit(&renderer.terrain)
 	SpriteSetDeinit(&renderer.sprites)
 	delete(renderer.items)
+	delete(renderer.shadows)
 }
 
 
@@ -208,6 +216,9 @@ WorldRenderSprites :: proc(
 	view_max_x := camera.target.x+half_view_width
 	view_min_y := camera.target.y-half_view_height
 	view_max_y := camera.target.y+half_view_height
+	interpolation := clamp(w.simulationAccumulator/TOWN_SIMULATION_STEP, 0, 1)
+	bob_time := w.simulationTime+w.simulationAccumulator
+	shadow_source := rl.Rectangle{0, 0, f32(renderer.sprites.shadow.width), f32(renderer.sprites.shadow.height)}
 
 	for copy_x in first_copy_x ..< last_copy_x+1 {
 		offset_x := f32(copy_x)*world_width
@@ -219,6 +230,7 @@ WorldRenderSprites :: proc(
 			max_y := view_max_y-offset_y
 
 			clear(&renderer.items)
+			clear(&renderer.shadows)
 
 			for building_slot in 0 ..< BUILDING_CAPACITY {
 				if !w.buildingUsed[building_slot] do continue
@@ -227,15 +239,38 @@ WorldRenderSprites :: proc(
 				building_y := f32(w.buildings.y[building_slot])
 				width := f32(building_width)
 				height := f32(building_height)
+				kind := BuildingKindOf(w.buildings[building_slot].type)
 				if building_x+width < min_x || building_x > max_x ||
 					building_y+height < min_y || building_y > max_y {
 					continue
 				}
 
-				faction := FactionSpriteIndex(w.buildings.kingdom[building_slot])
-				kind := BuildingKindOf(w.buildings[building_slot].type)
+				faction := FactionSpriteIndex(w.buildings[building_slot].kingdom)
 				base_y := building_y+height
-				if BuildingWalkable(w.buildings[building_slot].type) do base_y = -1e9
+				if BuildingWalkable(w.buildings[building_slot].type) {
+					base_y = -1e9
+				} else {
+					shadow_height := clamp(height*0.6, 0.7, 3.2)
+					append(&renderer.shadows, RenderShadow{
+						dest = rl.Rectangle{
+							x = offset_x+building_x-0.55,
+							y = offset_y+building_y+height-shadow_height*0.4,
+							width = width+1.1,
+							height = shadow_height,
+						},
+						alpha = 150,
+					})
+					contact_height := clamp(height*0.22, 0.35, 0.9)
+					append(&renderer.shadows, RenderShadow{
+						dest = rl.Rectangle{
+							x = offset_x+building_x-0.2,
+							y = offset_y+building_y+height-contact_height*0.55,
+							width = width+0.4,
+							height = contact_height,
+						},
+						alpha = 230,
+					})
+				}
 				append(&renderer.items, RenderItem{
 					base_y = base_y,
 					dest = rl.Rectangle{offset_x+building_x, offset_y+building_y, width, height},
@@ -254,6 +289,26 @@ WorldRenderSprites :: proc(
 				scale := UnitSpriteScale(kind)
 				unit_x := w.units[unit_slot].x
 				unit_y := w.units[unit_slot].y
+				if interpolation > 0 {
+					unit_x = WorldWrapPosition(
+						w.units[unit_slot].previousX+
+						WorldShortestWrappedDelta(
+							w.units[unit_slot].x-w.units[unit_slot].previousX,
+							world_width,
+						)*
+							interpolation,
+						world_width,
+					)
+					unit_y = WorldWrapPosition(
+						w.units[unit_slot].previousY+
+						WorldShortestWrappedDelta(
+							w.units[unit_slot].y-w.units[unit_slot].previousY,
+							world_height,
+						)*
+							interpolation,
+						world_height,
+					)
+				}
 				if unit_x+scale+1 < min_x || unit_x-1 > max_x ||
 					unit_y+1 < min_y || unit_y-scale-1 > max_y {
 					continue
@@ -263,10 +318,10 @@ WorldRenderSprites :: proc(
 				switch state in w.units[unit_slot].state {
 				case StatePacific:
 					if state != .Sleeping {
-						bob = math.sin(f32(unit_slot)*1.7+f32(w.simulationTime)*2.4)*0.03
+						bob = math.sin(f32(unit_slot)*1.7+bob_time*2.4)*0.03
 					}
 				case StateWarrior, StateConverting:
-					bob = math.sin(f32(unit_slot)*1.7+f32(w.simulationTime)*2.4)*0.03
+					bob = math.sin(f32(unit_slot)*1.7+bob_time*2.4)*0.03
 				}
 
 				faction := FactionSpriteIndex(w.units[unit_slot].kingdome)
@@ -292,6 +347,18 @@ WorldRenderSprites :: proc(
 			}
 
 			slice.sort_by(renderer.items[:], RenderItemLess)
+			if renderer.sprites.shadow.id != 0 {
+				for shadow in renderer.shadows {
+					rl.DrawTexturePro(
+						renderer.sprites.shadow,
+						shadow_source,
+						shadow.dest,
+						rl.Vector2{0, 0},
+						0,
+						rl.Color{255, 255, 255, shadow.alpha},
+					)
+				}
+			}
 			for item in renderer.items {
 				if item.texture.id == 0 do continue
 				source := rl.Rectangle{0, 0, f32(item.texture.width), f32(item.texture.height)}

@@ -2,3 +2,13 @@ tools/
 
 companiaReal.exe
 companiaReal
+art_test.exe
+build_log.txt
+out.txt
+shot16.png
+shot64.png
+companiaReal.pdb
+base_test.exe
+run_test.exe
+run_out.txt
+run_err.txt

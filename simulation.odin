@@ -42,6 +42,12 @@ WorldTownExists :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
 }
 
 WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
+	for unit_slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unit_slot] do continue
+		w.units.previousX[unit_slot] = w.units.x[unit_slot]
+		w.units.previousY[unit_slot] = w.units.y[unit_slot]
+	}
+
 	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom_slot] do continue
 		for town_slot in 0..<TOWN_CAPACITY {

@@ -254,6 +254,7 @@ BuildingIsTraining :: proc(kind: BuildingKind) -> bool {
 
 Unit :: struct {
 	x, y: f32,
+	previousX, previousY: f32,
 	health: f32,
 	cooldown: f32,
 	type: UnitType,
@@ -512,23 +513,23 @@ UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 UnitDefaultSpeed :: proc(type: UnitType) -> f32 {
 	switch _ in type {
 	case Villager:
-		return 12
+		return 3
 	case Builder, WaterCollector, Farmer:
-		return 5
+		return 2.5
 	case Knight:
-		return 10
+		return 3.5
 	case Archer:
-		return 9
+		return 3.2
 	case Mage:
-		return 7
+		return 2.8
 	case Giant:
-		return 7.5
+		return 2
 	case Turtle:
-		return 6
+		return 2
 	case Catapult:
-		return 4
+		return 1.5
 	case Rogue:
-		return 13
+		return 4
 	}
 	unreachable()
 }

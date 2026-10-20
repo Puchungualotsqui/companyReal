@@ -118,6 +118,8 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	}
 	w.units.x[i] = x
 	w.units.y[i] = y
+	w.units.previousX[i] = x
+	w.units.previousY[i] = y
 	w.units.kingdome[i] = kingdomSlot
 	w.units.town[i] = townSlot
 	// UnitTypeInit requires the slot to be marked used.
