@@ -8,6 +8,7 @@ Kingdom :: struct {
 	capitalSlot: int,
 	towns: #soa [TOWN_CAPACITY]Town,
 	townUsed: [TOWN_CAPACITY]bool,
+	kingdomWar: [KINGDOMS_CAPACITY]bool,
 }
 
 Town :: struct {
@@ -23,6 +24,8 @@ Town :: struct {
 	waterAccessTerrainRevision: u64,
 	waterAccessCached: bool,
 	foodShortage, waterShortage: f32,
+	attackingTowns: [KINGDOMS_CAPACITY][TOWN_CAPACITY]bool,
+	defendingTowns: [TOWN_CAPACITY]bool,
 }
 
 TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
@@ -46,6 +49,22 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 	}
 	w.kingdoms[kingdomSlot].townUsed[i] = true
 	return i, true
+}
+
+TownStartAttack :: proc(w: ^World, kingdomSlotA, townSlotA, kingdomSlotB, townSlotB: int) {
+	KingdomDeclareWar(w, kingdomSlotA, kingdomSlotB)
+
+	w.kingdoms[kingdomSlotA].towns[townSlotA].attackingTowns[kingdomSlotB][townSlotB] = true
+	w.kingdoms[kingdomSlotB].towns[townSlotB].attackingTowns[kingdomSlotA][townSlotA] = true
+}
+
+TownStartDefending :: proc(w: ^World, kingdomSlot, townSlotA, townSlotB: int) {
+	w.kingdoms[kingdomSlot].towns[townSlotA].defendingTowns[townSlotB] = true
+}
+
+KingdomDeclareWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) {
+	w.kingdoms[kingdomSlotA].kingdomWar[kingdomSlotB] = true
+	w.kingdoms[kingdomSlotB].kingdomWar[kingdomSlotA] = true
 }
 
 KingdomChooseTownForUnit :: proc(w: ^World, kingdom_slot, unit_slot, destroyed_building_slot: int) -> int {
