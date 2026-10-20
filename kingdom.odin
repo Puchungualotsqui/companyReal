@@ -3,6 +3,11 @@ package main
 import "core:math"
 
 TOWN_CAPACITY :: 100
+TOWN_WARRIOR_ORDERS_CAPACITY :: 16
+
+// Share of a town's warriors that always stays home to defend it. The rest
+// is split between the town's attack and defend orders.
+TOWN_GARRISON_RATIO :: 0.2
 
 Kingdom :: struct {
 	capitalSlot: int,
@@ -11,8 +16,22 @@ Kingdom :: struct {
 	kingdomWar: [KINGDOMS_CAPACITY]bool,
 }
 
+TownOrder :: union {
+	TownAttackOrder,
+	TownDefendOrder,
+}
+
+TownAttackOrder :: struct {
+	kingdom, town: int,
+}
+
+TownDefendOrder :: struct {
+	town: int,
+}
+
 Town :: struct {
 	x, y: int,
+	hallSlot: int,
 	citizens: int,
 	wood: f32,
 	growthTimer, constructionProgress: f32,
@@ -24,8 +43,13 @@ Town :: struct {
 	waterAccessTerrainRevision: u64,
 	waterAccessCached: bool,
 	foodShortage, waterShortage: f32,
-	attackingTowns: [KINGDOMS_CAPACITY][TOWN_CAPACITY]bool,
-	defendingTowns: [TOWN_CAPACITY]bool,
+	attackOrders: [KINGDOMS_CAPACITY][TOWN_CAPACITY]bool,
+	defendOrders: [TOWN_CAPACITY]bool,
+	attackedBy: [KINGDOMS_CAPACITY][TOWN_CAPACITY]bool,
+	defendedBy: [TOWN_CAPACITY]bool,
+	orders: [TOWN_WARRIOR_ORDERS_CAPACITY]TownOrder,
+	orderCount: int,
+	orderRevision: u64,
 }
 
 TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
@@ -44,6 +68,7 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 	w.kingdoms[kingdomSlot].towns[i] = Town{
 		x = x,
 		y = y,
+		hallSlot = bId,
 		citizens = 0,
 		wood = 35,
 	}
@@ -51,20 +76,213 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 	return i, true
 }
 
+// Player order: attacker town -> attack -> any town of another kingdom.
+// Declaring the order is also the declaration of war.
 TownStartAttack :: proc(w: ^World, kingdomSlotA, townSlotA, kingdomSlotB, townSlotB: int) {
-	KingdomDeclareWar(w, kingdomSlotA, kingdomSlotB)
+	if kingdomSlotA == kingdomSlotB do return
+	if !WorldTownExists(w, kingdomSlotA, townSlotA) || !WorldTownExists(w, kingdomSlotB, townSlotB) {
+		return
+	}
+	if w.kingdoms[kingdomSlotA].towns[townSlotA].attackOrders[kingdomSlotB][townSlotB] do return
 
-	w.kingdoms[kingdomSlotA].towns[townSlotA].attackingTowns[kingdomSlotB][townSlotB] = true
-	w.kingdoms[kingdomSlotB].towns[townSlotB].attackingTowns[kingdomSlotA][townSlotA] = true
+	KingdomDeclareWar(w, kingdomSlotA, kingdomSlotB)
+	w.kingdoms[kingdomSlotA].towns[townSlotA].attackOrders[kingdomSlotB][townSlotB] = true
+	w.kingdoms[kingdomSlotB].towns[townSlotB].attackedBy[kingdomSlotA][townSlotA] = true
+	TownOrdersRebuild(w, kingdomSlotA, townSlotA)
 }
 
-TownStartDefending :: proc(w: ^World, kingdomSlot, townSlotA, townSlotB: int) {
-	w.kingdoms[kingdomSlot].towns[townSlotA].defendingTowns[townSlotB] = true
+// Sends a share of the defender town's warriors to patrol the protected town.
+// The defender always keeps the rest home.
+TownStartDefending :: proc(w: ^World, kingdomSlot, defenderTownSlot, protectedTownSlot: int) {
+	if defenderTownSlot == protectedTownSlot do return
+	if !WorldTownExists(w, kingdomSlot, defenderTownSlot) ||
+		!WorldTownExists(w, kingdomSlot, protectedTownSlot) {
+		return
+	}
+	if w.kingdoms[kingdomSlot].towns[defenderTownSlot].defendOrders[protectedTownSlot] do return
+
+	w.kingdoms[kingdomSlot].towns[defenderTownSlot].defendOrders[protectedTownSlot] = true
+	w.kingdoms[kingdomSlot].towns[protectedTownSlot].defendedBy[defenderTownSlot] = true
+	TownOrdersRebuild(w, kingdomSlot, defenderTownSlot)
+}
+
+TownStopAttack :: proc(w: ^World, kingdomSlotA, townSlotA, kingdomSlotB, townSlotB: int) {
+	if !WorldTownExists(w, kingdomSlotA, townSlotA) do return
+	if !w.kingdoms[kingdomSlotA].towns[townSlotA].attackOrders[kingdomSlotB][townSlotB] do return
+
+	w.kingdoms[kingdomSlotA].towns[townSlotA].attackOrders[kingdomSlotB][townSlotB] = false
+	if WorldTownExists(w, kingdomSlotB, townSlotB) {
+		w.kingdoms[kingdomSlotB].towns[townSlotB].attackedBy[kingdomSlotA][townSlotA] = false
+	}
+	TownOrdersRebuild(w, kingdomSlotA, townSlotA)
+}
+
+TownStopDefending :: proc(w: ^World, kingdomSlot, defenderTownSlot, protectedTownSlot: int) {
+	if !WorldTownExists(w, kingdomSlot, defenderTownSlot) do return
+	if !w.kingdoms[kingdomSlot].towns[defenderTownSlot].defendOrders[protectedTownSlot] do return
+
+	w.kingdoms[kingdomSlot].towns[defenderTownSlot].defendOrders[protectedTownSlot] = false
+	if WorldTownExists(w, kingdomSlot, protectedTownSlot) {
+		w.kingdoms[kingdomSlot].towns[protectedTownSlot].defendedBy[defenderTownSlot] = false
+	}
+	TownOrdersRebuild(w, kingdomSlot, defenderTownSlot)
 }
 
 KingdomDeclareWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) {
+	if kingdomSlotA < 0 || kingdomSlotA >= KINGDOMS_CAPACITY ||
+		kingdomSlotB < 0 || kingdomSlotB >= KINGDOMS_CAPACITY || kingdomSlotA == kingdomSlotB {
+		return
+	}
 	w.kingdoms[kingdomSlotA].kingdomWar[kingdomSlotB] = true
 	w.kingdoms[kingdomSlotB].kingdomWar[kingdomSlotA] = true
+}
+
+KingdomAtWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) -> bool {
+	if kingdomSlotA < 0 || kingdomSlotA >= KINGDOMS_CAPACITY ||
+		kingdomSlotB < 0 || kingdomSlotB >= KINGDOMS_CAPACITY || kingdomSlotA == kingdomSlotB {
+		return false
+	}
+	return w.kingdomUsed[kingdomSlotA] && w.kingdomUsed[kingdomSlotB] &&
+		w.kingdoms[kingdomSlotA].kingdomWar[kingdomSlotB]
+}
+
+// Turns the sparse order matrices into a compact list the warrior update can
+// index in constant time. Called only when orders change, never per tick.
+TownOrdersRebuild :: proc(w: ^World, kingdom_slot, town_slot: int) {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	count := 0
+	for kingdom_b in 0..<KINGDOMS_CAPACITY {
+		for town_b in 0..<TOWN_CAPACITY {
+			if !town.attackOrders[kingdom_b][town_b] do continue
+			if !WorldTownExists(w, kingdom_b, town_b) || !KingdomAtWar(w, kingdom_slot, kingdom_b) {
+				if WorldTownExists(w, kingdom_b, town_b) {
+					w.kingdoms[kingdom_b].towns[town_b].attackedBy[kingdom_slot][town_slot] = false
+				}
+				town.attackOrders[kingdom_b][town_b] = false
+				continue
+			}
+			if count >= TOWN_WARRIOR_ORDERS_CAPACITY {
+				w.kingdoms[kingdom_b].towns[town_b].attackedBy[kingdom_slot][town_slot] = false
+				town.attackOrders[kingdom_b][town_b] = false
+				continue
+			}
+			town.orders[count] = TownAttackOrder{kingdom = kingdom_b, town = town_b}
+			count += 1
+		}
+	}
+	for town_b in 0..<TOWN_CAPACITY {
+		if !town.defendOrders[town_b] do continue
+		if town_b == town_slot || !WorldTownExists(w, kingdom_slot, town_b) {
+			if WorldTownExists(w, kingdom_slot, town_b) {
+				w.kingdoms[kingdom_slot].towns[town_b].defendedBy[town_slot] = false
+			}
+			town.defendOrders[town_b] = false
+			continue
+		}
+		if count >= TOWN_WARRIOR_ORDERS_CAPACITY {
+			w.kingdoms[kingdom_slot].towns[town_b].defendedBy[town_slot] = false
+			town.defendOrders[town_b] = false
+			continue
+		}
+		town.orders[count] = TownDefendOrder{town = town_b}
+		count += 1
+	}
+	town.orderCount = count
+	town.orderRevision += 1
+}
+
+// Removes every order that mentions a town that no longer exists and clears
+// the mirrors on both sides so no stale target survives.
+TownOrdersClear :: proc(w: ^World, kingdom_slot, town_slot: int) {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+
+	for kingdom_b in 0..<KINGDOMS_CAPACITY {
+		for town_b in 0..<TOWN_CAPACITY {
+			if !town.attackOrders[kingdom_b][town_b] do continue
+			town.attackOrders[kingdom_b][town_b] = false
+			if WorldTownExists(w, kingdom_b, town_b) {
+				w.kingdoms[kingdom_b].towns[town_b].attackedBy[kingdom_slot][town_slot] = false
+			}
+		}
+	}
+	for kingdom_a in 0..<KINGDOMS_CAPACITY {
+		for town_a in 0..<TOWN_CAPACITY {
+			if !town.attackedBy[kingdom_a][town_a] do continue
+			town.attackedBy[kingdom_a][town_a] = false
+			if WorldTownExists(w, kingdom_a, town_a) {
+				w.kingdoms[kingdom_a].towns[town_a].attackOrders[kingdom_slot][town_slot] = false
+				TownOrdersRebuild(w, kingdom_a, town_a)
+			}
+		}
+	}
+
+	for town_b in 0..<TOWN_CAPACITY {
+		if !town.defendOrders[town_b] do continue
+		town.defendOrders[town_b] = false
+		if WorldTownExists(w, kingdom_slot, town_b) {
+			w.kingdoms[kingdom_slot].towns[town_b].defendedBy[town_slot] = false
+		}
+	}
+	for town_a in 0..<TOWN_CAPACITY {
+		if !town.defendedBy[town_a] do continue
+		town.defendedBy[town_a] = false
+		if WorldTownExists(w, kingdom_slot, town_a) {
+			w.kingdoms[kingdom_slot].towns[town_a].defendOrders[town_slot] = false
+			TownOrdersRebuild(w, kingdom_slot, town_a)
+		}
+	}
+
+	town.orderCount = 0
+	town.orderRevision += 1
+}
+
+KingdomEndWar :: proc(w: ^World, kingdom_slot: int) {
+	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
+		return
+	}
+
+	for town_slot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
+		TownOrdersClear(w, kingdom_slot, town_slot)
+	}
+
+	for other in 0..<KINGDOMS_CAPACITY {
+		w.kingdoms[kingdom_slot].kingdomWar[other] = false
+		if other == kingdom_slot do continue
+		w.kingdoms[other].kingdomWar[kingdom_slot] = false
+		if !w.kingdomUsed[other] do continue
+		for town_slot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[other].townUsed[town_slot] do continue
+			town := &w.kingdoms[other].towns[town_slot]
+			changed := false
+			for town_b in 0..<TOWN_CAPACITY {
+				if town.attackOrders[kingdom_slot][town_b] {
+					town.attackOrders[kingdom_slot][town_b] = false
+					changed = true
+				}
+				if town.attackedBy[kingdom_slot][town_b] {
+					town.attackedBy[kingdom_slot][town_b] = false
+				}
+			}
+			if changed do TownOrdersRebuild(w, other, town_slot)
+		}
+	}
+	w.kingdoms[kingdom_slot].kingdomWar[kingdom_slot] = false
+}
+
+TownHallSlot :: proc(w: ^World, kingdom_slot, town_slot: int) -> int {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return -1
+	slot := w.kingdoms[kingdom_slot].towns[town_slot].hallSlot
+	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] do return -1
+	switch _ in w.buildings[slot].type {
+	case TownHall:
+		return slot
+	case Wall, Home, Farmland:
+		return -1
+	}
+	return -1
 }
 
 KingdomChooseTownForUnit :: proc(w: ^World, kingdom_slot, unit_slot, destroyed_building_slot: int) -> int {
@@ -106,6 +324,8 @@ KingdomAbsorb :: proc(w: ^World, defeated, destroyer, capital_town, capital_buil
 		defeated == destroyer {
 		return false
 	}
+
+	KingdomEndWar(w, defeated)
 
 	town_mapping: [TOWN_CAPACITY]int
 	reserved: [TOWN_CAPACITY]bool
@@ -149,6 +369,7 @@ KingdomAbsorb :: proc(w: ^World, defeated, destroyer, capital_town, capital_buil
 		} else {
 			w.units[unit_slot].town = -1
 		}
+		UnitWarriorReset(w, unit_slot)
 	}
 
 	for building_slot in 0..<BUILDING_CAPACITY {

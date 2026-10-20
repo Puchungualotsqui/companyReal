@@ -192,15 +192,7 @@ TownSpawnCitizen :: proc(w: ^World, kingdom_slot, town_slot: int, role: UnitType
 			for y in min_y..=max_y {
 				if x >= town.x && x < town.x+4 && y >= town.y && y < town.y+4 do continue
 				if !UnitValidTileType(role, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
-				occupied_by_unit := false
-				for other_slot in 0..<UNIT_CAPACITY {
-					if !w.unitUsed[other_slot] do continue
-					if int(w.units.x[other_slot]) == x && int(w.units.y[other_slot]) == y {
-						occupied_by_unit = true
-						break
-					}
-				}
-				if occupied_by_unit do continue
+				if WorldUnitAtTile(w, x, y) do continue
 				if unit_slot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdom_slot, town_slot); ok {
 					return unit_slot
 				}
@@ -211,9 +203,11 @@ TownSpawnCitizen :: proc(w: ^World, kingdom_slot, town_slot: int, role: UnitType
 	return -1
 }
 
-TownSpawnInitialWorkers :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
-	if TownSpawnCitizen(w, kingdom_slot, town_slot, Builder{}) < 0 do return false
-	if TownSpawnCitizen(w, kingdom_slot, town_slot, WaterCollector{}) < 0 do return false
-	if TownSpawnCitizen(w, kingdom_slot, town_slot, Farmer{}) < 0 do return false
+TOWN_INITIAL_VILLAGERS :: 5
+
+TownSpawnInitialVillagers :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
+	for _ in 0..<TOWN_INITIAL_VILLAGERS {
+		if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) < 0 do return false
+	}
 	return true
 }

@@ -504,7 +504,7 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdom_count: int, seed: u64) -> b
 		if _, ok := KingdomSpawn(w, chosen_x[kingdom_index], chosen_y[kingdom_index]); !ok {
 			return false
 		}
-		if !TownSpawnInitialWorkers(w, kingdom_index, w.kingdoms[kingdom_index].capitalSlot) {
+		if !TownSpawnInitialVillagers(w, kingdom_index, w.kingdoms[kingdom_index].capitalSlot) {
 			return false
 		}
 	}

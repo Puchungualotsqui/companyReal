@@ -119,11 +119,53 @@ StatePacific :: enum {
 	Sleeping,
 }
 
-StateWarrior :: enum {
+StateWarrior :: struct {
+	activity: WarriorActivity,
+	order: WarriorOrder,
+	orderKingdom, orderTown: int,
+	orderRevision: u64,
+	target: WarriorTarget,
+	scanTimer: f32,
+	scanSequence: int,
+	patrolSequence: int,
+	escortTarget: int,
+}
+
+WarriorActivity :: enum {
 	Idle,
 	Moving,
 	Escorting,
 	Attacking,
+}
+
+WarriorOrder :: union {
+	WarriorIdle,
+	WarriorGarrison,
+	WarriorAttack,
+	WarriorDefend,
+}
+
+WarriorIdle :: struct {}
+WarriorGarrison :: struct {}
+WarriorAttack :: struct {
+	kingdom, town: int,
+}
+WarriorDefend :: struct {
+	kingdom, town: int,
+}
+
+WarriorTarget :: union {
+	TargetNone,
+	TargetUnit,
+	TargetBuilding,
+}
+
+TargetNone :: struct {}
+TargetUnit :: struct {
+	slot: int,
+}
+TargetBuilding :: struct {
+	slot: int,
 }
 
 Villager :: struct {}
@@ -139,14 +181,8 @@ Farmer :: struct {
 	workedToday: bool,
 	workDay: int,
 }
-Knight :: struct {
-	escortTarget: int,
-	taskSequence: int,
-}
-Giant :: struct {
-	escortTarget: int,
-	taskSequence: int,
-}
+Knight :: struct {}
+Giant :: struct {}
 
 UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 	switch t in type {
@@ -319,5 +355,6 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 
 	unit.x = unit_x
 	unit.y = unit_y
+	SpatialUnitMove(w, unit_slot)
 	return unit.pathIndex >= len(unit.path)
 }
