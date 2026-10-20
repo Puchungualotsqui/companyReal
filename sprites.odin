@@ -320,6 +320,38 @@ create_shadow_texture :: proc() -> rl.Texture2D {
 	return texture
 }
 
+create_glow_texture :: proc() -> rl.Texture2D {
+	width := 64
+	height := 64
+	image := rl.GenImageColor(i32(width), i32(height), C_CLEAR)
+	for y in 0..<height {
+		for x in 0..<width {
+			nx := (f32(x)+0.5)/f32(width)*2-1
+			ny := (f32(y)+0.5)/f32(height)*2-1
+			distance := nx*nx+ny*ny
+			if distance >= 1 do continue
+			alpha := u8((1-distance)*(1-distance)*255)
+			rl.ImageDrawPixel(&image, i32(x), i32(y), rl.Color{255, 196, 120, alpha})
+		}
+	}
+	texture := rl.LoadTextureFromImage(image)
+	rl.UnloadImage(image)
+	rl.SetTextureFilter(texture, .BILINEAR)
+	rl.SetTextureWrap(texture, .CLAMP)
+	return texture
+}
+
+// Buildings with lit interiors and windows cast a warm pool of light at night.
+BuildingHasNightLight :: proc(kind: BuildingKind) -> bool {
+	switch kind {
+	case .TownHall, .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .ThievesGuild:
+		return true
+	case .Farmland, .Wall, .Bridge, .Cannon, .TurtlePen:
+		return false
+	}
+	unreachable()
+}
+
 draw_shadow :: proc(art: ^Art, cx, cy, rx, ry: int) {
 	art_ellipse(art, cx, cy, rx, ry, C_SHADOW)
 }
@@ -1123,11 +1155,13 @@ SpriteSet :: struct {
 	building: [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
 	unit:     [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
 	shadow:   rl.Texture2D,
+	glow:     rl.Texture2D,
 }
 
 SpriteSetInit :: proc() -> SpriteSet {
 	set: SpriteSet
 	set.shadow = create_shadow_texture()
+	set.glow = create_glow_texture()
 	for faction in 0 ..< SPRITE_FACTION_COUNT {
 		accent := FactionColor(faction)
 		for kind in ALL_BUILDING_KINDS {
@@ -1147,6 +1181,7 @@ SpriteSetInit :: proc() -> SpriteSet {
 
 SpriteSetDeinit :: proc(set: ^SpriteSet) {
 	if set.shadow.id != 0 do rl.UnloadTexture(set.shadow)
+	if set.glow.id != 0 do rl.UnloadTexture(set.glow)
 	for faction in 0 ..< SPRITE_FACTION_COUNT {
 		for kind in ALL_BUILDING_KINDS {
 			if set.building[faction][kind].id != 0 {

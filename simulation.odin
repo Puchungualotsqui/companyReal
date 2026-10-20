@@ -28,11 +28,10 @@ WorldTimeOfDay :: proc(w: ^World) -> f32 {
 
 WorldNightAmount :: proc(w: ^World) -> f32 {
 	hour := WorldTimeOfDay(w)
-	if hour >= 22 do return 0.55
-	if hour >= 20 do return 0.55*(hour-20)/2
-	if hour < 5 do return 0.55
-	if hour < 7 do return 0.55*(7-hour)/2
-	return 0
+	if hour < 4.5 || hour >= 22 do return 1
+	if hour < 6.5 do return 1-(hour-4.5)/2
+	if hour < 18.5 do return 0
+	return (hour-18.5)/3.5
 }
 
 WorldTownExists :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {

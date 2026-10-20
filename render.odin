@@ -11,7 +11,7 @@ RenderItem :: struct {
 	flip_x:  bool,
 }
 
-RenderShadow :: struct {
+RenderQuad :: struct {
 	dest:  rl.Rectangle,
 	alpha: u8,
 }
@@ -24,7 +24,8 @@ WorldRenderer :: struct {
 	terrain: TerrainRenderer,
 	sprites: SpriteSet,
 	items:   [dynamic]RenderItem,
-	shadows: [dynamic]RenderShadow,
+	shadows: [dynamic]RenderQuad,
+	lights:  [dynamic]RenderQuad,
 }
 
 WorldView :: struct {
@@ -45,7 +46,8 @@ WorldViewInit :: proc(w: ^World) -> WorldView {
 			terrain = TerrainRendererInit(w),
 			sprites = SpriteSetInit(),
 			items = make([dynamic]RenderItem, 0, 2048),
-			shadows = make([dynamic]RenderShadow, 0, 512),
+			shadows = make([dynamic]RenderQuad, 0, 512),
+			lights = make([dynamic]RenderQuad, 0, 256),
 		},
 		camera = rl.Camera2D{
 			offset = rl.Vector2{screen_width*0.5, screen_height*0.5},
@@ -87,6 +89,7 @@ WorldRendererDeinit :: proc(renderer: ^WorldRenderer) {
 	SpriteSetDeinit(&renderer.sprites)
 	delete(renderer.items)
 	delete(renderer.shadows)
+	delete(renderer.lights)
 }
 
 
@@ -193,10 +196,63 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 	)
 	rl.EndMode2D()
 
-	night_amount := WorldNightAmount(w)
-	if night_amount > 0 {
-		alpha := u8(night_amount*150)
-		rl.DrawRectangle(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight(), rl.Color{16, 20, 42, alpha})
+	ambient := WorldAmbientColor(w)
+	if ambient[0] < 255 || ambient[1] < 255 || ambient[2] < 255 {
+		rl.BeginBlendMode(.MULTIPLIED)
+		rl.DrawRectangle(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight(), ambient)
+		rl.EndBlendMode()
+	}
+
+	night := WorldNightAmount(w)
+	if night > 0.02 && renderer.sprites.glow.id != 0 && len(renderer.lights) > 0 {
+		glow_source := rl.Rectangle{0, 0, f32(renderer.sprites.glow.width), f32(renderer.sprites.glow.height)}
+		rl.BeginMode2D(camera)
+		rl.BeginBlendMode(.ADDITIVE)
+		for light in renderer.lights {
+			rl.DrawTexturePro(
+				renderer.sprites.glow,
+				glow_source,
+				light.dest,
+				rl.Vector2{0, 0},
+				0,
+				rl.Color{255, 255, 255, light.alpha},
+			)
+		}
+		rl.EndBlendMode()
+		rl.EndMode2D()
+	}
+}
+
+// Multiplied over the frame: white at noon, warm at dawn/dusk, deep blue at night.
+WorldAmbientColor :: proc(w: ^World) -> rl.Color {
+	hour := WorldTimeOfDay(w)
+	Key :: struct{ hour: f32, color: rl.Color }
+	keys := [9]Key{
+		{0, rl.Color{112, 126, 182, 255}},
+		{4.5, rl.Color{112, 126, 182, 255}},
+		{6.5, rl.Color{255, 208, 190, 255}},
+		{8, rl.Color{255, 246, 236, 255}},
+		{12, rl.Color{255, 255, 255, 255}},
+		{17, rl.Color{255, 246, 236, 255}},
+		{19, rl.Color{255, 200, 164, 255}},
+		{21.5, rl.Color{142, 142, 192, 255}},
+		{24, rl.Color{112, 126, 182, 255}},
+	}
+	for i in 0 ..< len(keys)-1 {
+		if hour >= keys[i].hour && hour <= keys[i+1].hour {
+			t := (hour-keys[i].hour)/(keys[i+1].hour-keys[i].hour)
+			return WorldLerpColor(keys[i].color, keys[i+1].color, t)
+		}
+	}
+	return keys[0].color
+}
+
+WorldLerpColor :: proc(a, b: rl.Color, t: f32) -> rl.Color {
+	return rl.Color{
+		u8(clamp(f32(a[0])+(f32(b[0])-f32(a[0]))*t, 0, 255)),
+		u8(clamp(f32(a[1])+(f32(b[1])-f32(a[1]))*t, 0, 255)),
+		u8(clamp(f32(a[2])+(f32(b[2])-f32(a[2]))*t, 0, 255)),
+		u8(clamp(f32(a[3])+(f32(b[3])-f32(a[3]))*t, 0, 255)),
 	}
 }
 
@@ -219,6 +275,8 @@ WorldRenderSprites :: proc(
 	interpolation := clamp(w.simulationAccumulator/TOWN_SIMULATION_STEP, 0, 1)
 	bob_time := w.simulationTime+w.simulationAccumulator
 	shadow_source := rl.Rectangle{0, 0, f32(renderer.sprites.shadow.width), f32(renderer.sprites.shadow.height)}
+	night := WorldNightAmount(w)
+	clear(&renderer.lights)
 
 	for copy_x in first_copy_x ..< last_copy_x+1 {
 		offset_x := f32(copy_x)*world_width
@@ -251,7 +309,7 @@ WorldRenderSprites :: proc(
 					base_y = -1e9
 				} else {
 					shadow_height := clamp(height*0.8, 0.6, 4)
-					append(&renderer.shadows, RenderShadow{
+					append(&renderer.shadows, RenderQuad{
 						dest = rl.Rectangle{
 							x = offset_x+building_x-0.7,
 							y = offset_y+building_y+height-shadow_height*0.2,
@@ -259,6 +317,20 @@ WorldRenderSprites :: proc(
 							height = shadow_height,
 						},
 						alpha = 220,
+					})
+				}
+				if night > 0.02 && BuildingHasNightLight(kind) {
+					light_width := width*0.95
+					light_height := height*0.7
+					flicker := 78+10*math.sin(w.simulationTime*2.4+f32(building_slot)*1.7)
+					append(&renderer.lights, RenderQuad{
+						dest = rl.Rectangle{
+							x = offset_x+building_x+(width-light_width)*0.5,
+							y = offset_y+building_y+height*0.45-light_height*0.5,
+							width = light_width,
+							height = light_height,
+						},
+						alpha = u8(night*flicker),
 					})
 				}
 				append(&renderer.items, RenderItem{
