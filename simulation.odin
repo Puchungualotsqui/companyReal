@@ -55,6 +55,10 @@ WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
 
 	for unit_slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unit_slot] do continue
+		if _, converting := w.units[unit_slot].state.(StateConverting); converting {
+			UnitUpdateConverting(w, unit_slot, delta_time)
+			continue
+		}
 		switch _ in w.units[unit_slot].type {
 		case Villager:
 			UnitUpdateVillager(w, unit_slot, delta_time)
@@ -64,7 +68,7 @@ WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
 			UnitUpdateWaterCollector(w, unit_slot, delta_time)
 		case Farmer:
 			UnitUpdateFarmer(w, unit_slot, delta_time)
-		case Knight, Giant:
+		case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
 			UnitUpdateWarrior(w, unit_slot, delta_time)
 		}
 	}
@@ -94,6 +98,53 @@ WorldKingdomUpdate :: proc(w: ^World, delta_time: f32) {
 		is_housed := housing_remaining[kingdom_slot][town_slot] > 0
 		if is_housed do housing_remaining[kingdom_slot][town_slot] -= 1
 		UnitApplyTownEffects(w, unit_slot, is_housed, shortage_epoch, delta_time)
+	}
+
+	WorldConversionAssign(w)
+}
+
+// Assigns idle units to queued conversions. Runs once per simulation step over
+// all units, so the cost stays linear in the number of units rather than towns.
+WorldConversionAssign :: proc(w: ^World) {
+	for unit_slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unit_slot] do continue
+		unit := &w.units[unit_slot]
+		if _, converting := unit.state.(StateConverting); converting do continue
+		if !WorldTownExists(w, unit.kingdome, unit.town) do continue
+
+		town := &w.kingdoms[unit.kingdome].towns[unit.town]
+		if town.conversionCount == 0 do continue
+
+		from := UnitKindOf(unit.type)
+		for job_index in 0..<town.conversionCount {
+			job := &town.conversions[job_index]
+			if job.from != from || job.assigned >= job.remaining do continue
+
+			building := TownFindBuilding(
+				w,
+				unit.kingdome,
+				unit.town,
+				UnitTrainingBuildingKind(job.to),
+			)
+			if building < 0 do continue
+			access_x, access_y, found := UnitFindBuildingAccessPoint(
+				w,
+				unit_slot,
+				building,
+				UnitTypeFromKind(job.to),
+			)
+			if !found do continue
+
+			job.assigned += 1
+			unit.state = StateConverting{
+				to = job.to,
+				building = building,
+				accessX = access_x,
+				accessY = access_y,
+			}
+			unit.pathReady = false
+			break
+		}
 	}
 }
 
@@ -134,6 +185,8 @@ KingdomTownUpdate :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time: f
 			}
 		}
 	}
+
+	TownMilestoneCheck(w, kingdom_slot, town_slot)
 }
 
 

@@ -26,15 +26,12 @@ StateWarriorInit :: proc(unit_slot, kingdom_slot, town_slot: int) -> StateWarrio
 }
 
 UnitWarriorReset :: proc(w: ^World, unit_slot: int) {
-	switch _ in w.units[unit_slot].type {
-	case Knight, Giant:
-		w.units[unit_slot].state = StateWarriorInit(
-			unit_slot,
-			w.units[unit_slot].kingdome,
-			w.units[unit_slot].town,
-		)
-	case Villager, Builder, WaterCollector, Farmer:
-	}
+	if !UnitIsWarrior(w.units[unit_slot].type) do return
+	w.units[unit_slot].state = StateWarriorInit(
+		unit_slot,
+		w.units[unit_slot].kingdome,
+		w.units[unit_slot].town,
+	)
 }
 
 // Units react to enemies once they cross the midpoint between weapon range
@@ -47,11 +44,7 @@ WarriorAggroRange :: proc(unit_type: UnitType) -> f32 {
 
 UnitUpdateWarrior :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	unit := &w.units[unit_slot]
-	switch _ in unit.type {
-	case Knight, Giant:
-	case Villager, Builder, WaterCollector, Farmer:
-		return
-	}
+	if !UnitIsWarrior(unit.type) do return
 	state := &unit.state.(StateWarrior)
 
 	kingdom_slot := unit.kingdome
@@ -351,26 +344,73 @@ UnitWarriorEngage :: proc(w: ^World, unit_slot: int, state: ^StateWarrior, delta
 WarriorSwing :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
 	unit := &w.units[unit_slot]
 	damage := UnitDefaultDamage(unit.type)
+	area_radius := UnitDefaultAreaRadius(unit.type)
 	switch target in state.target {
 	case TargetNone:
 	case TargetUnit:
 		if target.slot < 0 || target.slot >= UNIT_CAPACITY || !w.unitUsed[target.slot] do return
-		w.units[target.slot].health -= damage
-		if w.units[target.slot].health <= 0 do UnitDespawn(w, target.slot)
+		impact_x := w.units.x[target.slot]
+		impact_y := w.units.y[target.slot]
+		if area_radius > 0 {
+			WarriorAreaUnitDamage(w, unit_slot, impact_x, impact_y, area_radius, damage)
+		} else {
+			w.units[target.slot].health -= damage
+			if w.units[target.slot].health <= 0 do UnitDespawn(w, target.slot)
+		}
 	case TargetBuilding:
 		if target.slot < 0 || target.slot >= BUILDING_CAPACITY || !w.buildingUsed[target.slot] {
 			return
 		}
+		impact_x, impact_y, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
 		w.buildings[target.slot].health -= damage
 		if w.buildings[target.slot].health <= 0 {
 			BuildingDespawn(w, target.slot, unit.kingdome)
 			state.target = TargetNone{}
 		}
+		if area_radius > 0 {
+			WarriorAreaUnitDamage(w, unit_slot, impact_x, impact_y, area_radius, damage)
+		}
+	}
+}
+
+WarriorAreaUnitDamage :: proc(w: ^World, attacker_slot: int, x, y, radius, damage: f32) {
+	if radius <= 0 do return
+	attacker := &w.units[attacker_slot]
+	world_width := f32(w.maxX)
+	world_height := f32(w.maxY)
+	chunk_size := w.spatial.chunkSize
+	if chunk_size <= 0 do return
+
+	center_x := WorldWrapPosition(x, world_width)
+	center_y := WorldWrapPosition(y, world_height)
+	center_chunk_x := int(center_x)/chunk_size
+	center_chunk_y := int(center_y)/chunk_size
+	chunk_radius := int(radius)/chunk_size+1
+	for offset_x in -chunk_radius..=chunk_radius {
+		chunk_x := WorldWrapCoordinate(center_chunk_x+offset_x, w.spatial.chunksX)
+		for offset_y in -chunk_radius..=chunk_radius {
+			chunk_y := WorldWrapCoordinate(center_chunk_y+offset_y, w.spatial.chunksY)
+			chunk := chunk_x*w.spatial.chunksY+chunk_y
+			slot := w.spatial.unitHead[chunk]
+			for slot >= 0 {
+				next := w.spatial.unitNext[slot]
+				if slot != attacker_slot && w.unitUsed[slot] &&
+					KingdomAtWar(w, attacker.kingdome, w.units[slot].kingdome) {
+					delta_x := WorldShortestWrappedDelta(w.units.x[slot]-center_x, world_width)
+					delta_y := WorldShortestWrappedDelta(w.units.y[slot]-center_y, world_height)
+					if delta_x*delta_x+delta_y*delta_y <= radius*radius {
+						w.units[slot].health -= damage
+						if w.units[slot].health <= 0 do UnitDespawn(w, slot)
+					}
+				}
+				slot = next
+			}
+		}
 	}
 }
 
 UnitWarriorTravel :: proc(w: ^World, unit_slot, kingdom_slot, town_slot: int, delta_time: f32) -> FlowFollowResult {
-	field, ok := FlowFieldGet(w, kingdom_slot, town_slot)
+	field, ok := FlowFieldGet(w, kingdom_slot, town_slot, w.units[unit_slot].type)
 	if !ok do return .Unreachable
 	return UnitFollowFlowField(w, unit_slot, field, delta_time)
 }
@@ -487,13 +527,7 @@ WarriorEscortValid :: proc(w: ^World, warrior_slot, target_slot: int) -> bool {
 		return false
 	}
 	if w.units[target_slot].kingdome != w.units[warrior_slot].kingdome do return false
-	switch _ in w.units[target_slot].type {
-	case Villager, Builder, WaterCollector, Farmer:
-		return true
-	case Knight, Giant:
-		return false
-	}
-	return false
+	return !UnitIsWarrior(w.units[target_slot].type)
 }
 
 UnitFindEscortTarget :: proc(w: ^World, warrior_slot, sequence: int) -> int {
@@ -521,13 +555,7 @@ UnitFindEscortTarget :: proc(w: ^World, warrior_slot, sequence: int) -> int {
 				candidate_slot = w.spatial.unitNext[candidate_slot] {
 				if candidate_slot == warrior_slot || !w.unitUsed[candidate_slot] do continue
 				if w.units[candidate_slot].kingdome != kingdom_slot do continue
-				is_pacific := false
-				switch _ in w.units[candidate_slot].type {
-				case Villager, Builder, WaterCollector, Farmer:
-					is_pacific = true
-				case Knight, Giant:
-				}
-				if !is_pacific do continue
+				if UnitIsWarrior(w.units[candidate_slot].type) do continue
 				delta_x := WorldShortestWrappedDelta(w.units.x[candidate_slot]-unit_x, world_width)
 				delta_y := WorldShortestWrappedDelta(w.units.y[candidate_slot]-unit_y, world_height)
 				if delta_x*delta_x+delta_y*delta_y > f32(WARRIOR_ESCORT_RADIUS*WARRIOR_ESCORT_RADIUS) {

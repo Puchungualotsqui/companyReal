@@ -4,10 +4,17 @@ import "core:math"
 
 TOWN_CAPACITY :: 100
 TOWN_WARRIOR_ORDERS_CAPACITY :: 16
+TOWN_START_AREA_RADIUS :: 12
+TOWN_AREA_EXPANSION :: 6
+TOWN_MILESTONE_COUNT :: 3
+MAX_CONVERSION_JOBS :: 16
+TOWN_WOOD_TARGET :: 60
+
+TOWN_MILESTONES := [TOWN_MILESTONE_COUNT]int{12, 25, 50}
 
 // Share of a town's warriors that always stays home to defend it. The rest
 // is split between the town's attack and defend orders.
-TOWN_GARRISON_RATIO :: 0.2
+TOWN_GARRISON_RATIO :: 0.5
 
 Kingdom :: struct {
 	capitalSlot: int,
@@ -29,6 +36,45 @@ TownDefendOrder :: struct {
 	town: int,
 }
 
+// Each population milestone offers two mutually exclusive paths. The chosen
+// option unlocks buildings; training buildings then unlock their unit kind.
+TownPath :: enum {
+	Rangers,
+	Mystics,
+	Beasts,
+	Siege,
+	Tide,
+	Shadows,
+}
+
+MilestoneOption :: struct {
+	path: TownPath,
+	unlocks: bit_set[BuildingKind],
+}
+
+TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Wall}
+
+TOWN_MILESTONE_OPTIONS := [TOWN_MILESTONE_COUNT][2]MilestoneOption{
+	{
+		{path = .Rangers, unlocks = {.ArcheryRange, .Bridge}},
+		{path = .Mystics, unlocks = {.MagicSchool, .Cannon}},
+	},
+	{
+		{path = .Beasts, unlocks = {.GiantPen, .Cannon}},
+		{path = .Siege, unlocks = {.SiegeWorkshop, .Bridge}},
+	},
+	{
+		{path = .Tide, unlocks = {.TurtlePen, .Bridge}},
+		{path = .Shadows, unlocks = {.ThievesGuild, .Cannon}},
+	},
+}
+
+ConversionJob :: struct {
+	from, to: UnitKind,
+	remaining: int,
+	assigned: int,
+}
+
 Town :: struct {
 	x, y: int,
 	hallSlot: int,
@@ -43,6 +89,14 @@ Town :: struct {
 	waterAccessTerrainRevision: u64,
 	waterAccessCached: bool,
 	foodShortage, waterShortage: f32,
+	areaRadius: int,
+	unlockedBuildings: bit_set[BuildingKind],
+	buildingCounts: [BuildingKind]int,
+	buildingSlots: [BuildingKind]int,
+	milestonesReached: int,
+	milestonePending: bool,
+	conversions: [MAX_CONVERSION_JOBS]ConversionJob,
+	conversionCount: int,
 	attackOrders: [KINGDOMS_CAPACITY][TOWN_CAPACITY]bool,
 	defendOrders: [TOWN_CAPACITY]bool,
 	attackedBy: [KINGDOMS_CAPACITY][TOWN_CAPACITY]bool,
@@ -71,9 +125,148 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 		hallSlot = bId,
 		citizens = 0,
 		wood = 35,
+		areaRadius = TOWN_START_AREA_RADIUS,
+		unlockedBuildings = TOWN_BASE_UNLOCKED_BUILDINGS,
 	}
+	for &slot in w.kingdoms[kingdomSlot].towns[i].buildingSlots {
+		slot = -1
+	}
+	w.kingdoms[kingdomSlot].towns[i].buildingSlots[.TownHall] = bId
+	w.kingdoms[kingdomSlot].towns[i].buildingCounts[.TownHall] = 1
 	w.kingdoms[kingdomSlot].townUsed[i] = true
 	return i, true
+}
+
+TownTileAreaDistance :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> int {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return max(int)
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	hall_width, hall_height := BuildingTileSize(TownHall{})
+	delta_x := max(max(town.x-x, 0), x-(town.x+hall_width-1))
+	delta_y := max(max(town.y-y, 0), y-(town.y+hall_height-1))
+	return max(delta_x, delta_y)
+}
+
+TownPointInArea :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
+	return TownTileAreaDistance(w, kingdom_slot, town_slot, x, y) <=
+		w.kingdoms[kingdom_slot].towns[town_slot].areaRadius
+}
+
+TownBuildingInArea :: proc(w: ^World, kingdom_slot, town_slot, x, y: int, type: BuildingType) -> bool {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
+	width, height := BuildingTileSize(type)
+	if width <= 0 || height <= 0 do return false
+	d0 := TownTileAreaDistance(w, kingdom_slot, town_slot, x, y)
+	d1 := TownTileAreaDistance(w, kingdom_slot, town_slot, x+width-1, y)
+	d2 := TownTileAreaDistance(w, kingdom_slot, town_slot, x, y+height-1)
+	d3 := TownTileAreaDistance(w, kingdom_slot, town_slot, x+width-1, y+height-1)
+	return max(max(d0, d1), max(d2, d3)) <=
+		w.kingdoms[kingdom_slot].towns[town_slot].areaRadius
+}
+
+TownFindBuilding :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind) -> int {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return -1
+	slot := w.kingdoms[kingdom_slot].towns[town_slot].buildingSlots[kind]
+	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] do return -1
+	if BuildingKindOf(w.buildings[slot].type) != kind do return -1
+	if w.buildings[slot].kingdom != kingdom_slot || w.buildings[slot].town != town_slot {
+		return -1
+	}
+	return slot
+}
+
+TownUnitAvailable :: proc(w: ^World, kingdom_slot, town_slot: int, kind: UnitKind) -> bool {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
+	return TownFindBuilding(w, kingdom_slot, town_slot, UnitTrainingBuildingKind(kind)) >= 0
+}
+
+TownUnitCount :: proc(w: ^World, kingdom_slot, town_slot: int, kind: UnitKind) -> int {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return 0
+	count := 0
+	for unit_slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unit_slot] do continue
+		if w.units[unit_slot].kingdome != kingdom_slot || w.units[unit_slot].town != town_slot {
+			continue
+		}
+		if UnitKindOf(w.units[unit_slot].type) == kind do count += 1
+	}
+	return count
+}
+
+// Conversions always pass through villagers: A -> Villager -> B.
+TownAddConversion :: proc(w: ^World, kingdom_slot, town_slot: int, from, to: UnitKind, count: int) -> bool {
+	if count <= 0 || from == to do return false
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
+	if from != .Villager && to != .Villager do return false
+	if !TownUnitAvailable(w, kingdom_slot, town_slot, to) do return false
+
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	for job_index in 0..<town.conversionCount {
+		job := &town.conversions[job_index]
+		if job.from == from && job.to == to {
+			job.remaining += count
+			return true
+		}
+	}
+	if town.conversionCount >= MAX_CONVERSION_JOBS do return false
+
+	town.conversions[town.conversionCount] = ConversionJob{from = from, to = to, remaining = count}
+	town.conversionCount += 1
+	return true
+}
+
+// Reduces queued conversions but lets in-flight units finish their trip.
+TownRemoveConversion :: proc(w: ^World, kingdom_slot, town_slot: int, from, to: UnitKind, count: int) -> bool {
+	if count <= 0 || !WorldTownExists(w, kingdom_slot, town_slot) do return false
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	for job_index in 0..<town.conversionCount {
+		job := &town.conversions[job_index]
+		if job.from != from || job.to != to do continue
+		removable := max(0, job.remaining-job.assigned)
+		job.remaining -= min(count, removable)
+		if job.remaining <= 0 {
+			town.conversions[job_index] = town.conversions[town.conversionCount-1]
+			town.conversionCount -= 1
+		}
+		return true
+	}
+	return false
+}
+
+TownConversionsClear :: proc(w: ^World, kingdom_slot, town_slot: int) {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return
+	w.kingdoms[kingdom_slot].towns[town_slot].conversionCount = 0
+}
+
+TownMilestoneCheck :: proc(w: ^World, kingdom_slot, town_slot: int) {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if town.milestonePending || town.milestonesReached >= TOWN_MILESTONE_COUNT do return
+	if town.citizens >= TOWN_MILESTONES[town.milestonesReached] {
+		town.milestonePending = true
+	}
+}
+
+TownChooseMilestone :: proc(w: ^World, kingdom_slot, town_slot, option: int) -> bool {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
+	if option != 0 && option != 1 do return false
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if !town.milestonePending || town.milestonesReached >= TOWN_MILESTONE_COUNT do return false
+
+	choice := TOWN_MILESTONE_OPTIONS[town.milestonesReached][option]
+	town.unlockedBuildings |= choice.unlocks
+	town.areaRadius += TOWN_AREA_EXPANSION
+	town.milestonesReached += 1
+	town.milestonePending = false
+	return true
+}
+
+TownMilestoneOption :: proc(w: ^World, kingdom_slot, town_slot, option: int) -> (MilestoneOption, bool) {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return {}, false
+	if option != 0 && option != 1 do return {}, false
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if !town.milestonePending || town.milestonesReached >= TOWN_MILESTONE_COUNT do return {}, false
+	return TOWN_MILESTONE_OPTIONS[town.milestonesReached][option], true
 }
 
 // Player order: attacker town -> attack -> any town of another kingdom.
@@ -246,6 +439,7 @@ KingdomEndWar :: proc(w: ^World, kingdom_slot: int) {
 	for town_slot in 0..<TOWN_CAPACITY {
 		if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
 		TownOrdersClear(w, kingdom_slot, town_slot)
+		TownConversionsClear(w, kingdom_slot, town_slot)
 	}
 
 	for other in 0..<KINGDOMS_CAPACITY {
@@ -276,13 +470,8 @@ TownHallSlot :: proc(w: ^World, kingdom_slot, town_slot: int) -> int {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return -1
 	slot := w.kingdoms[kingdom_slot].towns[town_slot].hallSlot
 	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] do return -1
-	switch _ in w.buildings[slot].type {
-	case TownHall:
-		return slot
-	case Wall, Home, Farmland:
-		return -1
-	}
-	return -1
+	if BuildingKindOf(w.buildings[slot].type) != .TownHall do return -1
+	return slot
 }
 
 KingdomChooseTownForUnit :: proc(w: ^World, kingdom_slot, unit_slot, destroyed_building_slot: int) -> int {
@@ -357,6 +546,7 @@ KingdomAbsorb :: proc(w: ^World, defeated, destroyer, capital_town, capital_buil
 	for unit_slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unit_slot] || w.units[unit_slot].kingdome != defeated do continue
 		old_town := w.units[unit_slot].town
+		UnitResetState(w, unit_slot)
 		w.units[unit_slot].kingdome = destroyer
 		if old_town == capital_town {
 			new_town := KingdomChooseTownForUnit(w, destroyer, unit_slot, capital_building)
@@ -369,7 +559,6 @@ KingdomAbsorb :: proc(w: ^World, defeated, destroyer, capital_town, capital_buil
 		} else {
 			w.units[unit_slot].town = -1
 		}
-		UnitWarriorReset(w, unit_slot)
 	}
 
 	for building_slot in 0..<BUILDING_CAPACITY {

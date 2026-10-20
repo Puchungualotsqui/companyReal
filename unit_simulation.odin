@@ -23,7 +23,7 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			state^ = .Returning
 		}
 	}
-	if state^ == .Roaming && town.wood < 15 {
+	if state^ == .Roaming && town.wood < TOWN_WOOD_TARGET {
 		if x, y, found := UnitFindResourceTarget(w, unit_slot, builder.taskSequence); found {
 			w.units[unit_slot].pathTargetX = x
 			w.units[unit_slot].pathTargetY = y
@@ -198,6 +198,111 @@ UnitUpdateFarmer :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	case .Returning:
 		state^ = .Roaming
 	case .GoingHome, .Sleeping:
+	}
+}
+
+UnitUpdateConverting :: proc(w: ^World, unit_slot: int, delta_time: f32) {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
+	if _, converting := w.units[unit_slot].state.(StateConverting); !converting do return
+	state := &w.units[unit_slot].state.(StateConverting)
+	unit := &w.units[unit_slot]
+
+	if !WorldTownExists(w, unit.kingdome, unit.town) {
+		UnitConversionCancel(w, unit_slot)
+		return
+	}
+	if state.building < 0 || state.building >= BUILDING_CAPACITY ||
+		!w.buildingUsed[state.building] ||
+		BuildingKindOf(w.buildings[state.building].type) != UnitTrainingBuildingKind(state.to) {
+		UnitConversionCancel(w, unit_slot)
+		return
+	}
+
+	if state.inside {
+		state.timer -= delta_time
+		if state.timer <= 0 do UnitConvert(w, unit_slot)
+		return
+	}
+
+	if state.retryTimer > 0 {
+		state.retryTimer -= delta_time
+		return
+	}
+
+	if unit.pathTargetX != state.accessX || unit.pathTargetY != state.accessY {
+		unit.pathTargetX = state.accessX
+		unit.pathTargetY = state.accessY
+		unit.pathReady = false
+	}
+	if UnitMoveToTarget(w, unit_slot, delta_time) {
+		state.inside = true
+		state.timer = UnitDefaultTrainingTime(state.to)
+		unit.pathReady = false
+	} else if !unit.pathFound {
+		unit.pathReady = false
+		state.retryTimer = 1
+	}
+}
+
+UnitConvert :: proc(w: ^World, unit_slot: int) {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
+	unit := &w.units[unit_slot]
+	if _, converting := unit.state.(StateConverting); !converting do return
+	state := unit.state.(StateConverting)
+	from := UnitKindOf(unit.type)
+	to := state.to
+
+	if WorldTownExists(w, unit.kingdome, unit.town) {
+		town := &w.kingdoms[unit.kingdome].towns[unit.town]
+		for job_index in 0..<town.conversionCount {
+			job := &town.conversions[job_index]
+			if job.from != from || job.to != to do continue
+			job.assigned = max(0, job.assigned-1)
+			job.remaining = max(0, job.remaining-1)
+			if job.remaining <= 0 {
+				town.conversions[job_index] = town.conversions[town.conversionCount-1]
+				town.conversionCount -= 1
+			}
+			break
+		}
+	}
+
+	UnitSetType(w, unit_slot, to)
+}
+
+UnitConversionCancel :: proc(w: ^World, unit_slot: int) {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
+	unit := &w.units[unit_slot]
+	if _, converting := unit.state.(StateConverting); !converting do return
+	state := unit.state.(StateConverting)
+	from := UnitKindOf(unit.type)
+
+	if WorldTownExists(w, unit.kingdome, unit.town) {
+		town := &w.kingdoms[unit.kingdome].towns[unit.town]
+		for job_index in 0..<town.conversionCount {
+			job := &town.conversions[job_index]
+			if job.from != from || job.to != state.to do continue
+			job.assigned = max(0, job.assigned-1)
+			break
+		}
+	}
+
+	if UnitIsWarrior(unit.type) {
+		unit.state = StateWarriorInit(unit_slot, unit.kingdome, unit.town)
+	} else {
+		unit.state = StatePacific.Roaming
+	}
+	unit.pathReady = false
+}
+
+UnitResetState :: proc(w: ^World, unit_slot: int) {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
+	switch _ in w.units[unit_slot].state {
+	case StateConverting:
+		UnitConversionCancel(w, unit_slot)
+	case StateWarrior:
+		UnitWarriorReset(w, unit_slot)
+	case StatePacific:
 	}
 }
 
@@ -405,13 +510,7 @@ UnitFindFarmlandTarget :: proc(w: ^World, unit_slot, sequence: int) -> (int, int
 			w.buildings[building_slot].town != w.units[unit_slot].town {
 			continue
 		}
-		is_farmland := false
-		switch _ in w.buildings[building_slot].type {
-		case Farmland:
-			is_farmland = true
-		case Wall, TownHall, Home:
-		}
-		if !is_farmland do continue
+		if BuildingKindOf(w.buildings[building_slot].type) != .Farmland do continue
 
 		farm_x := w.buildings.x[building_slot]
 		farm_y := w.buildings.y[building_slot]
@@ -455,13 +554,7 @@ UnitFindHomeTarget :: proc(w: ^World, unit_slot: int) -> (int, int, bool) {
 			w.buildings[building_slot].town != w.units[unit_slot].town {
 			continue
 		}
-		is_home := false
-		switch _ in w.buildings[building_slot].type {
-		case Home:
-			is_home = true
-		case Wall, TownHall, Farmland:
-		}
-		if !is_home do continue
+		if BuildingKindOf(w.buildings[building_slot].type) != .Home do continue
 
 		home_x := w.buildings.x[building_slot]
 		home_y := w.buildings.y[building_slot]
@@ -505,6 +598,42 @@ UnitFindTownReturnPoint :: proc(w: ^World, kingdom_slot, town_slot: int) -> (int
 				}
 				if !UnitValidTileType(Villager{}, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
 				return x, y, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// Finds a walkable tile on the ring around a building footprint.
+UnitFindBuildingAccessPoint :: proc(w: ^World, unit_slot, building_slot: int, target_type: UnitType) -> (int, int, bool) {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return 0, 0, false
+	if building_slot < 0 || building_slot >= BUILDING_CAPACITY || !w.buildingUsed[building_slot] {
+		return 0, 0, false
+	}
+
+	unit := &w.units[unit_slot]
+	building_x := w.buildings.x[building_slot]
+	building_y := w.buildings.y[building_slot]
+	width, height := BuildingTileSize(w.buildings[building_slot].type)
+	world_width := int(w.maxX)
+	world_height := int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return 0, 0, false
+
+	for radius in 1..=6 {
+		inner_min_x := building_x-radius+1
+		inner_max_x := building_x+width-1+radius-1
+		inner_min_y := building_y-radius+1
+		inner_max_y := building_y+height-1+radius-1
+		for x in building_x-radius ..= building_x+width-1+radius {
+			for y in building_y-radius ..= building_y+height-1+radius {
+				if x >= inner_min_x && x <= inner_max_x && y >= inner_min_y && y <= inner_max_y {
+					continue
+				}
+				wrapped_x := WorldWrapCoordinate(x, world_width)
+				wrapped_y := WorldWrapCoordinate(y, world_height)
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, unit.type) do continue
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, target_type) do continue
+				return wrapped_x, wrapped_y, true
 			}
 		}
 	}
