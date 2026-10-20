@@ -291,6 +291,10 @@ UIUnitStateName :: proc(state: UnitState) -> cstring {
 			return "Working"
 		case .Returning:
 			return "Returning"
+		case .ToConstruction:
+			return "To site"
+		case .Building:
+			return "Building"
 		case .GoingHome:
 			return "Going home"
 		case .Sleeping:

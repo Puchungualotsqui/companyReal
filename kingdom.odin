@@ -75,12 +75,24 @@ ConversionJob :: struct {
 	assigned: int,
 }
 
+// A building ordered by the town. Builders must clear the decorations on the
+// footprint before they can raise the structure.
+ConstructionSite :: struct {
+	kind:      BuildingKind,
+	x, y:      int,
+	paid:      f32,
+	clearWork: f32,
+	buildWork: f32,
+}
+
 Town :: struct {
 	x, y: int,
 	hallSlot: int,
 	citizens: int,
 	wood: f32,
 	growthTimer, growthTime, constructionProgress: f32,
+	construction: ConstructionSite,
+	constructionActive: bool,
 	builders, waterCollectors, farmers: int,
 	homes, farmlands: int,
 	farmlandOutput: f32,

@@ -371,6 +371,37 @@ WorldRenderSprites :: proc(
 				})
 			}
 
+			for kingdom_slot in 0 ..< KINGDOMS_CAPACITY {
+				if !w.kingdomUsed[kingdom_slot] do continue
+				texture := renderer.sprites.construction[FactionSpriteIndex(kingdom_slot)]
+				if texture.id == 0 do continue
+				for town_slot in 0 ..< TOWN_CAPACITY {
+					if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
+					town := &w.kingdoms[kingdom_slot].towns[town_slot]
+					if !town.constructionActive do continue
+					site := town.construction
+					width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+					for tile_x in site.x ..< site.x+width {
+						for tile_y in site.y ..< site.y+height {
+							if f32(tile_x)+1 < min_x || f32(tile_x) > max_x ||
+								f32(tile_y)+1 < min_y || f32(tile_y) > max_y {
+								continue
+							}
+							append(&renderer.items, RenderItem{
+								base_y = -1e9,
+								dest = rl.Rectangle{
+									offset_x+f32(tile_x),
+									offset_y+f32(tile_y),
+									1,
+									1,
+								},
+								texture = texture,
+							})
+						}
+					}
+				}
+			}
+
 			if camera.zoom >= DECORATION_MIN_ZOOM && w.spatial.chunkSize > 0 {
 				chunks_x := w.spatial.chunksX
 				chunks_y := w.spatial.chunksY

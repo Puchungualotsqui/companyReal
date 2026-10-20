@@ -330,6 +330,8 @@ StatePacific :: enum {
 	Traveling,
 	Working,
 	Returning,
+	ToConstruction,
+	Building,
 	GoingHome,
 	Sleeping,
 }

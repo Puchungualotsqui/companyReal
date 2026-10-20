@@ -125,31 +125,170 @@ BuildingUpdateCannon :: proc(w: ^World, building_slot: int, delta_time: f32) {
 
 TownBuilderConstruct :: proc(w: ^World, kingdom_slot, town_slot: int, can_grow: bool) -> bool {
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if town.constructionActive do return false
 	if town.homes < town.citizens || (can_grow && town.homes == town.citizens) {
-		if TownBuilderPlaceBuilding(w, kingdom_slot, town_slot, Home{}) do return true
+		if TownBuilderStartBuilding(w, kingdom_slot, town_slot, Home{}) do return true
 	}
 	for kind in AUTO_TRAINING_BUILDINGS {
 		if kind in town.unlockedBuildings && town.buildingCounts[kind] == 0 {
-			if TownBuilderPlaceBuilding(w, kingdom_slot, town_slot, BuildingTypeFromKind(kind)) {
+			if TownBuilderStartBuilding(w, kingdom_slot, town_slot, BuildingTypeFromKind(kind)) {
 				return true
 			}
 		}
 	}
 	if town.farmlands < town.farmers {
-		if TownBuilderPlaceBuilding(w, kingdom_slot, town_slot, Farmland{}) do return true
+		if TownBuilderStartBuilding(w, kingdom_slot, town_slot, Farmland{}) do return true
 	}
 	return false
 }
 
-TownBuilderPlaceBuilding :: proc(w: ^World, kingdom_slot, town_slot: int, building_type: BuildingType) -> bool {
+TownBuilderStartBuilding :: proc(w: ^World, kingdom_slot, town_slot: int, building_type: BuildingType) -> bool {
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	cost := BuildingWoodCost(BuildingKindOf(building_type))
-	if town.wood < cost do return false
+	if town.constructionActive do return false
+	kind := BuildingKindOf(building_type)
+	if !(kind in town.unlockedBuildings) do return false
+	if town.wood < BuildingWoodCost(kind) do return false
 	x, y, found := TownFindBuildingSite(w, kingdom_slot, town_slot, building_type)
 	if !found do return false
-	if _, ok := BuildingSpawn(w, x, y, building_type, kingdom_slot, town_slot); !ok do return false
+	return TownStartConstruction(w, kingdom_slot, town_slot, kind, x, y)
+}
+
+// Orders a building: the town pays for it and gets a construction site that
+// builders must clear and then raise.
+TownStartConstruction :: proc(
+	w: ^World,
+	kingdom_slot, town_slot: int,
+	kind: BuildingKind,
+	x, y: int,
+) -> bool {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if town.constructionActive do return false
+	if !(kind in town.unlockedBuildings) do return false
+
+	building_type := BuildingTypeFromKind(kind)
+	if !WorldBuildingValid(w, x, y, building_type) do return false
+	cost := BuildingWoodCost(kind)
+	if town.wood < cost do return false
+
 	town.wood -= cost
+	town.construction = ConstructionSite{kind = kind, x = x, y = y, paid = cost}
+	town.constructionActive = true
 	return true
+}
+
+BuildingBuildSeconds :: proc(kind: BuildingKind) -> f32 {
+	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
+	return 4+f32(width*height)*1.5+BuildingWoodCost(kind)*0.25
+}
+
+// First decoration whose base tile sits on the site footprint.
+ConstructionPendingDecoration :: proc(w: ^World, site: ConstructionSite) -> int {
+	chunk_size := w.spatial.chunkSize
+	if chunk_size <= 0 do return -1
+	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+	first_chunk_x := site.x/chunk_size
+	last_chunk_x := (site.x+width-1)/chunk_size
+	first_chunk_y := site.y/chunk_size
+	last_chunk_y := (site.y+height-1)/chunk_size
+	for chunk_y in first_chunk_y ..= last_chunk_y {
+		wrapped_y := WorldWrapCoordinate(chunk_y, w.spatial.chunksY)
+		for chunk_x in first_chunk_x ..= last_chunk_x {
+			wrapped_x := WorldWrapCoordinate(chunk_x, w.spatial.chunksX)
+			chunk := wrapped_x*w.spatial.chunksY+wrapped_y
+			for slot := w.spatial.decorationHead[chunk]; slot >= 0;
+				slot = w.spatial.decorationNext[slot] {
+				decoration_x := int(w.decorations.x[slot])
+				decoration_y := int(w.decorations.y[slot])
+				if decoration_x >= site.x && decoration_x < site.x+width &&
+					decoration_y >= site.y && decoration_y < site.y+height {
+					return slot
+				}
+			}
+		}
+	}
+	return -1
+}
+
+// Builders work the site from a walkable tile on the ring around the footprint.
+TownConstructionAccessPoint :: proc(
+	w: ^World,
+	unit_slot, kingdom_slot, town_slot: int,
+) -> (int, int, bool) {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return 0, 0, false
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if !town.constructionActive do return 0, 0, false
+
+	site := town.construction
+	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+	world_width := int(w.maxX)
+	world_height := int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return 0, 0, false
+
+	for radius in 1 ..= 6 {
+		inner_min_x := site.x-radius+1
+		inner_max_x := site.x+width-1+radius-1
+		inner_min_y := site.y-radius+1
+		inner_max_y := site.y+height-1+radius-1
+		for x in site.x-radius ..= site.x+width-1+radius {
+			for y in site.y-radius ..= site.y+height-1+radius {
+				if x >= inner_min_x && x <= inner_max_x && y >= inner_min_y && y <= inner_max_y {
+					continue
+				}
+				wrapped_x := WorldWrapCoordinate(x, world_width)
+				wrapped_y := WorldWrapCoordinate(y, world_height)
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, w.units[unit_slot].type) do continue
+				return wrapped_x, wrapped_y, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+ConstructionProgress :: enum {
+	Working,
+	Completed,
+}
+
+// Advances one builder's share of site work: clearing first, then raising.
+TownConstructionWork :: proc(
+	w: ^World,
+	kingdom_slot, town_slot: int,
+	delta_time: f32,
+) -> ConstructionProgress {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return .Completed
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if !town.constructionActive do return .Completed
+
+	site := &town.construction
+	slot := ConstructionPendingDecoration(w, site^)
+	if slot >= 0 {
+		kind := w.decorations.kind[slot]
+		site.clearWork += delta_time
+		if site.clearWork >= DecorationChopSeconds(kind) {
+			town.wood += DecorationWoodYield(kind)
+			WorldDecorationDespawn(w, slot)
+			site.clearWork = 0
+		}
+		return .Working
+	}
+
+	site.buildWork += delta_time
+	if site.buildWork < BuildingBuildSeconds(site.kind) do return .Working
+
+	if _, ok := BuildingSpawn(
+		w,
+		site.x,
+		site.y,
+		BuildingTypeFromKind(site.kind),
+		kingdom_slot,
+		town_slot,
+	); !ok {
+		town.wood += site.paid
+	}
+	town.constructionActive = false
+	town.construction = {}
+	return .Completed
 }
 
 TownBuildManual :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind, x, y: int) -> bool {
@@ -161,11 +300,7 @@ TownBuildManual :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingK
 
 	building_type := BuildingTypeFromKind(kind)
 	if !TownBuildingInArea(w, kingdom_slot, town_slot, x, y, building_type) do return false
-	cost := BuildingWoodCost(kind)
-	if town.wood < cost do return false
-	if _, ok := BuildingSpawn(w, x, y, building_type, kingdom_slot, town_slot); !ok do return false
-	town.wood -= cost
-	return true
+	return TownStartConstruction(w, kingdom_slot, town_slot, kind, x, y)
 }
 
 TownFindBuildingSite :: proc(w: ^World, kingdom_slot, town_slot: int, building_type: BuildingType) -> (int, int, bool) {

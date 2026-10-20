@@ -14,3 +14,6 @@
 - Boats
 - fog of war
 - Particles
+
+# Bugs
+- Shadow of home/house is a bit lower. I think we should recheck all building shadows

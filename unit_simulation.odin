@@ -23,6 +23,14 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			state^ = .Returning
 		}
 	}
+	if state^ == .Roaming && town.constructionActive {
+		if x, y, found := TownConstructionAccessPoint(w, unit_slot, kingdom_slot, town_slot); found {
+			w.units[unit_slot].pathTargetX = x
+			w.units[unit_slot].pathTargetY = y
+			w.units[unit_slot].pathReady = false
+			state^ = .ToConstruction
+		}
+	}
 	if state^ == .Roaming && town.wood < TOWN_WOOD_TARGET {
 		if x, y, decoration, found := UnitFindResourceTarget(w, unit_slot, builder.taskSequence); found {
 			builder.targetDecoration = decoration
@@ -104,6 +112,27 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			state^ = .Roaming
 			w.units[unit_slot].pathReady = false
 		}
+	case .ToConstruction:
+		if UnitMoveToTarget(w, unit_slot, delta_time) {
+			state^ = .Building
+			w.units[unit_slot].pathReady = false
+		} else if !w.units[unit_slot].pathFound {
+			state^ = .Roaming
+			w.units[unit_slot].pathReady = false
+			builder.taskSequence += 1
+		}
+	case .Building:
+		if !town.constructionActive {
+			state^ = .Roaming
+			w.units[unit_slot].pathReady = false
+			builder.taskSequence += 1
+			break
+		}
+		if TownConstructionWork(w, kingdom_slot, town_slot, delta_time) == .Completed {
+			state^ = .Roaming
+			w.units[unit_slot].pathReady = false
+			builder.taskSequence += 1
+		}
 	case .GoingHome, .Sleeping:
 	}
 }
@@ -174,10 +203,9 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 		} else if !w.units[unit_slot].pathFound {
 			collector.carriedResource = 0
 			collector.taskSequence += 1
-			state^ = .Roaming
 			w.units[unit_slot].pathReady = false
 		}
-	case .GoingHome, .Sleeping:
+	case .GoingHome, .Sleeping, .ToConstruction, .Building:
 	}
 }
 
@@ -229,7 +257,7 @@ UnitUpdateFarmer :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 		}
 	case .Returning:
 		state^ = .Roaming
-	case .GoingHome, .Sleeping:
+	case .GoingHome, .Sleeping, .ToConstruction, .Building:
 	}
 }
 

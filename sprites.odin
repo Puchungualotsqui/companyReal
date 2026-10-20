@@ -461,6 +461,33 @@ draw_path :: proc(art: ^Art, accent: rl.Color) {
 	art_pixel(art, 13, 2, accent)
 }
 
+// Scaffolding laid over the footprint while a building is under construction.
+draw_construction_sprite :: proc(accent: rl.Color) -> Art {
+	art := art_init(PIXELS_PER_TILE, PIXELS_PER_TILE)
+	art_rect(&art, 0, 0, PIXELS_PER_TILE, PIXELS_PER_TILE, C_DIRT_DARK)
+
+	for i in 0..<18 {
+		x := int(WorldNoiseHash(i, 23, 0xC01)*PIXELS_PER_TILE)
+		y := int(WorldNoiseHash(23, i, 0xC02)*PIXELS_PER_TILE)
+		color := C_DIRT
+		if WorldNoiseHash(x, y, 0xC03) < 0.4 do color = C_WOOD_DARKEST
+		art_pixel(&art, x, y, color)
+	}
+
+	art_rect(&art, 0, 6, PIXELS_PER_TILE, 4, C_OUTLINE)
+	art_rect(&art, 0, 7, PIXELS_PER_TILE, 2, C_WOOD_DARK)
+	art_rect(&art, 6, 0, 4, PIXELS_PER_TILE, C_OUTLINE)
+	art_rect(&art, 7, 0, 2, PIXELS_PER_TILE, C_WOOD_DARK)
+
+	art_rect(&art, 1, 1, 3, 3, C_OUTLINE)
+	art_rect(&art, 2, 2, 1, 1, C_WOOD_LIGHT)
+	art_rect(&art, 12, 12, 3, 3, C_OUTLINE)
+	art_rect(&art, 13, 13, 1, 1, C_WOOD_LIGHT)
+
+	art_pixel(&art, 8, 8, accent)
+	return art
+}
+
 draw_home :: proc(art: ^Art, accent: rl.Color) {
 	draw_shadow(art, 8, 14, 5, 2)
 	art_rect(art, 3, 7, 10, 7, C_OUTLINE)
@@ -1368,11 +1395,12 @@ draw_decoration_stump :: proc(art: ^Art) {
 }
 
 SpriteSet :: struct {
-	building:   [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
-	unit:       [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
-	decoration: [DecorationKind]rl.Texture2D,
-	shadow:     rl.Texture2D,
-	glow:       rl.Texture2D,
+	building:     [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
+	unit:         [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
+	decoration:   [DecorationKind]rl.Texture2D,
+	construction: [SPRITE_FACTION_COUNT]rl.Texture2D,
+	shadow:       rl.Texture2D,
+	glow:         rl.Texture2D,
 }
 
 SpriteSetInit :: proc() -> SpriteSet {
@@ -1392,6 +1420,10 @@ SpriteSetInit :: proc() -> SpriteSet {
 			set.unit[faction][kind] = art_to_texture(art)
 			rl.UnloadImage(art.image)
 		}
+		art := draw_construction_sprite(accent)
+		art_grain(&art, u64(faction)+701)
+		set.construction[faction] = art_to_texture(art)
+		rl.UnloadImage(art.image)
 	}
 	for kind in ALL_DECORATION_KINDS {
 		art := draw_decoration_sprite(kind)
@@ -1415,6 +1447,9 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 			if set.unit[faction][kind].id != 0 {
 				rl.UnloadTexture(set.unit[faction][kind])
 			}
+		}
+		if set.construction[faction].id != 0 {
+			rl.UnloadTexture(set.construction[faction])
 		}
 	}
 	for kind in ALL_DECORATION_KINDS {
