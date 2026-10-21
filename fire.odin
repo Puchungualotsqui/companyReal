@@ -15,6 +15,23 @@ FIRE_UNIT_IGNITE_RADIUS :: 1.5
 FIRE_UNIT_IGNITE_CHANCE :: 0.12
 FIRE_UNIT_BURN_SECONDS :: 5
 
+// Fire-seconds removed per second by a pacific unit fighting a fire.
+FIRE_EXTINGUISH_RADIUS :: 1.6
+
+UnitExtinguishRate :: proc(type: UnitType) -> f32 {
+	switch _ in type {
+	case WaterCollector:
+		return 10
+	case Villager:
+		return 5
+	case Builder, Farmer:
+		return 4
+	case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
+		return 0
+	}
+	return 0
+}
+
 Fire :: struct {
 	x, y:      f32,
 	intensity: f32,
@@ -51,6 +68,29 @@ BuildingImmuneToFire :: proc(kind: BuildingKind) -> bool {
 		return false
 	}
 	unreachable()
+}
+
+FireAccessPoint :: proc(
+	w: ^World,
+	tile_x, tile_y: int,
+	unit_type: UnitType,
+) -> (int, int, bool) {
+	world_width := int(w.maxX)
+	world_height := int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return 0, 0, false
+	if WorldTileWalkable(w, tile_x, tile_y, unit_type) do return tile_x, tile_y, true
+	for radius in 1 ..= 2 {
+		for x in tile_x-radius ..= tile_x+radius {
+			for y in tile_y-radius ..= tile_y+radius {
+				wrapped_x := WorldWrapCoordinate(x, world_width)
+				wrapped_y := WorldWrapCoordinate(y, world_height)
+				if WorldTileWalkable(w, wrapped_x, wrapped_y, unit_type) {
+					return wrapped_x, wrapped_y, true
+				}
+			}
+		}
+	}
+	return 0, 0, false
 }
 
 WorldFireAt :: proc(w: ^World, x, y: int) -> bool {

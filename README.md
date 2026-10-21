@@ -1,5 +1,4 @@
 # Things to do
-- Fire propagation between buildings and decorations and with an smaller probability units too
 - Some attacks destroy decorations around them
 - There is no way to create new towns
 - The progress bar for new villager does not look like progressing

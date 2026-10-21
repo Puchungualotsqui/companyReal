@@ -1,8 +1,64 @@
 package main
 
+// Pacific units drop their work to fight a fire burning inside their town.
+UnitTryExtinguish :: proc(w: ^World, unit_slot: int, delta_time: f32) -> bool {
+	unit := &w.units[unit_slot]
+	rate := UnitExtinguishRate(unit.type)
+	if rate <= 0 do return false
+	if w.fireCount == 0 do return false
+	if !WorldTownExists(w, unit.kingdome, unit.town) do return false
+
+	fire_slot := -1
+	best_distance_squared: f32 = 0
+	world_width := f32(w.maxX)
+	world_height := f32(w.maxY)
+	for slot in 0 ..< FIRE_CAPACITY {
+		if !w.fireUsed[slot] do continue
+		if !TownPointInArea(w, unit.kingdome, unit.town, int(w.fires.x[slot]), int(w.fires.y[slot])) {
+			continue
+		}
+		delta_x := WorldShortestWrappedDelta(w.fires.x[slot]-unit.x, world_width)
+		delta_y := WorldShortestWrappedDelta(w.fires.y[slot]-unit.y, world_height)
+		distance_squared := delta_x*delta_x+delta_y*delta_y
+		if fire_slot >= 0 && distance_squared >= best_distance_squared do continue
+		fire_slot = slot
+		best_distance_squared = distance_squared
+	}
+	if fire_slot < 0 do return false
+
+	// A fire is an emergency: abandon whatever task is in progress.
+	if state, ok := unit.state.(StatePacific); ok && state != .Roaming {
+		unit.state = StatePacific.Roaming
+		unit.pathReady = false
+	}
+
+	if best_distance_squared <= FIRE_EXTINGUISH_RADIUS*FIRE_EXTINGUISH_RADIUS {
+		w.fires.remaining[fire_slot] -= rate*delta_time
+		if w.fires.remaining[fire_slot] <= 0 do WorldFireDespawn(w, fire_slot)
+		unit.pathReady = false
+		return true
+	}
+
+	target_x, target_y, found := FireAccessPoint(
+		w,
+		int(w.fires.x[fire_slot]),
+		int(w.fires.y[fire_slot]),
+		unit.type,
+	)
+	if !found do return false
+	if !unit.pathReady || unit.pathTargetX != target_x || unit.pathTargetY != target_y {
+		unit.pathTargetX = target_x
+		unit.pathTargetY = target_y
+		unit.pathReady = false
+	}
+	UnitMoveToTarget(w, unit_slot, delta_time)
+	return true
+}
+
 UnitUpdateVillager :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	if !WorldTownExists(w, w.units[unit_slot].kingdome, w.units[unit_slot].town) do return
 	if UnitUpdatePacificSleep(w, unit_slot, delta_time) do return
+	if UnitTryExtinguish(w, unit_slot, delta_time) do return
 	UnitUpdateRoaming(w, unit_slot, delta_time)
 }
 
@@ -11,6 +67,7 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	town_slot := w.units[unit_slot].town
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return
 	if UnitUpdatePacificSleep(w, unit_slot, delta_time) do return
+	if UnitTryExtinguish(w, unit_slot, delta_time) do return
 
 	builder := &w.units[unit_slot].type.(Builder)
 	state := &w.units[unit_slot].state.(StatePacific)
@@ -143,6 +200,7 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return
 	w.kingdoms[kingdom_slot].towns[town_slot].waterCollectors += 1
 	if UnitUpdatePacificSleep(w, unit_slot, delta_time) do return
+	if UnitTryExtinguish(w, unit_slot, delta_time) do return
 
 	collector := &w.units[unit_slot].type.(WaterCollector)
 	state := &w.units[unit_slot].state.(StatePacific)
@@ -221,6 +279,7 @@ UnitUpdateFarmer :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	}
 	w.kingdoms[kingdom_slot].towns[town_slot].farmers += 1
 	if UnitUpdatePacificSleep(w, unit_slot, delta_time) do return
+	if UnitTryExtinguish(w, unit_slot, delta_time) do return
 
 	state := &w.units[unit_slot].state.(StatePacific)
 	if state^ == .Roaming && !farmer.workedToday {
