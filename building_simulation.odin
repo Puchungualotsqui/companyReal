@@ -265,7 +265,7 @@ TownConstructionWork :: proc(
 	if slot >= 0 {
 		kind := w.decorations.kind[slot]
 		site.clearWork += delta_time
-		if site.clearWork >= DecorationChopSeconds(kind) {
+		if site.clearWork >= DecorationClearSeconds(kind) {
 			town.wood += DecorationWoodYield(kind)
 			WorldDecorationDespawn(w, slot)
 			site.clearWork = 0

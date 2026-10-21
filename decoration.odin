@@ -87,6 +87,28 @@ DecorationChopSeconds :: proc(kind: DecorationKind) -> f32 {
 	return 0
 }
 
+// Time a builder needs to clear a decoration off a construction site. Unlike
+// harvesting, even stones and brush take work to remove.
+DecorationClearSeconds :: proc(kind: DecorationKind) -> f32 {
+	switch kind {
+	case .Tree:
+		return 4
+	case .Pine:
+		return 3
+	case .Rock:
+		return 2.5
+	case .Stump:
+		return 1.5
+	case .Bush:
+		return 1.2
+	case .Cactus:
+		return 1
+	case .Flowers, .Reed:
+		return 0.4
+	}
+	return 0
+}
+
 DecorationWoodYield :: proc(kind: DecorationKind) -> f32 {
 	switch kind {
 	case .Tree:
@@ -366,7 +388,7 @@ WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
 
 			variant := u8(int(WorldNoiseHash(y, x, seed+907)*4) & 3)
 			jitter_x := 0.15+WorldNoiseHash(x, y, seed+911)*0.7
-			jitter_y := 0.9+WorldNoiseHash(y, x, seed+913)*0.12
+			jitter_y := 0.86+WorldNoiseHash(y, x, seed+913)*0.12
 			WorldDecorationSpawn(w, f32(x)+jitter_x, f32(y)+jitter_y, kind, variant)
 		}
 	}

@@ -1,4 +1,4 @@
-# Things/ideas to do
+# Things to do
 - Fire propagation between buildings and decorations and with an smaller probability units too
 - Some attacks destroy decorations around them
 - It can be there fire living on any tile that is not TileTypeAntiFire -> bool true
@@ -14,6 +14,9 @@
 - Boats
 - fog of war
 - Particles
+
+# Ideas
+- Ataques aereos de pociones, like in company of heroes
 
 # Bugs
 - Shadow of home/house is a bit lower. I think we should recheck all building shadows
