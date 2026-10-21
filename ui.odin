@@ -560,12 +560,70 @@ UIConversionClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: r
 // --- drawing --------------------------------------------------------------
 
 WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui: ^UIState) {
+	if ui.hover.kind != ui.selection.kind || ui.hover.slot != ui.selection.slot {
+		UIDrawTownArea(w, camera, ui.hover, true)
+	}
+	UIDrawTownArea(w, camera, ui.selection, false)
 	UIDrawHover(w, camera, ui.hover, ui.selection)
 	if !UISelectionValid(w, ui.selection) do return
 	UIDrawSelection(w, camera, ui.selection)
 
 	panel := UIPanelRect(w, ui)
 	UIDrawPanel(w, renderer, ui, panel)
+}
+
+// The town's buildable area, drawn as a tile-approximated circle when its hall
+// is selected, and faintly while it is only hovered.
+UIDrawTownArea :: proc(w: ^World, camera: rl.Camera2D, selection: Selection, faint: bool) {
+	if selection.kind != .Building do return
+	if !UISelectionTownHall(w, selection) do return
+	building := w.buildings[selection.slot]
+	if !WorldTownExists(w, building.kingdom, building.town) do return
+	town := &w.kingdoms[building.kingdom].towns[building.town]
+
+	accent := FactionColor(building.kingdom)
+	fill_alpha: u8 = faint ? 8 : 24
+	line_alpha: u8 = faint ? 70 : 140
+	fill := rl.Color{accent[0], accent[1], accent[2], fill_alpha}
+	line := rl.Color{accent[0], accent[1], accent[2], line_alpha}
+	thickness := 1/camera.zoom
+
+	hall_width, hall_height := BuildingTileSize(TownHall{})
+	radius := town.areaRadius
+	min_x := max(0, town.x-radius-1)
+	max_x := min(int(w.maxX)-1, town.x+hall_width+radius)
+	min_y := max(0, town.y-radius-1)
+	max_y := min(int(w.maxY)-1, town.y+hall_height+radius)
+
+	// Only iterate tiles that can actually be on screen.
+	half_width := f32(rl.GetScreenWidth())/(2*camera.zoom)
+	half_height := f32(rl.GetScreenHeight())/(2*camera.zoom)
+	min_x = max(min_x, int(camera.target.x-half_width)-1)
+	max_x = min(max_x, int(camera.target.x+half_width)+1)
+	min_y = max(min_y, int(camera.target.y-half_height)-1)
+	max_y = min(max_y, int(camera.target.y+half_height)+1)
+	if min_x > max_x || min_y > max_y do return
+
+	rl.BeginMode2D(camera)
+	for x in min_x ..= max_x {
+		for y in min_y ..= max_y {
+			if !TownPointInArea(w, building.kingdom, building.town, x, y) do continue
+			rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), 1, 1}, fill)
+			if !TownPointInArea(w, building.kingdom, building.town, x+1, y) {
+				rl.DrawRectangleRec(rl.Rectangle{f32(x)+1-thickness, f32(y), thickness, 1}, line)
+			}
+			if !TownPointInArea(w, building.kingdom, building.town, x-1, y) {
+				rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), thickness, 1}, line)
+			}
+			if !TownPointInArea(w, building.kingdom, building.town, x, y+1) {
+				rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y)+1-thickness, 1, thickness}, line)
+			}
+			if !TownPointInArea(w, building.kingdom, building.town, x, y-1) {
+				rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), 1, thickness}, line)
+			}
+		}
+	}
+	rl.EndMode2D()
 }
 
 UIDrawHover :: proc(w: ^World, camera: rl.Camera2D, hover, selection: Selection) {

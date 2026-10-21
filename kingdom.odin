@@ -149,31 +149,34 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 	return i, true
 }
 
-TownTileAreaDistance :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> int {
+// Squared distance in tiles from the town hall footprint (0 on the hall). The
+// square is kept for cheap comparisons; callers compare against radius², which
+// makes the buildable area a tile approximation of a circle.
+TownTileAreaDistanceSquared :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> int {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return max(int)
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	hall_width, hall_height := BuildingTileSize(TownHall{})
 	delta_x := max(max(town.x-x, 0), x-(town.x+hall_width-1))
 	delta_y := max(max(town.y-y, 0), y-(town.y+hall_height-1))
-	return max(delta_x, delta_y)
+	return delta_x*delta_x+delta_y*delta_y
 }
 
 TownPointInArea :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
-	return TownTileAreaDistance(w, kingdom_slot, town_slot, x, y) <=
-		w.kingdoms[kingdom_slot].towns[town_slot].areaRadius
+	radius := w.kingdoms[kingdom_slot].towns[town_slot].areaRadius
+	return TownTileAreaDistanceSquared(w, kingdom_slot, town_slot, x, y) <= radius*radius
 }
 
 TownBuildingInArea :: proc(w: ^World, kingdom_slot, town_slot, x, y: int, type: BuildingType) -> bool {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
 	width, height := BuildingTileSize(type)
 	if width <= 0 || height <= 0 do return false
-	d0 := TownTileAreaDistance(w, kingdom_slot, town_slot, x, y)
-	d1 := TownTileAreaDistance(w, kingdom_slot, town_slot, x+width-1, y)
-	d2 := TownTileAreaDistance(w, kingdom_slot, town_slot, x, y+height-1)
-	d3 := TownTileAreaDistance(w, kingdom_slot, town_slot, x+width-1, y+height-1)
-	return max(max(d0, d1), max(d2, d3)) <=
-		w.kingdoms[kingdom_slot].towns[town_slot].areaRadius
+	d0 := TownTileAreaDistanceSquared(w, kingdom_slot, town_slot, x, y)
+	d1 := TownTileAreaDistanceSquared(w, kingdom_slot, town_slot, x+width-1, y)
+	d2 := TownTileAreaDistanceSquared(w, kingdom_slot, town_slot, x, y+height-1)
+	d3 := TownTileAreaDistanceSquared(w, kingdom_slot, town_slot, x+width-1, y+height-1)
+	radius := w.kingdoms[kingdom_slot].towns[town_slot].areaRadius
+	return max(max(d0, d1), max(d2, d3)) <= radius*radius
 }
 
 TownFindBuilding :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind) -> int {
