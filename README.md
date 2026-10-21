@@ -1,8 +1,6 @@
 # Things to do
 - Some attacks destroy decorations around them
 - There is no way to create new towns
-- The progress bar for new villager does not look like progressing
-- Villagers with no job should make the population growth even faster
 - UI incomplete: attack town, defend town, select milestone reward, build manually
 - Description to enrich the world of the buildings and units
 - Add automatic town names and kingdom names. All should be unique

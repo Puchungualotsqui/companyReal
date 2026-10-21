@@ -5,6 +5,12 @@ import "core:math"
 TOWN_SIMULATION_STEP :: 0.25
 WORLD_DAY_LENGTH_SECONDS :: 7*60.0
 
+// Population growth always ticks. Food/water supply and unconverted villagers
+// speed it up; these are fractions of the growth bar per second.
+GROWTH_BASE_PER_SECOND :: 1.0/150
+GROWTH_SUPPLY_PER_SECOND :: 1.0/45
+GROWTH_VILLAGER_PER_SECOND :: 1.0/300
+
 WorldUpdate :: proc(w: ^World, delta_time: f32) {
 	if delta_time <= 0 do return
 	w.simulationAccumulator += delta_time
@@ -57,6 +63,7 @@ WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
 			town.builders = 0
 			town.waterCollectors = 0
 			town.farmers = 0
+			town.villagers = 0
 		}
 	}
 
@@ -169,19 +176,22 @@ KingdomTownUpdate :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time: f
 
 	population_need := f32(town.citizens+1)*0.025
 	can_grow := town.foodPotential >= population_need && town.waterPotential >= population_need
-	if can_grow {
-		limiting_supply := min(town.foodPotential, town.waterPotential)
-		growth_time := 30*population_need/limiting_supply
-		town.growthTime = growth_time
-		town.growthTimer += delta_time
-		if town.growthTimer >= growth_time {
-			if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) >= 0 {
-				town.growthTimer = 0
-			}
+	limiting_supply := min(town.foodPotential, town.waterPotential)
+	supply_ratio: f32 = 0
+	if population_need > 0 {
+		supply_ratio = clamp(limiting_supply/population_need, 0, 2)
+	}
+	town.growthRate =
+		GROWTH_BASE_PER_SECOND+
+		GROWTH_SUPPLY_PER_SECOND*supply_ratio+
+		GROWTH_VILLAGER_PER_SECOND*f32(town.villagers)
+	town.growthProgress += town.growthRate*delta_time
+	if town.growthProgress >= 1 {
+		if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) >= 0 {
+			town.growthProgress -= 1
+		} else {
+			town.growthProgress = 1
 		}
-	} else {
-		town.growthTimer = 0
-		town.growthTime = 0
 	}
 
 	if town.builders > 0 {
@@ -245,6 +255,19 @@ TownSpawnCitizen :: proc(w: ^World, kingdom_slot, town_slot: int, role: UnitType
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
+
+	// New villagers step out of the town hall door first.
+	for offset_x in 0 ..= 1 {
+		x := town.x+1+offset_x
+		y := town.y+4
+		if x < 0 || y < 0 || x >= world_width || y >= world_height do continue
+		if !UnitValidTileType(role, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
+		if WorldUnitAtTile(w, x, y) do continue
+		if unit_slot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdom_slot, town_slot); ok {
+			return unit_slot
+		}
+	}
+
 	for radius in 1..=8 {
 		min_x := max(0, town.x-radius)
 		max_x := min(world_width-1, town.x+4+radius)

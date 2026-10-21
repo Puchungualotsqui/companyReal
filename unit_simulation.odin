@@ -56,7 +56,10 @@ UnitTryExtinguish :: proc(w: ^World, unit_slot: int, delta_time: f32) -> bool {
 }
 
 UnitUpdateVillager :: proc(w: ^World, unit_slot: int, delta_time: f32) {
-	if !WorldTownExists(w, w.units[unit_slot].kingdome, w.units[unit_slot].town) do return
+	kingdom_slot := w.units[unit_slot].kingdome
+	town_slot := w.units[unit_slot].town
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return
+	w.kingdoms[kingdom_slot].towns[town_slot].villagers += 1
 	if UnitUpdatePacificSleep(w, unit_slot, delta_time) do return
 	if UnitTryExtinguish(w, unit_slot, delta_time) do return
 	UnitUpdateRoaming(w, unit_slot, delta_time)

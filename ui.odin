@@ -754,10 +754,7 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 		panel.width-2*UI_PAD-126,
 		9,
 	}
-	progress: f32 = 0
-	if t.growthTime > 0 {
-		progress = clamp((t.growthTimer+w.simulationAccumulator)/t.growthTime, 0, 1)
-	}
+	progress := clamp(t.growthProgress+w.simulationAccumulator*t.growthRate, 0, 1)
 
 	rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
 	if progress > 0 {
