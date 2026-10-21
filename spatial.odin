@@ -18,6 +18,10 @@ SpatialIndex :: struct {
 	decorationNext:   [DECORATION_CAPACITY]int,
 	decorationPrev:   [DECORATION_CAPACITY]int,
 	decorationChunk:  [DECORATION_CAPACITY]int,
+	fireHead:         []int,
+	fireNext:         [FIRE_CAPACITY]int,
+	firePrev:         [FIRE_CAPACITY]int,
+	fireChunk:        [FIRE_CAPACITY]int,
 }
 
 SpatialIndexInit :: proc(w: ^World) -> bool {
@@ -30,10 +34,12 @@ SpatialIndexInit :: proc(w: ^World) -> bool {
 	w.spatial.unitHead = make([]int, chunk_count)
 	w.spatial.buildingHead = make([]int, chunk_count)
 	w.spatial.decorationHead = make([]int, chunk_count)
+	w.spatial.fireHead = make([]int, chunk_count)
 	for i in 0..<chunk_count {
 		w.spatial.unitHead[i] = -1
 		w.spatial.buildingHead[i] = -1
 		w.spatial.decorationHead[i] = -1
+		w.spatial.fireHead[i] = -1
 	}
 	for i in 0..<UNIT_CAPACITY {
 		w.spatial.unitNext[i] = -1
@@ -49,6 +55,11 @@ SpatialIndexInit :: proc(w: ^World) -> bool {
 		w.spatial.decorationPrev[i] = -1
 		w.spatial.decorationChunk[i] = -1
 	}
+	for i in 0..<FIRE_CAPACITY {
+		w.spatial.fireNext[i] = -1
+		w.spatial.firePrev[i] = -1
+		w.spatial.fireChunk[i] = -1
+	}
 	return true
 }
 
@@ -56,6 +67,7 @@ SpatialIndexDeinit :: proc(w: ^World) {
 	delete(w.spatial.unitHead)
 	delete(w.spatial.buildingHead)
 	delete(w.spatial.decorationHead)
+	delete(w.spatial.fireHead)
 }
 
 SpatialChunkIndex :: proc(w: ^World, x, y: int) -> int {
@@ -179,6 +191,33 @@ SpatialDecorationRemove :: proc(w: ^World, decoration_slot: int) {
 	w.spatial.decorationNext[decoration_slot] = -1
 	w.spatial.decorationPrev[decoration_slot] = -1
 	w.spatial.decorationChunk[decoration_slot] = -1
+}
+
+SpatialFireInsert :: proc(w: ^World, fire_slot: int) {
+	chunk := SpatialChunkIndex(w, int(w.fires.x[fire_slot]), int(w.fires.y[fire_slot]))
+	if chunk < 0 do return
+	head := w.spatial.fireHead[chunk]
+	w.spatial.fireNext[fire_slot] = head
+	w.spatial.firePrev[fire_slot] = -1
+	if head >= 0 do w.spatial.firePrev[head] = fire_slot
+	w.spatial.fireHead[chunk] = fire_slot
+	w.spatial.fireChunk[fire_slot] = chunk
+}
+
+SpatialFireRemove :: proc(w: ^World, fire_slot: int) {
+	chunk := w.spatial.fireChunk[fire_slot]
+	if chunk < 0 do return
+	previous := w.spatial.firePrev[fire_slot]
+	next := w.spatial.fireNext[fire_slot]
+	if previous >= 0 {
+		w.spatial.fireNext[previous] = next
+	} else {
+		w.spatial.fireHead[chunk] = next
+	}
+	if next >= 0 do w.spatial.firePrev[next] = previous
+	w.spatial.fireNext[fire_slot] = -1
+	w.spatial.firePrev[fire_slot] = -1
+	w.spatial.fireChunk[fire_slot] = -1
 }
 
 WorldUnitAtTile :: proc(w: ^World, x, y: int) -> bool {

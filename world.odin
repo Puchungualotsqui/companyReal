@@ -12,8 +12,12 @@ World :: struct {
 	decorations: #soa [DECORATION_CAPACITY]Decoration,
 	decorationUsed: [DECORATION_CAPACITY]bool,
 	decorationCursor: int,
-	decorationBurning: int,
 	decorationStumps: int,
+	fires: #soa [FIRE_CAPACITY]Fire,
+	fireUsed: [FIRE_CAPACITY]bool,
+	fireCursor: int,
+	fireCount: int,
+	unitsBurning: int,
 	kingdoms: #soa [KINGDOMS_CAPACITY]Kingdom,
 	kingdomUsed: [KINGDOMS_CAPACITY]bool,
 	maxX, maxY: uint,
@@ -136,6 +140,7 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.unitUsed[i] = true
 	UnitTypeInit(w, i, type)
 	w.units[i].sleepOffsetHours = WorldNoiseHash(i, kingdomSlot+townSlot*101, u64(i)+401)-0.5
+	w.units[i].burning = 0
 	w.units[i].effects = [UnitEffects]bool{
 		.NoHome = false,
 		.NoWater = false,
@@ -178,6 +183,10 @@ UnitDespawn :: proc(w: ^World, slot: int) -> bool {
 		w.kingdoms[kingdom_slot].towns[town_slot].citizens -= 1
 	}
 	delete(w.units[slot].path)
+	if w.units[slot].burning > 0 {
+		w.unitsBurning -= 1
+		w.units[slot].burning = 0
+	}
 	SpatialUnitRemove(w, slot)
 	w.unitUsed[slot] = false
 	return true

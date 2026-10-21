@@ -488,6 +488,21 @@ draw_construction_sprite :: proc(accent: rl.Color) -> Art {
 	return art
 }
 
+draw_fire_sprite :: proc() -> Art {
+	art := art_init(PIXELS_PER_TILE, PIXELS_PER_TILE)
+	art_ellipse(&art, 8, 11, 5, 4, C_ROOF)
+	art_triangle(&art, 8, 0, 5, 9, 11, 9, C_ROOF)
+	art_ellipse(&art, 8, 11, 4, 3, C_GOLD_DARK)
+	art_triangle(&art, 8, 3, 6, 10, 10, 10, C_GOLD_DARK)
+	art_ellipse(&art, 8, 11, 2, 2, C_GOLD)
+	art_triangle(&art, 8, 6, 7, 10, 9, 10, C_GOLD)
+	art_pixel(&art, 8, 10, C_GOLD_LIGHT)
+	art_pixel(&art, 8, 8, C_GOLD_LIGHT)
+	art_pixel(&art, 3, 14, C_GOLD_DARK)
+	art_pixel(&art, 12, 14, C_GOLD_DARK)
+	return art
+}
+
 draw_home :: proc(art: ^Art, accent: rl.Color) {
 	draw_shadow(art, 8, 14, 5, 2)
 	art_rect(art, 3, 7, 10, 7, C_OUTLINE)
@@ -1399,6 +1414,7 @@ SpriteSet :: struct {
 	unit:         [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
 	decoration:   [DecorationKind]rl.Texture2D,
 	construction: [SPRITE_FACTION_COUNT]rl.Texture2D,
+	fire:         rl.Texture2D,
 	shadow:       rl.Texture2D,
 	glow:         rl.Texture2D,
 }
@@ -1431,6 +1447,7 @@ SpriteSetInit :: proc() -> SpriteSet {
 		set.decoration[kind] = art_to_texture(art)
 		rl.UnloadImage(art.image)
 	}
+	set.fire = art_to_texture(draw_fire_sprite())
 	return set
 }
 
@@ -1457,4 +1474,5 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 			rl.UnloadTexture(set.decoration[kind])
 		}
 	}
+	if set.fire.id != 0 do rl.UnloadTexture(set.fire)
 }

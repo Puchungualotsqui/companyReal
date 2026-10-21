@@ -521,6 +521,43 @@ WorldRenderSprites :: proc(
 				if item.flip_x do source.width = -source.width
 				rl.DrawTexturePro(item.texture, source, item.dest, rl.Vector2{0, 0}, 0, rl.WHITE)
 			}
+
+			if renderer.sprites.fire.id != 0 && w.fireCount > 0 {
+				fire_source := rl.Rectangle{
+					0,
+					0,
+					f32(renderer.sprites.fire.width),
+					f32(renderer.sprites.fire.height),
+				}
+				for fire_slot in 0 ..< FIRE_CAPACITY {
+					if !w.fireUsed[fire_slot] do continue
+					fire_x := w.fires.x[fire_slot]
+					fire_y := w.fires.y[fire_slot]
+					if fire_x+1 < min_x || fire_x-1 > max_x ||
+						fire_y+1 < min_y || fire_y-1 > max_y {
+						continue
+					}
+
+					flicker := 0.9+0.12*math.sin(w.simulationTime*9+f32(fire_slot)*1.7)
+					intensity := w.fires.intensity[fire_slot]
+					width := (0.72+0.18*intensity)*flicker
+					height := (1.15+0.4*intensity)*flicker
+					jitter_x := (WorldNoiseHash(fire_slot, 1, 0xF12)-0.5)*0.3
+					rl.DrawTexturePro(
+						renderer.sprites.fire,
+						fire_source,
+						rl.Rectangle{
+							offset_x+fire_x+jitter_x-width*0.5,
+							offset_y+fire_y+0.35-height,
+							width,
+							height,
+						},
+						rl.Vector2{0, 0},
+						0,
+						rl.Color{255, 255, 255, 235},
+					)
+				}
+			}
 		}
 	}
 }

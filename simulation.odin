@@ -17,6 +17,7 @@ WorldUpdate :: proc(w: ^World, delta_time: f32) {
 		}
 		WorldUnitUpdate(w, TOWN_SIMULATION_STEP)
 		WorldBuildingUpdate(w, TOWN_SIMULATION_STEP)
+		WorldFireUpdate(w, TOWN_SIMULATION_STEP)
 		WorldDecorationUpdate(w, TOWN_SIMULATION_STEP)
 		WorldKingdomUpdate(w, TOWN_SIMULATION_STEP)
 		w.simulationAccumulator -= TOWN_SIMULATION_STEP

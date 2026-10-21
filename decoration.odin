@@ -4,10 +4,6 @@ package main
 // their own slots and update loop so they can grow behaviour such as fire or
 // regrowth without touching the unit/building passes.
 DECORATION_CAPACITY :: 100_000
-DECORATION_FIRE_RADIUS :: 2.5
-DECORATION_FIRE_CHUNK_RADIUS :: 3
-DECORATION_FIRE_SPREAD :: 0.08
-DECORATION_FIRE_DAMAGE :: 0.35
 DECORATION_REGROW_SECONDS :: 90
 
 DecorationKind :: enum {
@@ -37,7 +33,6 @@ Decoration :: struct {
 	kind:        DecorationKind,
 	variant:     u8,
 	health:      f32,
-	fire:        f32,
 	regrowTimer: f32,
 }
 
@@ -139,7 +134,6 @@ WorldDecorationSpawn :: proc(w: ^World, x, y: f32, kind: DecorationKind, variant
 	w.decorations.kind[slot] = kind
 	w.decorations.variant[slot] = variant
 	w.decorations.health[slot] = DecorationHealth(kind)
-	w.decorations.fire[slot] = 0
 	w.decorations.regrowTimer[slot] = 0
 	w.decorationUsed[slot] = true
 	if kind == .Stump do w.decorationStumps += 1
@@ -150,7 +144,6 @@ WorldDecorationSpawn :: proc(w: ^World, x, y: f32, kind: DecorationKind, variant
 
 WorldDecorationDespawn :: proc(w: ^World, slot: int) -> bool {
 	if slot < 0 || slot >= DECORATION_CAPACITY || !w.decorationUsed[slot] do return false
-	if w.decorations.fire[slot] > 0 do w.decorationBurning -= 1
 	if w.decorations.kind[slot] == .Stump do w.decorationStumps -= 1
 	SpatialDecorationRemove(w, slot)
 	w.decorationUsed[slot] = false
@@ -164,7 +157,6 @@ DecorationFell :: proc(w: ^World, slot: int) {
 		w.decorations.kind[slot] = .Stump
 		w.decorations.variant[slot] = 0
 		w.decorations.health[slot] = DecorationHealth(.Stump)
-		w.decorations.fire[slot] = 0
 		w.decorations.regrowTimer[slot] = 0
 		w.decorationStumps += 1
 	case .Bush, .Flowers, .Cactus, .Reed, .Stump:
@@ -178,10 +170,10 @@ DecorationFell :: proc(w: ^World, slot: int) {
 DecorationRegrowth :: proc(w: ^World, slot: int, delta_time: f32) -> bool {
 	if slot < 0 || slot >= DECORATION_CAPACITY || !w.decorationUsed[slot] do return false
 	if w.decorations.kind[slot] != .Stump do return false
-	if w.decorations.fire[slot] > 0 do return false
 
 	tile_x := int(w.decorations.x[slot])
 	tile_y := int(w.decorations.y[slot])
+	if WorldFireAt(w, tile_x, tile_y) do return false
 	if WorldTileOccupied(w, tile_x, tile_y) {
 		WorldDecorationDespawn(w, slot)
 		return false
@@ -200,13 +192,7 @@ DecorationRegrowth :: proc(w: ^World, slot: int, delta_time: f32) -> bool {
 	return true
 }
 
-WorldDecorationIgnite :: proc(w: ^World, slot: int, intensity: f32) {
-	if slot < 0 || slot >= DECORATION_CAPACITY || !w.decorationUsed[slot] do return
-	if w.decorations.fire[slot] > 0 do return
-	if !DecorationIsFlammable(w.decorations.kind[slot]) do return
-	w.decorations.fire[slot] = clamp(intensity, 0.2, 2)
-	w.decorationBurning += 1
-}
+
 
 WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> f32 {
 	chunk_size := w.spatial.chunkSize
@@ -240,65 +226,11 @@ WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> f32 {
 }
 
 WorldDecorationUpdate :: proc(w: ^World, delta_time: f32) {
-	if w.decorationBurning == 0 && w.decorationStumps == 0 do return
+	if w.decorationStumps == 0 do return
 
 	for slot in 0 ..< DECORATION_CAPACITY {
 		if !w.decorationUsed[slot] do continue
-		intensity := w.decorations.fire[slot]
-		if intensity > 0 {
-			w.decorations.health[slot] -= DECORATION_FIRE_DAMAGE*intensity*delta_time
-			if w.decorations.health[slot] <= 0 {
-				DecorationBurnOut(w, slot)
-				continue
-			}
-			DecorationSpreadFire(w, slot, intensity, delta_time)
-			continue
-		}
 		DecorationRegrowth(w, slot, delta_time)
-	}
-}
-
-DecorationBurnOut :: proc(w: ^World, slot: int) {
-	w.decorations.fire[slot] = 0
-	w.decorationBurning -= 1
-	DecorationFell(w, slot)
-}
-
-DecorationSpreadFire :: proc(w: ^World, slot: int, intensity: f32, delta_time: f32) {
-	chunk_size := w.spatial.chunkSize
-	if chunk_size <= 0 do return
-	x := w.decorations.x[slot]
-	y := w.decorations.y[slot]
-	world_width := f32(w.maxX)
-	world_height := f32(w.maxY)
-
-	radius := DECORATION_FIRE_CHUNK_RADIUS
-	first_chunk_x := (int(x)-radius)/chunk_size
-	last_chunk_x := (int(x)+radius)/chunk_size
-	first_chunk_y := (int(y)-radius)/chunk_size
-	last_chunk_y := (int(y)+radius)/chunk_size
-	chance := DECORATION_FIRE_SPREAD*intensity*delta_time
-
-	for chunk_y in first_chunk_y ..= last_chunk_y {
-		wrapped_y := WorldWrapCoordinate(chunk_y, w.spatial.chunksY)
-		for chunk_x in first_chunk_x ..= last_chunk_x {
-			wrapped_x := WorldWrapCoordinate(chunk_x, w.spatial.chunksX)
-			chunk := wrapped_x*w.spatial.chunksY+wrapped_y
-			for neighbour := w.spatial.decorationHead[chunk]; neighbour >= 0;
-				neighbour = w.spatial.decorationNext[neighbour] {
-				if neighbour == slot do continue
-				if w.decorations.fire[neighbour] > 0 do continue
-				if !DecorationIsFlammable(w.decorations.kind[neighbour]) do continue
-				delta_x := WorldShortestWrappedDelta(w.decorations.x[neighbour]-x, world_width)
-				delta_y := WorldShortestWrappedDelta(w.decorations.y[neighbour]-y, world_height)
-				if delta_x*delta_x+delta_y*delta_y > DECORATION_FIRE_RADIUS*DECORATION_FIRE_RADIUS {
-					continue
-				}
-				roll := WorldNoiseHash(neighbour, slot, u64(w.simulationTime*64))
-				if roll > chance do continue
-				WorldDecorationIgnite(w, neighbour, intensity*0.8)
-			}
-		}
 	}
 }
 

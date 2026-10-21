@@ -364,6 +364,12 @@ WarriorSwing :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
 		impact_x, impact_y, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
 		w.buildings[target.slot].health -= damage
 		if w.buildings[target.slot].health <= 0 {
+			kind := BuildingKindOf(w.buildings[target.slot].type)
+			// Burning rubble can set the surroundings alight after a siege.
+			if !BuildingImmuneToFire(kind) &&
+				WorldNoiseHash(target.slot, int(w.simulationTime*4), 0xF12E) < 0.35 {
+				WorldFireIgnite(w, impact_x, impact_y, 1)
+			}
 			BuildingDespawn(w, target.slot, unit.kingdome)
 			state.target = TargetNone{}
 		}

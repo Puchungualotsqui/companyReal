@@ -269,6 +269,7 @@ Unit :: struct {
 	x, y: f32,
 	previousX, previousY: f32,
 	health: f32,
+	burning: f32,
 	cooldown: f32,
 	type: UnitType,
 	kingdome: int,
@@ -696,6 +697,10 @@ UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
 UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
 	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
 	unit := &w.units[unit_slot]
+	if unit.burning > 0 {
+		unit.burning = 0
+		w.unitsBurning -= 1
+	}
 	unit.type = type
 	unit.health = UnitDefaultHealth(type)
 	unit.cooldown = UnitDefaultCooldown(type)
