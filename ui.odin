@@ -578,10 +578,46 @@ UIMilestoneRect :: proc() -> rl.Rectangle {
 	return rl.Rectangle{(screen_width-width)*0.5, (screen_height-height)*0.5, width, height}
 }
 
-UIMilestoneCardRects :: proc(modal: rl.Rectangle) -> [2]rl.Rectangle {
+UI_MILESTONE_SHARED_H :: 64
+
+// Rewards granted by both paths are shown once, above the two choices.
+UIMilestoneSharedRewards :: proc(
+	w: ^World,
+	kingdom, town: int,
+) -> (
+	units: bit_set[UnitKind],
+	unlocks: bit_set[BuildingKind],
+	has_shared: bool,
+) {
+	option_a, ok_a := TownMilestoneOption(w, kingdom, town, 0)
+	option_b, ok_b := TownMilestoneOption(w, kingdom, town, 1)
+	if !ok_a || !ok_b do return
+
+	units = option_a.units & option_b.units
+	unlocks = option_a.unlocks & option_b.unlocks
+	for kind in UnitKind {
+		if kind in units {
+			has_shared = true
+			break
+		}
+	}
+	if !has_shared {
+		for kind in BuildingKind {
+			if kind in unlocks {
+				has_shared = true
+				break
+			}
+		}
+	}
+	return
+}
+
+UIMilestoneCardRects :: proc(w: ^World, kingdom, town: int, modal: rl.Rectangle) -> [2]rl.Rectangle {
 	card_width := (modal.width-3*UI_PAD)*0.5
 	top := modal.y+82
-	height := modal.height-82-UI_PAD
+	_, _, has_shared := UIMilestoneSharedRewards(w, kingdom, town)
+	if has_shared do top += UI_MILESTONE_SHARED_H
+	height := modal.height-(top-modal.y)-UI_PAD
 	return [2]rl.Rectangle{
 		{modal.x+UI_PAD, top, card_width, height},
 		{modal.x+2*UI_PAD+card_width, top, card_width, height},
@@ -1093,7 +1129,7 @@ UITileAtMouse :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> (til
 
 UIMilestoneClick :: proc(w: ^World, kingdom, town: int, mouse: rl.Vector2) {
 	modal := UIMilestoneRect()
-	cards := UIMilestoneCardRects(modal)
+	cards := UIMilestoneCardRects(w, kingdom, town, modal)
 	for card, option in cards {
 		if rl.CheckCollisionPointRec(mouse, card) {
 			TownChooseMilestone(w, kingdom, town, option)
@@ -2133,7 +2169,59 @@ UIDrawMilestone :: proc(w: ^World, renderer: ^WorldRenderer, kingdom, town: int)
 	)
 
 	mouse := rl.GetMousePosition()
-	cards := UIMilestoneCardRects(modal)
+
+	shared_units, shared_unlocks, has_shared := UIMilestoneSharedRewards(w, kingdom, town)
+	if has_shared {
+		band := rl.Rectangle{
+			modal.x+UI_PAD,
+			modal.y+82,
+			modal.width-2*UI_PAD,
+			UI_MILESTONE_SHARED_H-8,
+		}
+		rl.DrawRectangleRec(band, UI_COLOR_BUTTON_OFF)
+		rl.DrawRectangleLinesEx(band, 1, UI_COLOR_BORDER_INNER)
+
+		title: cstring = "Both paths"
+		title_width := UIHudTextWidth(title)
+		ui_text(title, modal.x+(modal.width-title_width)*0.5, band.y+5, UI_COLOR_GOLD)
+
+		total_width: f32 = 0
+		for kind in UnitKind {
+			if !(kind in shared_units) do continue
+			if total_width > 0 do total_width += 16
+			total_width += 24+8+UIHudTextWidth(UIUnitName(kind))
+		}
+		for kind in BuildingKind {
+			if !(kind in shared_unlocks) do continue
+			if total_width > 0 do total_width += 16
+			total_width += 24+8+UIHudTextWidth(UIBuildingName(kind))
+		}
+
+		item_x := modal.x+(modal.width-total_width)*0.5
+		item_y := band.y+28
+		for kind in UnitKind {
+			if !(kind in shared_units) do continue
+			texture := renderer.sprites.unit[FactionSpriteIndex(kingdom)][kind]
+			if texture.id != 0 {
+				source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+				rl.DrawTexturePro(texture, source, rl.Rectangle{item_x, item_y, 24, 24}, rl.Vector2{0, 0}, 0, rl.WHITE)
+			}
+			ui_text(UIUnitName(kind), item_x+32, item_y+2, UI_COLOR_TEXT)
+			item_x += 24+8+UIHudTextWidth(UIUnitName(kind))+16
+		}
+		for kind in BuildingKind {
+			if !(kind in shared_unlocks) do continue
+			texture := renderer.sprites.building[FactionSpriteIndex(kingdom)][kind]
+			if texture.id != 0 {
+				source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+				rl.DrawTexturePro(texture, source, rl.Rectangle{item_x, item_y, 24, 24}, rl.Vector2{0, 0}, 0, rl.WHITE)
+			}
+			ui_text(UIBuildingName(kind), item_x+32, item_y+2, UI_COLOR_TEXT)
+			item_x += 24+8+UIHudTextWidth(UIBuildingName(kind))+16
+		}
+	}
+
+	cards := UIMilestoneCardRects(w, kingdom, town, modal)
 	for card, option_index in cards {
 		hovered := rl.CheckCollisionPointRec(mouse, card)
 		background := hovered ? UI_COLOR_BUTTON_HOVER : UI_COLOR_BUTTON
@@ -2146,7 +2234,7 @@ UIDrawMilestone :: proc(w: ^World, renderer: ^WorldRenderer, kingdom, town: int)
 		ui_title(UITownPathName(option.path), card.x+UI_PAD, card.y+8, UI_COLOR_GOLD)
 		row := 0
 		for kind in UnitKind {
-			if !(kind in option.units) do continue
+			if !(kind in option.units) || (kind in shared_units) do continue
 			row_y := card.y+42+f32(row)*28
 			texture := renderer.sprites.unit[FactionSpriteIndex(kingdom)][kind]
 			if texture.id != 0 {
@@ -2158,7 +2246,7 @@ UIDrawMilestone :: proc(w: ^World, renderer: ^WorldRenderer, kingdom, town: int)
 			row += 1
 		}
 		for kind in BuildingKind {
-			if !(kind in option.unlocks) do continue
+			if !(kind in option.unlocks) || (kind in shared_unlocks) do continue
 			row_y := card.y+42+f32(row)*28
 			texture := renderer.sprites.building[FactionSpriteIndex(kingdom)][kind]
 			if texture.id != 0 {
@@ -2199,10 +2287,10 @@ UIButton :: proc(rect: rl.Rectangle, label: cstring, enabled: bool) {
 
 // --- kingdom HUD, town list, diplomacy, alerts -----------------------------
 
-UI_HUD_W :: 620
-UI_HUD_H :: 46
-UI_HUD_BUTTON_W :: 108
+UI_HUD_PAD :: 12
+UI_HUD_GAP :: 20
 UI_HUD_BUTTON_H :: 28
+UI_HUD_BUTTON_PAD :: 14
 UI_SIDE_PANEL_W :: 420
 UI_SIDE_ROW_H :: 30
 UI_SIDE_HEADER_H :: 36
@@ -2212,26 +2300,62 @@ UI_ALERT_W :: 380
 UI_ALERT_ROW_H :: 30
 UI_ALERT_MAX_ROWS :: 6
 
-UIHudRect :: proc() -> rl.Rectangle {
-	return rl.Rectangle{UI_MARGIN, UI_MARGIN, UI_HUD_W, UI_HUD_H}
+UIHudTextWidth :: proc(text: cstring) -> f32 {
+	return rl.MeasureTextEx(ui_font(), text, UI_TEXT_SIZE, 1).x
 }
 
-UIHudTownsButtonRect :: proc() -> rl.Rectangle {
-	hud := UIHudRect()
+UIHudLineHeight :: proc() -> f32 {
+	return rl.MeasureTextEx(ui_font(), "Ag", UI_TEXT_SIZE, 1).y
+}
+
+UIHudTimeLabel :: proc(w: ^World) -> cstring {
+	return fmt.ctprintf("Day %d  %02dh", w.dayNumber+1, int(WorldTimeOfDay(w)))
+}
+
+UIHudWarLabel :: proc(w: ^World) -> cstring {
+	war_count := UIWarCount(w)
+	if war_count > 0 do return fmt.ctprintf("AT WAR: %d", war_count)
+	return "At peace"
+}
+
+UIHudRect :: proc(w: ^World) -> rl.Rectangle {
+	name_width := UIHudTextWidth(NameKingdomCString(w, PLAYER_KINGDOM))
+	time_width := UIHudTextWidth(UIHudTimeLabel(w))
+	war_width := UIHudTextWidth(UIHudWarLabel(w))
+	line_width := max(name_width, time_width+24+war_width)
+
+	towns_width := UIHudTextWidth("TOWNS")+2*UI_HUD_BUTTON_PAD
+	diplomacy_width := UIHudTextWidth("DIPLOMACY")+2*UI_HUD_BUTTON_PAD
+	buttons_width := towns_width+8+diplomacy_width
+
+	height := max(UIHudLineHeight()*2, UI_HUD_BUTTON_H)+2*UI_HUD_PAD
+	width := UI_HUD_PAD*2+line_width+UI_HUD_GAP+buttons_width
 	return rl.Rectangle{
-		hud.x+hud.width-UI_HUD_BUTTON_W*2-20,
+		max(UI_MARGIN, f32(rl.GetScreenWidth())-UI_MARGIN-width),
+		UI_MARGIN,
+		width,
+		height,
+	}
+}
+
+UIHudTownsButtonRect :: proc(w: ^World) -> rl.Rectangle {
+	hud := UIHudRect(w)
+	diplomacy_width := UIHudTextWidth("DIPLOMACY")+2*UI_HUD_BUTTON_PAD
+	towns_width := UIHudTextWidth("TOWNS")+2*UI_HUD_BUTTON_PAD
+	return rl.Rectangle{
+		hud.x+hud.width-UI_HUD_PAD-diplomacy_width-8-towns_width,
 		hud.y+(hud.height-UI_HUD_BUTTON_H)*0.5,
-		UI_HUD_BUTTON_W,
+		towns_width,
 		UI_HUD_BUTTON_H,
 	}
 }
 
-UIHudDiplomacyButtonRect :: proc() -> rl.Rectangle {
-	towns := UIHudTownsButtonRect()
+UIHudDiplomacyButtonRect :: proc(w: ^World) -> rl.Rectangle {
+	towns := UIHudTownsButtonRect(w)
 	return rl.Rectangle{
 		towns.x+towns.width+8,
 		towns.y,
-		UI_HUD_BUTTON_W,
+		UIHudTextWidth("DIPLOMACY")+2*UI_HUD_BUTTON_PAD,
 		UI_HUD_BUTTON_H,
 	}
 }
@@ -2278,7 +2402,6 @@ UIDiplomacyAt :: proc(w: ^World, index: int) -> (int, bool) {
 
 UISidePanelRect :: proc(w: ^World, ui: ^UIState) -> rl.Rectangle {
 	if ui.panel == .None do return {}
-	hud := UIHudRect()
 	rows := 1
 	switch ui.panel {
 	case .Towns:
@@ -2290,19 +2413,28 @@ UISidePanelRect :: proc(w: ^World, ui: ^UIState) -> rl.Rectangle {
 	row_height: f32 = UI_SIDE_ROW_H
 	if ui.panel == .Diplomacy do row_height = UI_DIPLO_ROW_H
 	height := UI_SIDE_HEADER_H+f32(rows)*row_height+12
-	return rl.Rectangle{hud.x, hud.y+hud.height+8, UI_SIDE_PANEL_W, height}
+	if ui.panel == .Towns && UIPlayerTownCount(w) > UI_SIDE_MAX_TOWN_ROWS do height += 30
+	return rl.Rectangle{UI_MARGIN, UI_MARGIN, UI_SIDE_PANEL_W, height}
 }
 
 UIAlertPanelRect :: proc(w: ^World) -> rl.Rectangle {
 	rows := min(w.alerts.count, UI_ALERT_MAX_ROWS)
 	if rows <= 0 do return {}
 	height := UI_SIDE_HEADER_H+f32(rows)*UI_ALERT_ROW_H+8
+	hud := UIHudRect(w)
 	return rl.Rectangle{
 		f32(rl.GetScreenWidth())-UI_MARGIN-UI_ALERT_W,
-		UI_MARGIN,
+		hud.y+hud.height+8,
 		UI_ALERT_W,
 		height,
 	}
+}
+
+UITownPageButtonRects :: proc(panel: rl.Rectangle) -> (prev, next: rl.Rectangle) {
+	y := panel.y+panel.height-27
+	prev = rl.Rectangle{panel.x+UI_PAD, y, 64, 22}
+	next = rl.Rectangle{panel.x+panel.width-UI_PAD-64, y, 64, 22}
+	return
 }
 
 UIDiplomacyActionRect :: proc(panel: rl.Rectangle, row: int) -> rl.Rectangle {
@@ -2415,22 +2547,13 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 		ui.panel = .None
 		return true
 	}
-	if rl.IsKeyPressed(.T) {
-		if ui.panel == .Towns { ui.panel = .None } else { ui.panel = .Towns }
-		ui.townScroll = 0
-		return true
-	}
-	if rl.IsKeyPressed(.K) {
-		if ui.panel == .Diplomacy { ui.panel = .None } else { ui.panel = .Diplomacy }
-		return true
-	}
 
-	if rl.CheckCollisionPointRec(mouse, UIHudRect()) {
+	if rl.CheckCollisionPointRec(mouse, UIHudRect(w)) {
 		if rl.IsMouseButtonPressed(.LEFT) {
-			if rl.CheckCollisionPointRec(mouse, UIHudTownsButtonRect()) {
+			if rl.CheckCollisionPointRec(mouse, UIHudTownsButtonRect(w)) {
 				if ui.panel == .Towns { ui.panel = .None } else { ui.panel = .Towns }
 				ui.townScroll = 0
-			} else if rl.CheckCollisionPointRec(mouse, UIHudDiplomacyButtonRect()) {
+			} else if rl.CheckCollisionPointRec(mouse, UIHudDiplomacyButtonRect(w)) {
 				if ui.panel == .Diplomacy { ui.panel = .None } else { ui.panel = .Diplomacy }
 			}
 		}
@@ -2439,17 +2562,25 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 
 	if ui.panel != .None {
 		panel := UISidePanelRect(w, ui)
-		if ui.panel == .Towns {
-			count := UIPlayerTownCount(w)
-			max_scroll := max(count-UI_SIDE_MAX_TOWN_ROWS, 0)
-			if rl.IsKeyPressed(.PAGE_UP) do ui.townScroll = max(ui.townScroll-UI_SIDE_MAX_TOWN_ROWS, 0)
-			if rl.IsKeyPressed(.PAGE_DOWN) do ui.townScroll = min(ui.townScroll+UI_SIDE_MAX_TOWN_ROWS, max_scroll)
-			ui.townScroll = clamp(ui.townScroll, 0, max_scroll)
-		}
 		if rl.CheckCollisionPointRec(mouse, panel) {
 			switch ui.panel {
 			case .Towns:
 				count := UIPlayerTownCount(w)
+				max_scroll := max(count-UI_SIDE_MAX_TOWN_ROWS, 0)
+				ui.townScroll = clamp(ui.townScroll, 0, max_scroll)
+
+				if rl.IsMouseButtonPressed(.LEFT) && count > UI_SIDE_MAX_TOWN_ROWS {
+					prev, next := UITownPageButtonRects(panel)
+					if rl.CheckCollisionPointRec(mouse, prev) && ui.townScroll > 0 {
+						ui.townScroll = max(ui.townScroll-UI_SIDE_MAX_TOWN_ROWS, 0)
+						return true
+					}
+					if rl.CheckCollisionPointRec(mouse, next) && ui.townScroll < max_scroll {
+						ui.townScroll = min(ui.townScroll+UI_SIDE_MAX_TOWN_ROWS, max_scroll)
+						return true
+					}
+				}
+
 				if rl.IsMouseButtonPressed(.LEFT) {
 					row := int((mouse.y-(panel.y+UI_SIDE_HEADER_H))/UI_SIDE_ROW_H)
 					if row >= 0 && row < min(count, UI_SIDE_MAX_TOWN_ROWS) {
@@ -2500,7 +2631,7 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 }
 
 UIDrawHud :: proc(w: ^World, ui: ^UIState) {
-	hud := UIHudRect()
+	hud := UIHudRect(w)
 	rl.DrawRectangleRec(hud, UI_COLOR_BG)
 	rl.DrawRectangleLinesEx(hud, 2, UI_COLOR_BORDER)
 	rl.DrawRectangleLinesEx(
@@ -2513,34 +2644,28 @@ UIDrawHud :: proc(w: ^World, ui: ^UIState) {
 		FactionColor(PLAYER_KINGDOM),
 	)
 
-	ui_text(NameKingdomCString(w, PLAYER_KINGDOM), hud.x+14, hud.y+5, UI_COLOR_GOLD)
+	line_height := UIHudLineHeight()
+	text_x := hud.x+UI_HUD_PAD
+	title_y := hud.y+UI_HUD_PAD
+	detail_y := title_y+line_height
 
-	hour_f := WorldTimeOfDay(w)
-	hour := int(hour_f)
-	minute := int((hour_f-f32(hour))*60)
+	ui_text(NameKingdomCString(w, PLAYER_KINGDOM), text_x, title_y, UI_COLOR_GOLD)
+
+	time_label := UIHudTimeLabel(w)
+	time_width := UIHudTextWidth(time_label)
+	war_label := UIHudWarLabel(w)
+	ui_text(time_label, text_x, detail_y, UI_COLOR_DIM)
 	ui_text(
-		fmt.ctprintf("Day %d   %02d:%02d", w.dayNumber+1, hour, minute),
-		hud.x+14,
-		hud.y+26,
-		UI_COLOR_DIM,
+		war_label,
+		text_x+time_width+24,
+		detail_y,
+		UIWarCount(w) > 0 ? UI_COLOR_ATTACK : UI_COLOR_DIM,
 	)
 
-	war_count := UIWarCount(w)
-	if war_count > 0 {
-		ui_text(
-			fmt.ctprintf("AT WAR: %d", war_count),
-			hud.x+210,
-			hud.y+26,
-			UI_COLOR_ATTACK,
-		)
-	} else {
-		ui_text("At peace", hud.x+210, hud.y+26, UI_COLOR_DIM)
-	}
-
-	towns_rect := UIHudTownsButtonRect()
-	diplomacy_rect := UIHudDiplomacyButtonRect()
-	UIButton(towns_rect, "TOWNS [T]", true)
-	UIButton(diplomacy_rect, "DIPLOMACY [K]", true)
+	towns_rect := UIHudTownsButtonRect(w)
+	diplomacy_rect := UIHudDiplomacyButtonRect(w)
+	UIButton(towns_rect, "TOWNS", true)
+	UIButton(diplomacy_rect, "DIPLOMACY", true)
 	if ui.panel == .Towns {
 		rl.DrawRectangleLinesEx(towns_rect, 2, UI_COLOR_GOLD)
 	}
@@ -2593,12 +2718,9 @@ UIDrawSidePanel :: proc(w: ^World, ui: ^UIState) {
 			}
 		}
 		if count > UI_SIDE_MAX_TOWN_ROWS {
-			ui_text(
-				fmt.ctprintf("PgUp/PgDn  %d more", count-UI_SIDE_MAX_TOWN_ROWS),
-				panel.x+UI_PAD,
-				panel.y+panel.height-18,
-				UI_COLOR_DIM,
-			)
+			prev, next := UITownPageButtonRects(panel)
+			UIButton(prev, "PREV", ui.townScroll > 0)
+			UIButton(next, "NEXT", ui.townScroll+UI_SIDE_MAX_TOWN_ROWS < count)
 		}
 	case .Diplomacy:
 		ui_text("DIPLOMACY", panel.x+UI_PAD, panel.y+9, UI_COLOR_GOLD)

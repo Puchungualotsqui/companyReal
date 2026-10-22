@@ -13,6 +13,7 @@
 - Weather and enviroment events
 - Newspaper with notifications like: town destroyed, capital destroyed, kingdom destroyed, Civilianz dead, etc.
 - One reward could be move units through water, to be able to fund towns in other continents and islands, but you won't be able to build bridges and other things
+- Indenpendent towns. They do not growth are not part of any kingdom. If you defeat them they will give you between 1 and 3 villagers. Very low defense, it is useful for the start of the game. Some larger than others, but the idea is to give you something to do at the start
 
 # Bugs
 - Shadow of home/house is a bit lower. I think we should recheck all building shadows. Also shadows of units jumping is not excellent.
