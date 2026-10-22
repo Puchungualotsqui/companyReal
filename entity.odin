@@ -364,6 +364,7 @@ UnitKind :: enum {
 	Turtle,
 	Catapult,
 	Rogue,
+	Explorer,
 }
 
 UnitType :: union {
@@ -379,6 +380,7 @@ UnitType :: union {
 	Turtle,
 	Catapult,
 	Rogue,
+	Explorer,
 }
 
 UnitState :: union {
@@ -486,6 +488,11 @@ Giant :: struct {}
 Turtle :: struct {}
 Catapult :: struct {}
 Rogue :: struct {}
+Explorer :: struct {
+	restTimer: f32,
+	tripsLeft: int,
+	journey: int,
+}
 
 UnitKindOf :: proc(type: UnitType) -> UnitKind {
 	switch _ in type {
@@ -513,6 +520,8 @@ UnitKindOf :: proc(type: UnitType) -> UnitKind {
 		return .Catapult
 	case Rogue:
 		return .Rogue
+	case Explorer:
+		return .Explorer
 	}
 	unreachable()
 }
@@ -543,6 +552,8 @@ UnitTypeFromKind :: proc(kind: UnitKind) -> UnitType {
 		return Catapult{}
 	case .Rogue:
 		return Rogue{}
+	case .Explorer:
+		return Explorer{}
 	}
 	unreachable()
 }
@@ -551,7 +562,7 @@ UnitIsWarrior :: proc(type: UnitType) -> bool {
 	switch _ in type {
 	case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
 		return true
-	case Villager, Builder, CombatBuilder, WaterCollector, Farmer:
+	case Villager, Builder, CombatBuilder, WaterCollector, Farmer, Explorer:
 		return false
 	}
 	unreachable()
@@ -559,7 +570,7 @@ UnitIsWarrior :: proc(type: UnitType) -> bool {
 
 UnitTrainingBuildingKind :: proc(kind: UnitKind) -> BuildingKind {
 	switch kind {
-	case .Villager, .Builder, .CombatBuilder, .WaterCollector, .Farmer, .Knight:
+	case .Villager, .Builder, .CombatBuilder, .WaterCollector, .Farmer, .Knight, .Explorer:
 		return .TownHall
 	case .Archer:
 		return .ArcheryRange
@@ -597,6 +608,8 @@ UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 		return 60
 	case Rogue:
 		return 35
+	case Explorer:
+		return 18
 	}
 	unreachable()
 }
@@ -623,6 +636,8 @@ UnitDefaultSpeed :: proc(type: UnitType) -> f32 {
 		return 1.5
 	case Rogue:
 		return 4
+	case Explorer:
+		return 1.8
 	}
 	unreachable()
 }
@@ -647,6 +662,8 @@ UnitDefaultCooldown :: proc(type: UnitType) -> f32 {
 		return 3
 	case Rogue:
 		return 0.6
+	case Explorer:
+		return 0
 	}
 	unreachable()
 }
@@ -671,6 +688,8 @@ UnitDefaultRange :: proc(type: UnitType) -> f32 {
 		return 12
 	case Rogue:
 		return 0.75
+	case Explorer:
+		return 0
 	}
 	unreachable()
 }
@@ -695,6 +714,8 @@ UnitDefaultVision :: proc(type: UnitType) -> f32 {
 		return 35
 	case Rogue:
 		return 30
+	case Explorer:
+		return 34
 	}
 	unreachable()
 }
@@ -721,6 +742,8 @@ UnitDistraction :: proc(type: UnitType) -> f32 {
 		return 50
 	case Rogue:
 		return 45
+	case Explorer:
+		return 36
 	}
 	unreachable()
 }
@@ -745,6 +768,8 @@ UnitDefaultDamage :: proc(type: UnitType) -> f32 {
 		return 25
 	case Rogue:
 		return 20
+	case Explorer:
+		return 0
 	}
 	unreachable()
 }
@@ -757,7 +782,7 @@ UnitDefaultAreaRadius :: proc(type: UnitType) -> f32 {
 		return 2
 	case Catapult:
 		return 3.5
-	case Villager, Builder, WaterCollector, Farmer, Knight, Archer, Turtle, Rogue:
+	case Villager, Builder, WaterCollector, Farmer, Knight, Archer, Turtle, Rogue, Explorer:
 		return 0
 	case CombatBuilder:
 		return 0
@@ -787,6 +812,8 @@ UnitDefaultTrainingTime :: proc(kind: UnitKind) -> f32 {
 		return 7
 	case .Rogue:
 		return 4
+	case .Explorer:
+		return 2
 	}
 	unreachable()
 }
@@ -797,7 +824,7 @@ UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
 		switch _ in uType {
 		case Turtle:
 			return true
-		case Villager, Builder, WaterCollector, Farmer, Knight, Archer, Mage, Giant, Catapult, Rogue:
+		case Villager, Builder, WaterCollector, Farmer, Knight, Archer, Mage, Giant, Catapult, Rogue, Explorer:
 			return false
 		case CombatBuilder:
 			return false
@@ -857,6 +884,9 @@ UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
 	case Rogue:
 		unit.type = Rogue{}
 		unit.state = StateWarriorInit(unit_slot, unit.kingdome, unit.town)
+	case Explorer:
+		unit.type = Explorer{tripsLeft = 3}
+		unit.state = StatePacific.Roaming
 	}
 	unit.pathReady = false
 	unit.pathFound = false

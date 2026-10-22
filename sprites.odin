@@ -86,7 +86,7 @@ ALL_BUILDING_KINDS := [14]BuildingKind{
 	.Path,
 }
 
-ALL_UNIT_KINDS := [12]UnitKind{
+ALL_UNIT_KINDS := [13]UnitKind{
 	.Villager,
 	.Builder,
 	.CombatBuilder,
@@ -99,6 +99,7 @@ ALL_UNIT_KINDS := [12]UnitKind{
 	.Turtle,
 	.Catapult,
 	.Rogue,
+	.Explorer,
 }
 
 KingdomColor :: proc(kingdom: int) -> rl.Color {
@@ -137,7 +138,7 @@ UnitSpriteScale :: proc(kind: UnitKind) -> f32 {
 		return 1.55
 	case .Knight, .Rogue:
 		return 1.1
-	case .Villager, .Builder, .CombatBuilder, .WaterCollector, .Farmer, .Archer, .Mage:
+	case .Villager, .Builder, .CombatBuilder, .WaterCollector, .Farmer, .Archer, .Mage, .Explorer:
 		return 1
 	}
 	return 1
@@ -957,6 +958,8 @@ draw_unit_sprite :: proc(kind: UnitKind, accent: rl.Color) -> Art {
 		draw_unit_catapult(&art, accent)
 	case .Rogue:
 		draw_unit_rogue(&art, accent)
+	case .Explorer:
+		draw_unit_explorer(&art, accent)
 	}
 	return art
 }
@@ -1007,6 +1010,32 @@ draw_unit_builder :: proc(art: ^Art, accent: rl.Color) {
 	art_rect(art, 12, 4, 3, 2, C_OUTLINE)
 	art_rect(art, 13, 5, 1, 1, C_IRON)
 	art_rect(art, 10, 10, 2, 2, C_WOOD_DARK)
+}
+
+draw_unit_explorer :: proc(art: ^Art, accent: rl.Color) {
+	unit_shadow(art)
+	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
+	art_rect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
+	art_rect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
+	art_rect(art, 4, 6, 8, 6, C_OUTLINE)
+	art_rect(art, 5, 7, 6, 5, C_CLOTH_LIGHT)
+	art_rect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
+	art_rect(art, 5, 7, 6, 1, accent)
+	art_rect(art, 3, 7, 1, 4, C_OUTLINE)
+	art_rect(art, 12, 7, 1, 4, C_OUTLINE)
+	art_circle(art, 8, 4, 3, C_OUTLINE)
+	art_circle(art, 8, 4, 2, C_SKIN)
+	art_pixel(art, 7, 4, C_OUTLINE)
+	art_pixel(art, 9, 4, C_OUTLINE)
+	// Wide travelling hat.
+	art_rect(art, 4, 2, 8, 1, C_WOOD_DARKEST)
+	art_rect(art, 6, 0, 4, 2, C_WOOD_DARK)
+	art_rect(art, 7, 0, 2, 1, C_WOOD_LIGHT)
+	// Backpack and walking staff.
+	art_rect(art, 11, 7, 2, 4, C_WOOD_DARKEST)
+	art_rect(art, 11, 8, 2, 1, C_WOOD)
+	art_line(art, 13, 12, 13, 4, C_OUTLINE)
+	art_line(art, 14, 11, 14, 5, C_WOOD_LIGHT)
 }
 
 draw_unit_combat_builder :: proc(art: ^Art, accent: rl.Color) {

@@ -88,7 +88,7 @@ UI_COLOR_FOUND := rl.Color{196, 156, 226, 220}
 UI_COLOR_ATTACK_FAINT := rl.Color{226, 96, 76, 140}
 UI_COLOR_DEFEND_FAINT := rl.Color{106, 178, 224, 140}
 
-UI_CONVERSION_KINDS := [len(UnitKind)-1]UnitKind{
+UI_CONVERSION_KINDS := [len(UnitKind)-2]UnitKind{
 	.Builder,
 	.CombatBuilder,
 	.WaterCollector,
@@ -234,6 +234,8 @@ UIUnitName :: proc(kind: UnitKind) -> cstring {
 		return "Catapult"
 	case .Rogue:
 		return "Rogue"
+	case .Explorer:
+		return "Explorer"
 	}
 	unreachable()
 }
@@ -298,6 +300,8 @@ UIUnitDescription :: proc(kind: UnitKind) -> cstring {
 		return "Siege engine. Slow, long range."
 	case .Rogue:
 		return "Fast raider. Strikes and runs."
+	case .Explorer:
+		return "Scouts the frontier through fog of war."
 	}
 	unreachable()
 }

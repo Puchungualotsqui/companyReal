@@ -66,6 +66,106 @@ UnitUpdateVillager :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	UnitUpdateRoaming(w, unit_slot, delta_time)
 }
 
+EXPLORER_TRIPS_BEFORE_REST :: 3
+EXPLORER_REST_MIN :: 14
+EXPLORER_REST_MAX :: 24
+EXPLORER_SEARCH_ATTEMPTS :: 96
+EXPLORER_SEARCH_SPAN :: 140
+EXPLORER_SEARCH_MIN_DISTANCE :: 14
+
+// The explorer is a civilian. It travels toward unexplored tiles, comes back
+// to rest at its town for a while, then leaves on another journey.
+UnitUpdateExplorer :: proc(w: ^World, unit_slot: int, delta_time: f32) {
+	kingdom_slot := w.units[unit_slot].kingdome
+	town_slot := w.units[unit_slot].town
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return
+	if UnitUpdatePacificSleep(w, unit_slot, delta_time) do return
+
+	unit := &w.units[unit_slot]
+	explorer := &unit.type.(Explorer)
+	state := &unit.state.(StatePacific)
+
+	switch state^ {
+	case .Working:
+		explorer.restTimer -= delta_time
+		if explorer.restTimer <= 0 {
+			explorer.tripsLeft = EXPLORER_TRIPS_BEFORE_REST
+			state^ = .Roaming
+			unit.pathReady = false
+		}
+	case .Returning:
+		if UnitMoveToTarget(w, unit_slot, delta_time) || !unit.pathFound {
+			explorer.restTimer = EXPLORER_REST_MIN+
+				WorldNoiseHash(unit_slot, explorer.journey, 0xE8A1)*(EXPLORER_REST_MAX-EXPLORER_REST_MIN)
+			state^ = .Working
+			unit.pathReady = false
+		}
+	case .Roaming:
+		if explorer.tripsLeft <= 0 {
+			if x, y, found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot); found {
+				unit.pathTargetX = x
+				unit.pathTargetY = y
+				unit.pathReady = false
+				state^ = .Returning
+			} else {
+				explorer.restTimer = EXPLORER_REST_MIN
+				state^ = .Working
+			}
+			return
+		}
+
+		if x, y, found := UnitFindExplorationTarget(w, unit_slot, explorer.journey); found {
+			unit.pathTargetX = x
+			unit.pathTargetY = y
+			unit.pathReady = false
+			explorer.tripsLeft -= 1
+			explorer.journey += 1
+			state^ = .Traveling
+		} else {
+			explorer.tripsLeft = 0
+		}
+	case .Traveling:
+		if UnitMoveToTarget(w, unit_slot, delta_time) || !unit.pathFound {
+			state^ = .Roaming
+			unit.pathReady = false
+		}
+	case .ToConstruction, .Building, .GoingHome, .Sleeping:
+		state^ = .Roaming
+		unit.pathReady = false
+	}
+}
+
+// Picks a walkable target in the surrounding fog. Non-player explorers have no
+// fog view model of their own, so they wander to distant random tiles instead.
+UnitFindExplorationTarget :: proc(w: ^World, unit_slot, journey: int) -> (int, int, bool) {
+	world_width := int(w.maxX)
+	world_height := int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return 0, 0, false
+
+	unit_x := int(WorldWrapPosition(w.units.x[unit_slot], f32(world_width)))
+	unit_y := int(WorldWrapPosition(w.units.y[unit_slot], f32(world_height)))
+	unit_type := w.units[unit_slot].type
+	is_player := w.units[unit_slot].kingdome == PLAYER_KINGDOM
+	min_distance_squared := EXPLORER_SEARCH_MIN_DISTANCE*EXPLORER_SEARCH_MIN_DISTANCE
+	seed := u64(unit_slot)+u64(journey)*7919
+
+	for attempt in 0..<EXPLORER_SEARCH_ATTEMPTS {
+		delta_x := int(WorldNoiseHash(unit_slot, journey*31+attempt*2, seed+11)*f32(EXPLORER_SEARCH_SPAN))-
+			EXPLORER_SEARCH_SPAN/2
+		delta_y := int(WorldNoiseHash(unit_slot, journey*31+attempt*2+1, seed+23)*f32(EXPLORER_SEARCH_SPAN))-
+			EXPLORER_SEARCH_SPAN/2
+		if delta_x*delta_x+delta_y*delta_y < min_distance_squared do continue
+
+		x := WorldWrapCoordinate(unit_x+delta_x, world_width)
+		y := WorldWrapCoordinate(unit_y+delta_y, world_height)
+		if !UnitValidTileType(unit_type, w.ground[x][y].type) do continue
+		if WorldTileOccupied(w, x, y) do continue
+		if is_player && FogTileExplored(w, x, y) do continue
+		return x, y, true
+	}
+	return 0, 0, false
+}
+
 UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	kingdom_slot := w.units[unit_slot].kingdome
 	town_slot := w.units[unit_slot].town

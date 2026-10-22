@@ -85,6 +85,8 @@ WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
 			UnitUpdateWaterCollector(w, unit_slot, delta_time)
 		case Farmer:
 			UnitUpdateFarmer(w, unit_slot, delta_time)
+		case Explorer:
+			UnitUpdateExplorer(w, unit_slot, delta_time)
 		case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
 			UnitUpdateWarrior(w, unit_slot, delta_time)
 		}
@@ -297,5 +299,5 @@ TownSpawnInitialVillagers :: proc(w: ^World, kingdom_slot, town_slot: int) -> bo
 	for _ in 0..<TOWN_INITIAL_VILLAGERS {
 		if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) < 0 do return false
 	}
-	return true
+	return TownSpawnCitizen(w, kingdom_slot, town_slot, Explorer{}) >= 0
 }

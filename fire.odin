@@ -26,6 +26,8 @@ UnitExtinguishRate :: proc(type: UnitType) -> f32 {
 		return 5
 	case Builder, CombatBuilder, Farmer:
 		return 4
+	case Explorer:
+		return 0
 	case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
 		return 0
 	}
@@ -54,7 +56,7 @@ UnitImmuneToFire :: proc(type: UnitType) -> bool {
 	switch _ in type {
 	case Turtle, Catapult, Mage:
 		return true
-	case Villager, Builder, CombatBuilder, WaterCollector, Farmer, Knight, Archer, Giant, Rogue:
+	case Villager, Builder, CombatBuilder, WaterCollector, Farmer, Knight, Archer, Giant, Rogue, Explorer:
 		return false
 	}
 	unreachable()
