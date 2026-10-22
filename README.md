@@ -1,4 +1,5 @@
 # Things to do
+- Be able to cancel conversions. For example, I clicked + knight and I want to cancel it to make a + builder and similar. It should be queued somehow
 - Description to enrich the world of the buildings and units
 - Different phases of destruction of the buildings and different phases of the buildings being built
 - Add debris from destroyed buildings, different debris if it was on fire

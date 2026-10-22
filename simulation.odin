@@ -299,5 +299,5 @@ TownSpawnInitialVillagers :: proc(w: ^World, kingdom_slot, town_slot: int) -> bo
 	for _ in 0..<TOWN_INITIAL_VILLAGERS {
 		if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) < 0 do return false
 	}
-	return TownSpawnCitizen(w, kingdom_slot, town_slot, Explorer{}) >= 0
+	return true
 }

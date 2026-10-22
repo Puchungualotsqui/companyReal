@@ -65,7 +65,7 @@ MilestoneOption :: struct {
 }
 
 TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Path}
-TOWN_BASE_UNLOCKED_UNITS :: bit_set[UnitKind]{.Villager, .Builder, .WaterCollector, .Farmer, .Knight}
+TOWN_BASE_UNLOCKED_UNITS :: bit_set[UnitKind]{.Villager, .Builder, .WaterCollector, .Farmer, .Explorer, .Knight}
 
 TOWN_MILESTONE_OPTIONS := [TOWN_MILESTONE_COUNT][2]MilestoneOption{
 	{
