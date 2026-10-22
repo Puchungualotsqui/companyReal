@@ -1358,7 +1358,14 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 		ui_title(UIBuildingName(BuildingKindOf(w.buildings[ui.selection.slot].type)), title_x, panel.y+10, UI_COLOR_GOLD)
 	case .None:
 	}
-	ui_text(fmt.ctprintf("Kingdom %d  -  Town %d", kingdom+1, town+1), title_x, panel.y+48, UI_COLOR_DIM)
+	if WorldTownExists(w, kingdom, town) {
+		ui_text(
+			fmt.ctprintf("%s  -  %s", NameKingdomCString(w, kingdom), NameTownCString(w, kingdom, town)),
+			title_x,
+			panel.y+48,
+			UI_COLOR_DIM,
+		)
+	}
 
 	switch ui.selection.kind {
 	case .Unit:
@@ -2078,7 +2085,12 @@ UIDrawMilestone :: proc(w: ^World, renderer: ^WorldRenderer, kingdom, town: int)
 
 	ui_title("Town Milestone", modal.x+UI_PAD, modal.y+10, UI_COLOR_GOLD)
 	ui_text(
-		fmt.ctprintf("Kingdom %d  -  Town %d  -  %d citizens", kingdom+1, town+1, t.citizens),
+		fmt.ctprintf(
+			"%s  -  %s  -  %d citizens",
+			NameKingdomCString(w, kingdom),
+			NameTownCString(w, kingdom, town),
+			t.citizens,
+		),
 		modal.x+UI_PAD,
 		modal.y+46,
 		UI_COLOR_DIM,

@@ -25,6 +25,8 @@ TOWN_MILESTONES := [TOWN_MILESTONE_COUNT]int{12, 25, 50}
 TOWN_GARRISON_RATIO :: 0.5
 
 Kingdom :: struct {
+	name: Name,
+	culture: TownCulture,
 	capitalSlot: int,
 	towns: #soa [TOWN_CAPACITY]Town,
 	townUsed: [TOWN_CAPACITY]bool,
@@ -121,6 +123,7 @@ ConstructionSite :: struct {
 }
 
 Town :: struct {
+	name: Name,
 	x, y: int,
 	hallSlot: int,
 	citizens: int,
@@ -187,6 +190,7 @@ TownInitialize :: proc(w: ^World, kingdom_slot, town_slot, hall_slot, x, y: int,
 	for &slot in town.buildingSlots do slot = -1
 	town.buildingSlots[.TownHall] = hall_slot
 	town.buildingCounts[.TownHall] = 1
+	NameTownAssign(w, kingdom_slot, town_slot)
 }
 
 KingdomFreeTownSlot :: proc(w: ^World, kingdom_slot: int) -> int {

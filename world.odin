@@ -20,6 +20,8 @@ World :: struct {
 	unitsBurning: int,
 	kingdoms: #soa [KINGDOMS_CAPACITY]Kingdom,
 	kingdomUsed: [KINGDOMS_CAPACITY]bool,
+	usedTownName: [len(TownCulture)][TOWN_NAME_POOL_MAX]bool,
+	seed: u64,
 	maxX, maxY: uint,
 	navigationRevision: u64,
 	simulationTime: f32,
@@ -50,6 +52,7 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 
 	w.maxX = maxX
 	w.maxY = maxY
+	w.seed = settings.seed
 	w.dayTime = f32(WORLD_DAY_LENGTH_SECONDS)*6/24
 	w.ground = make([dynamic][dynamic]Tile, maxX)
 	for &x in w.ground {
@@ -314,6 +317,9 @@ KingdomSpawn :: proc(w: ^World, x, y: int) -> (int, bool) {
 		}
 	}
 	if i < 0 do return 0, false
+
+	w.kingdoms[i].culture = NameKingdomCulture(w, i)
+	NameKingdomAssign(w, i)
 
 	if capital, ok := TownStart(w, x, y, i); ok {
 		w.kingdoms[i].capitalSlot = capital
