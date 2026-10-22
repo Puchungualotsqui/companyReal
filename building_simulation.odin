@@ -213,6 +213,30 @@ TownStartConstruction :: proc(
 	return true
 }
 
+// Cancels the current town construction and makes its builders re-path to the
+// next site. Used when a player order preempts automatic construction.
+TownConstructionPreempt :: proc(w: ^World, kingdom_slot, town_slot: int) {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if !town.constructionActive do return
+
+	town.wood += town.construction.paid
+	town.constructionActive = false
+	town.construction = {}
+
+	for unit_slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unit_slot] do continue
+		unit := &w.units[unit_slot]
+		if unit.kingdome != kingdom_slot || unit.town != town_slot do continue
+		if UnitKindOf(unit.type) != .Builder do continue
+		if _, converting := unit.state.(StateConverting); converting do continue
+		state := &unit.state.(StatePacific)
+		if state^ != .ToConstruction && state^ != .Building do continue
+		state^ = .Roaming
+		unit.pathReady = false
+	}
+}
+
 BuildingBuildSeconds :: proc(kind: BuildingKind) -> f32 {
 	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
 	return 4+f32(width*height)*1.5+BuildingWoodCost(kind)*0.25
@@ -312,7 +336,11 @@ TownConstructionWork :: proc(
 	site.buildWork += delta_time
 	if site.buildWork < BuildingBuildSeconds(site.kind) do return .Working
 
-	if _, ok := BuildingSpawn(
+	if site.kind == .TownHall {
+		if !TownFound(w, kingdom_slot, site.x, site.y) {
+			town.wood += site.paid
+		}
+	} else if _, ok := BuildingSpawn(
 		w,
 		site.x,
 		site.y,

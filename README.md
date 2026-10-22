@@ -1,5 +1,4 @@
 # Things to do
-- There is no way to create new towns
 - Add automatic town names and kingdom names. All should be unique
 - Manage edge cases of a town that is ordered to be attacked, but it is sorrounded of buildings, likely walls and they must break them and go through them
 - Add doors or some mechanism for the units to go through friendly walls

@@ -28,6 +28,7 @@ UICommand :: enum {
 	Inspect,
 	Attack,
 	Defend,
+	Found,
 	Build,
 	Place,
 }
@@ -83,6 +84,7 @@ UI_COMMAND_GAP : f32 : 12
 UI_COLOR_ATTACK := rl.Color{226, 96, 76, 220}
 UI_COLOR_DEFEND := rl.Color{106, 178, 224, 220}
 UI_COLOR_BUILD := rl.Color{214, 178, 92, 220}
+UI_COLOR_FOUND := rl.Color{196, 156, 226, 220}
 UI_COLOR_ATTACK_FAINT := rl.Color{226, 96, 76, 140}
 UI_COLOR_DEFEND_FAINT := rl.Color{106, 178, 224, 140}
 
@@ -671,13 +673,23 @@ UIOrderCancelRect :: proc(panel: rl.Rectangle, index: int) -> rl.Rectangle {
 	}
 }
 
-UICommandBarRects :: proc() -> (attack, defend: rl.Rectangle) {
-	total := 2*UI_COMMAND_BUTTON_W+UI_COMMAND_GAP
+UICommandBarRects :: proc() -> (attack, defend, found: rl.Rectangle) {
+	total := 3*UI_COMMAND_BUTTON_W+2*UI_COMMAND_GAP
 	x := (f32(rl.GetScreenWidth())-total)*0.5
 	y := f32(rl.GetScreenHeight())-UI_MARGIN-UI_COMMAND_BUTTON_H
 	attack = rl.Rectangle{x, y, UI_COMMAND_BUTTON_W, UI_COMMAND_BUTTON_H}
 	defend = rl.Rectangle{x+UI_COMMAND_BUTTON_W+UI_COMMAND_GAP, y, UI_COMMAND_BUTTON_W, UI_COMMAND_BUTTON_H}
+	found = rl.Rectangle{x+2*(UI_COMMAND_BUTTON_W+UI_COMMAND_GAP), y, UI_COMMAND_BUTTON_W, UI_COMMAND_BUTTON_H}
 	return
+}
+
+UIFoundButtonEnabled :: proc(w: ^World, kingdom, town: int) -> bool {
+	if kingdom != PLAYER_KINGDOM || !WorldTownExists(w, kingdom, town) do return false
+	t := &w.kingdoms[kingdom].towns[town]
+	if t.wood < TOWN_FOUNDING_WOOD do return false
+	if t.citizens < TOWN_FOUNDING_MIN_CITIZENS do return false
+	if TownUnitCount(w, kingdom, town, .Builder) <= 0 do return false
+	return KingdomFreeTownSlot(w, kingdom) >= 0
 }
 
 UIBuildButtonRect :: proc() -> rl.Rectangle {
@@ -824,7 +836,9 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 	ui := &view.ui
 	if !UISelectionValid(w, ui.selection) {
 		ui.selection = {}
-		if ui.command == .Attack || ui.command == .Defend do ui.command = .Inspect
+		if ui.command == .Attack || ui.command == .Defend || ui.command == .Found {
+			ui.command = .Inspect
+		}
 	}
 
 	mouse := rl.GetMousePosition()
@@ -869,9 +883,10 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 	}
 
 	if UISelectionPlayerTownHall(w, ui.selection) {
-		attack_rect, defend_rect := UICommandBarRects()
+		attack_rect, defend_rect, found_rect := UICommandBarRects()
 		if rl.CheckCollisionPointRec(mouse, attack_rect) ||
-			rl.CheckCollisionPointRec(mouse, defend_rect) {
+			rl.CheckCollisionPointRec(mouse, defend_rect) ||
+			rl.CheckCollisionPointRec(mouse, found_rect) {
 			over_ui = true
 			ui.hover = {}
 			if rl.IsMouseButtonPressed(.LEFT) {
@@ -946,6 +961,20 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 	}
 	if ui.command == .Build do return
 
+	if ui.command == .Found {
+		kingdom, town := UISelectionTown(w, ui.selection)
+		if !WorldTownExists(w, kingdom, town) {
+			ui.command = .Inspect
+			return
+		}
+		tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse)
+		if !ok do return
+		if !TownFoundingValid(w, kingdom, town, tile_x, tile_y) do return
+		if !rl.IsMouseButtonPressed(.LEFT) do return
+		if TownStartFounding(w, kingdom, town, tile_x, tile_y) do ui.command = .Inspect
+		return
+	}
+
 	kingdom, town := UISelectionTown(w, ui.selection)
 	if !WorldTownExists(w, kingdom, town) {
 		ui.command = .Inspect
@@ -968,7 +997,7 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 		}
 		ui.command = .Inspect
 
-	case .Build, .Place, .Inspect:
+	case .Build, .Found, .Place, .Inspect:
 	}
 }
 
@@ -1011,7 +1040,7 @@ UIOrdersClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Ve
 
 UICommandBarPress :: proc(w: ^World, ui: ^UIState, mouse: rl.Vector2) {
 	kingdom, town := UISelectionTown(w, ui.selection)
-	attack_rect, defend_rect := UICommandBarRects()
+	attack_rect, defend_rect, found_rect := UICommandBarRects()
 	if rl.CheckCollisionPointRec(mouse, attack_rect) {
 		if ui.command == .Attack {
 			ui.command = .Inspect
@@ -1026,6 +1055,15 @@ UICommandBarPress :: proc(w: ^World, ui: ^UIState, mouse: rl.Vector2) {
 			ui.command = .Inspect
 		} else if UIDefendTargetExists(w, kingdom, town) {
 			ui.command = .Defend
+		}
+		ui.hover = {}
+		return
+	}
+	if rl.CheckCollisionPointRec(mouse, found_rect) {
+		if ui.command == .Found {
+			ui.command = .Inspect
+		} else if UIFoundButtonEnabled(w, kingdom, town) {
+			ui.command = .Found
 		}
 		ui.hover = {}
 	}
@@ -1185,6 +1223,7 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 		UIDrawBuildPalette(w, renderer, ui)
 	}
 	UIDrawBuildPreview(w, renderer, camera, ui)
+	UIDrawFoundPreview(w, renderer, camera, ui)
 	UIDrawCommandHint(w, ui)
 
 	if milestone_pending {
@@ -1583,7 +1622,7 @@ UIDrawOrdersTab :: proc(
 UIDrawCommandBar :: proc(w: ^World, ui: ^UIState) {
 	if !UISelectionPlayerTownHall(w, ui.selection) do return
 	kingdom, town := UISelectionTown(w, ui.selection)
-	attack_rect, defend_rect := UICommandBarRects()
+	attack_rect, defend_rect, found_rect := UICommandBarRects()
 	UIDrawCommandIcon(
 		attack_rect,
 		.Attack,
@@ -1595,6 +1634,12 @@ UIDrawCommandBar :: proc(w: ^World, ui: ^UIState) {
 		.Defend,
 		UIDefendTargetExists(w, kingdom, town),
 		ui.command == .Defend,
+	)
+	UIDrawCommandIcon(
+		found_rect,
+		.Found,
+		UIFoundButtonEnabled(w, kingdom, town),
+		ui.command == .Found,
 	)
 }
 
@@ -1616,6 +1661,8 @@ UIDrawCommandIcon :: proc(rect: rl.Rectangle, command: UICommand, enabled, activ
 			border = UI_COLOR_ATTACK
 		case .Defend:
 			border = UI_COLOR_DEFEND
+		case .Found:
+			border = UI_COLOR_FOUND
 		case .Build, .Place:
 			border = UI_COLOR_BUILD
 		case .Inspect:
@@ -1630,6 +1677,8 @@ UIDrawCommandIcon :: proc(rect: rl.Rectangle, command: UICommand, enabled, activ
 		icon_color = UI_COLOR_ATTACK
 	case .Defend:
 		icon_color = UI_COLOR_DEFEND
+	case .Found:
+		icon_color = UI_COLOR_FOUND
 	case .Build, .Place, .Inspect:
 	}
 	if !enabled do icon_color = UI_COLOR_DISABLED_TEXT
@@ -1640,14 +1689,23 @@ UIDrawCommandIcon :: proc(rect: rl.Rectangle, command: UICommand, enabled, activ
 		UIDrawAttackIcon(center_x, center_y, icon_color)
 	case .Defend:
 		UIDrawDefendIcon(center_x, center_y, icon_color)
+	case .Found:
+		UIDrawFoundIcon(center_x, center_y, icon_color)
 	case .Build, .Place:
 		UIDrawBuildIcon(center_x, center_y, icon_color)
 	case .Inspect:
 	}
 
 	label: cstring = "BUILD"
-	if command == .Attack do label = "ATTACK"
-	if command == .Defend do label = "DEFEND"
+	switch command {
+	case .Attack:
+		label = "ATTACK"
+	case .Defend:
+		label = "DEFEND"
+	case .Found:
+		label = "FOUND"
+	case .Build, .Place, .Inspect:
+	}
 	label_color := enabled ? UI_COLOR_TEXT : UI_COLOR_DISABLED_TEXT
 	ui_text_center(label, rect.x+rect.width*0.5, rect.y+46, label_color)
 }
@@ -1706,6 +1764,43 @@ UIDrawBuildIcon :: proc(center_x, center_y: f32, color: rl.Color) {
 	rl.DrawRectangle(x-11, y-12, 22, 7, dark)
 	rl.DrawRectangle(x-10, y-11, 20, 5, color)
 	rl.DrawRectangle(x-4, y-11, 8, 5, rl.Color{238, 238, 244, 210})
+}
+
+UIDrawFoundIcon :: proc(center_x, center_y: f32, color: rl.Color) {
+	dark := rl.Color{12, 11, 14, 230}
+	x := i32(center_x)
+	y := i32(center_y)
+
+	// Small hall with a banner.
+	rl.DrawRectangle(x-10, y+1, 20, 12, dark)
+	rl.DrawRectangle(x-9, y+2, 18, 10, color)
+	rl.DrawRectangle(x-7, y+5, 5, 7, rl.Color{238, 238, 244, 210})
+	rl.DrawTriangle(
+		rl.Vector2{center_x, center_y-11},
+		rl.Vector2{center_x-12, center_y+1},
+		rl.Vector2{center_x+12, center_y+1},
+		dark,
+	)
+	rl.DrawTriangle(
+		rl.Vector2{center_x, center_y-9},
+		rl.Vector2{center_x-10, center_y+1},
+		rl.Vector2{center_x+10, center_y+1},
+		color,
+	)
+
+	// Flag.
+	rl.DrawLineEx(
+		rl.Vector2{center_x, center_y-14},
+		rl.Vector2{center_x, center_y-2},
+		3,
+		dark,
+	)
+	rl.DrawTriangle(
+		rl.Vector2{center_x+1, center_y-14},
+		rl.Vector2{center_x+11, center_y-10},
+		rl.Vector2{center_x+1, center_y-6},
+		color,
+	)
 }
 
 UIDrawCommandTargets :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
@@ -1876,10 +1971,11 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState) {
 	if ui.command == .Inspect do return
 
 	mouse := rl.GetMousePosition()
-	attack_rect, defend_rect := UICommandBarRects()
+	attack_rect, defend_rect, found_rect := UICommandBarRects()
 	build_rect := UIBuildButtonRect()
 	if rl.CheckCollisionPointRec(mouse, attack_rect) ||
 		rl.CheckCollisionPointRec(mouse, defend_rect) ||
+		rl.CheckCollisionPointRec(mouse, found_rect) ||
 		rl.CheckCollisionPointRec(mouse, build_rect) {
 		return
 	}
@@ -1896,6 +1992,11 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState) {
 		label = "Click a building of an enemy town  -  Esc to cancel"
 	case .Defend:
 		label = "Click a building of a non-enemy town  -  Esc to cancel"
+	case .Found:
+		label = fmt.ctprintf(
+			"Click land to found a town  -  %d wood  -  Esc to cancel",
+			TOWN_FOUNDING_WOOD,
+		)
 	case .Build:
 		label = "Choose a combat building  -  Esc to cancel"
 	case .Place:
@@ -1975,6 +2076,37 @@ UIDrawBuildPreview :: proc(
 	rl.DrawRectangleLinesEx(rect, 2/camera.zoom, color)
 
 	texture := renderer.sprites.building[FactionSpriteIndex(kingdom)][ui.buildKind]
+	if texture.id != 0 {
+		source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+		alpha := valid ? u8(150) : u8(80)
+		rl.DrawTexturePro(texture, source, rect, rl.Vector2{0, 0}, 0, rl.Color{255, 255, 255, alpha})
+	}
+	rl.EndMode2D()
+}
+
+UIDrawFoundPreview :: proc(
+	w: ^World,
+	renderer: ^WorldRenderer,
+	camera: rl.Camera2D,
+	ui: ^UIState,
+) {
+	if ui.command != .Found do return
+	kingdom, town := UISelectionTown(w, ui.selection)
+	if !WorldTownExists(w, kingdom, town) do return
+
+	tile_x, tile_y, ok := UITileAtMouse(w, camera, rl.GetMousePosition())
+	if !ok do return
+	width, height := BuildingTileSize(TownHall{})
+	valid := TownFoundingValid(w, kingdom, town, tile_x, tile_y)
+	color := rl.Color{110, 218, 128, 220}
+	if !valid do color = rl.Color{228, 92, 82, 220}
+
+	rl.BeginMode2D(camera)
+	rect := rl.Rectangle{f32(tile_x), f32(tile_y), f32(width), f32(height)}
+	rl.DrawRectangleRec(rect, rl.Color{color[0], color[1], color[2], 48})
+	rl.DrawRectangleLinesEx(rect, 2/camera.zoom, color)
+
+	texture := renderer.sprites.building[FactionSpriteIndex(kingdom)][.TownHall]
 	if texture.id != 0 {
 		source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 		alpha := valid ? u8(150) : u8(80)

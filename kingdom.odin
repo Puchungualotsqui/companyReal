@@ -10,6 +10,14 @@ TOWN_MILESTONE_COUNT :: 3
 MAX_CONVERSION_JOBS :: 16
 TOWN_WOOD_TARGET :: 60
 
+// Founding a new town is funded by the selected town. The order uses the
+// town's construction queue, so regular builders travel to the site and raise
+// the hall. A player order preempts automatic construction.
+TOWN_FOUNDING_WOOD :: 80
+TOWN_FOUNDING_MIN_CITIZENS :: 10
+TOWN_FOUNDING_MIN_DISTANCE :: 24
+TOWN_FOUNDING_SETTLERS :: 5
+
 TOWN_MILESTONES := [TOWN_MILESTONE_COUNT]int{12, 25, 50}
 
 // Share of a town's warriors that always stays home to defend it. The rest
@@ -132,22 +140,189 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 	bId, ok := BuildingSpawn(w, x, y, TownHall{}, kingdomSlot, i)
 	if !ok do return 0, false
 
-	w.kingdoms[kingdomSlot].towns[i] = Town{
+	TownInitialize(w, kingdomSlot, i, bId, x, y, 35)
+	w.kingdoms[kingdomSlot].townUsed[i] = true
+	return i, true
+}
+
+// Shared town setup for the initial kingdom spawn and for founded towns.
+TownInitialize :: proc(
+	w: ^World,
+	kingdom_slot, town_slot, hall_slot, x, y: int,
+	starting_wood: f32,
+) {
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	town^ = Town{
 		x = x,
 		y = y,
-		hallSlot = bId,
-		citizens = 0,
-		wood = 35,
+		hallSlot = hall_slot,
+		wood = starting_wood,
 		areaRadius = TOWN_START_AREA_RADIUS,
 		unlockedBuildings = TOWN_BASE_UNLOCKED_BUILDINGS,
 	}
-	for &slot in w.kingdoms[kingdomSlot].towns[i].buildingSlots {
-		slot = -1
+	for &slot in town.buildingSlots do slot = -1
+	town.buildingSlots[.TownHall] = hall_slot
+	town.buildingCounts[.TownHall] = 1
+}
+
+KingdomFreeTownSlot :: proc(w: ^World, kingdom_slot: int) -> int {
+	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
+		return -1
 	}
-	w.kingdoms[kingdomSlot].towns[i].buildingSlots[.TownHall] = bId
-	w.kingdoms[kingdomSlot].towns[i].buildingCounts[.TownHall] = 1
-	w.kingdoms[kingdomSlot].townUsed[i] = true
-	return i, true
+	for town_slot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdom_slot].townUsed[town_slot] do return town_slot
+	}
+	return -1
+}
+
+// A new town is founded when its hall finishes construction. The hall was
+// already paid for by the mother town, so it is spawned directly into the new
+// town slot.
+TownFound :: proc(w: ^World, kingdom_slot, x, y: int) -> bool {
+	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
+		return false
+	}
+	town_slot := KingdomFreeTownSlot(w, kingdom_slot)
+	if town_slot < 0 do return false
+
+	hall_slot, ok := BuildingSpawn(w, x, y, TownHall{}, kingdom_slot, town_slot)
+	if !ok do return false
+
+	TownInitialize(w, kingdom_slot, town_slot, hall_slot, x, y, 0)
+	w.kingdoms[kingdom_slot].townUsed[town_slot] = true
+
+	for _ in 0..<TOWN_FOUNDING_SETTLERS {
+		TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{})
+	}
+	TownSpawnCitizen(w, kingdom_slot, town_slot, Builder{})
+	return true
+}
+
+// Cheap checks for the placement preview. Reachability is validated once when
+// the order is actually placed.
+TownFoundingValid :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if town.constructionActive && town.construction.kind == .TownHall do return false
+	if !WorldBuildingValid(w, x, y, TownHall{}) do return false
+	if CombatSiteOverlaps(w, x, y, .TownHall) do return false
+	if TownFoundingOverlapsOtherConstruction(w, kingdom_slot, town_slot, x, y) do return false
+	return !TownFoundingTooClose(w, x, y)
+}
+
+TownFoundingOverlapsOtherConstruction :: proc(
+	w: ^World,
+	source_kingdom, source_town, x, y: int,
+) -> bool {
+	width, height := BuildingTileSize(TownHall{})
+	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdom_slot] do continue
+		for town_slot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
+			if kingdom_slot == source_kingdom && town_slot == source_town do continue
+			town := &w.kingdoms[kingdom_slot].towns[town_slot]
+			if !town.constructionActive do continue
+			site := town.construction
+			other_width, other_height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+			if x < site.x+other_width && site.x < x+width &&
+				y < site.y+other_height && site.y < y+height {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+TownFoundingTooClose :: proc(w: ^World, x, y: int) -> bool {
+	hall_width, hall_height := BuildingTileSize(TownHall{})
+	center_x := f32(x)+f32(hall_width)*0.5
+	center_y := f32(y)+f32(hall_height)*0.5
+	world_width := f32(w.maxX)
+	world_height := f32(w.maxY)
+	min_distance := f32(TOWN_FOUNDING_MIN_DISTANCE)
+
+	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdom_slot] do continue
+		for town_slot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
+			hall_slot := TownHallSlot(w, kingdom_slot, town_slot)
+			if hall_slot < 0 do continue
+			other_width, other_height := BuildingTileSize(w.buildings[hall_slot].type)
+			other_x := f32(w.buildings.x[hall_slot])+f32(other_width)*0.5
+			other_y := f32(w.buildings.y[hall_slot])+f32(other_height)*0.5
+			delta_x := WorldShortestWrappedDelta(center_x-other_x, world_width)
+			delta_y := WorldShortestWrappedDelta(center_y-other_y, world_height)
+			if delta_x*delta_x+delta_y*delta_y < min_distance*min_distance do return true
+		}
+	}
+	return false
+}
+
+TownFoundingAccessPoint :: proc(
+	w: ^World,
+	x, y: int,
+	unit_type: UnitType,
+) -> (int, int, bool) {
+	width, height := BuildingTileSize(TownHall{})
+	world_width := int(w.maxX)
+	world_height := int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return 0, 0, false
+
+	for radius in 1..=6 {
+		inner_min_x := x-radius+1
+		inner_max_x := x+width-1+radius-1
+		inner_min_y := y-radius+1
+		inner_max_y := y+height-1+radius-1
+		for tile_x in x-radius ..= x+width-1+radius {
+			for tile_y in y-radius ..= y+height-1+radius {
+				if tile_x >= inner_min_x && tile_x <= inner_max_x &&
+					tile_y >= inner_min_y && tile_y <= inner_max_y {
+					continue
+				}
+				wrapped_x := WorldWrapCoordinate(tile_x, world_width)
+				wrapped_y := WorldWrapCoordinate(tile_y, world_height)
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, unit_type) do continue
+				return wrapped_x, wrapped_y, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+TownFoundingReachable :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
+	start_x, start_y, start_found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot)
+	if !start_found do return false
+	goal_x, goal_y, goal_found := TownFoundingAccessPoint(w, x, y, Builder{})
+	if !goal_found do return false
+
+	path: [dynamic]int
+	defer delete(path)
+	return AStar(w, Builder{}, start_x, start_y, goal_x, goal_y, &path)
+}
+
+// Player order: found a new town. The mother town pays the charter and its
+// builders receive a town-hall construction site. An automatic construction is
+// refunded and replaced, because a player order takes priority.
+TownStartFounding :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
+	if !TownFoundingValid(w, kingdom_slot, town_slot, x, y) do return false
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if town.wood < TOWN_FOUNDING_WOOD do return false
+	if town.citizens < TOWN_FOUNDING_MIN_CITIZENS do return false
+	if TownUnitCount(w, kingdom_slot, town_slot, .Builder) <= 0 do return false
+	if KingdomFreeTownSlot(w, kingdom_slot) < 0 do return false
+	if !TownFoundingReachable(w, kingdom_slot, town_slot, x, y) do return false
+
+	if town.constructionActive do TownConstructionPreempt(w, kingdom_slot, town_slot)
+
+	town.wood -= TOWN_FOUNDING_WOOD
+	town.construction = ConstructionSite{
+		kind = .TownHall,
+		x = x,
+		y = y,
+		paid = TOWN_FOUNDING_WOOD,
+	}
+	town.constructionActive = true
+	return true
 }
 
 // Squared distance in tiles from the town hall footprint (0 on the hall). The
