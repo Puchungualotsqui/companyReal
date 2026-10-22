@@ -24,7 +24,7 @@ UnitExtinguishRate :: proc(type: UnitType) -> f32 {
 		return 10
 	case Villager:
 		return 5
-	case Builder, Farmer:
+	case Builder, CombatBuilder, Farmer:
 		return 4
 	case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
 		return 0
@@ -54,7 +54,7 @@ UnitImmuneToFire :: proc(type: UnitType) -> bool {
 	switch _ in type {
 	case Turtle, Catapult, Mage:
 		return true
-	case Villager, Builder, WaterCollector, Farmer, Knight, Archer, Giant, Rogue:
+	case Villager, Builder, CombatBuilder, WaterCollector, Farmer, Knight, Archer, Giant, Rogue:
 		return false
 	}
 	unreachable()
@@ -62,7 +62,7 @@ UnitImmuneToFire :: proc(type: UnitType) -> bool {
 
 BuildingImmuneToFire :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .TownHall, .Wall, .Cannon, .MagicSchool, .TurtlePen, .Path:
+	case .TownHall, .Wall, .Cannon, .Watchtower, .MagicSchool, .TurtlePen, .Path:
 		return true
 	case .Home, .Farmland, .Bridge, .ArcheryRange, .SiegeWorkshop, .GiantPen, .ThievesGuild:
 		return false

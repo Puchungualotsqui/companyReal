@@ -39,6 +39,8 @@ World :: struct {
 	navigationSearchId: u32,
 	flowFields: [FLOW_FIELD_CAPACITY]FlowField,
 	flowFieldStamp: u64,
+	combatSites: #soa [COMBAT_SITE_CAPACITY]CombatSite,
+	combatSiteUsed: [COMBAT_SITE_CAPACITY]bool,
 }
 
 WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerationSettings) -> bool {
@@ -231,6 +233,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 		town.wood += cleared_wood
 	}
 	w.navigationRevision += 1
+	if BuildingKindOf(type) == .Path do WorldSpawnStreetLamp(w, x, y)
 	return i, true
 }
 
@@ -262,6 +265,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 			TownOrdersClear(w, kingdom_slot, town_slot)
 			TownConversionsClear(w, kingdom_slot, town_slot)
 			w.kingdoms[kingdom_slot].townUsed[town_slot] = false
+			CombatSiteClear(w, kingdom_slot, town_slot)
 			for unit_slot in 0..<UNIT_CAPACITY {
 				if !w.unitUsed[unit_slot] || w.units[unit_slot].kingdome != kingdom_slot ||
 					w.units[unit_slot].town != town_slot {
@@ -284,7 +288,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 				}
 			}
 		}
-	case Bridge, Cannon, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Wall, Home, Farmland, Path:
+	case Bridge, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Wall, Home, Farmland, Path:
 	}
 
 	width, height := BuildingTileSize(w.buildings[slot].type)
@@ -331,6 +335,7 @@ KingdomDespawn :: proc(w: ^World, slot: int) -> bool {
 		return false
 	}
 	KingdomEndWar(w, slot)
+	CombatSiteKingdomClear(w, slot)
 	w.kingdomUsed[slot] = false
 	return true
 }

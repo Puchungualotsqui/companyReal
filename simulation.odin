@@ -78,6 +78,8 @@ WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
 			UnitUpdateVillager(w, unit_slot, delta_time)
 		case Builder:
 			UnitUpdateBuilder(w, unit_slot, delta_time)
+		case CombatBuilder:
+			CombatBuilderUpdate(w, unit_slot, delta_time)
 		case WaterCollector:
 			UnitUpdateWaterCollector(w, unit_slot, delta_time)
 		case Farmer:

@@ -6,6 +6,10 @@ CANNON_RANGE :: 14
 CANNON_COOLDOWN :: 3
 CANNON_DAMAGE :: 25
 
+WATCHTOWER_RANGE :: 9
+WATCHTOWER_COOLDOWN :: 2
+WATCHTOWER_DAMAGE :: 6
+
 AUTO_TRAINING_BUILDINGS := [6]BuildingKind{
 	.ArcheryRange,
 	.MagicSchool,
@@ -52,6 +56,8 @@ WorldBuildingUpdate :: proc(w: ^World, delta_time: f32) {
 			BuildingUpdateFarmland(w, building_slot, delta_time)
 		case Cannon:
 			BuildingUpdateCannon(w, building_slot, delta_time)
+		case Watchtower:
+			BuildingUpdateWatchtower(w, building_slot, delta_time)
 		}
 	}
 }
@@ -79,9 +85,31 @@ BuildingUpdateCannon :: proc(w: ^World, building_slot: int, delta_time: f32) {
 		w.buildings.cooldown[building_slot] -= delta_time
 		return
 	}
+
+	nearest_slot := BuildingFindNearestHostileUnit(w, building_slot, CANNON_RANGE)
+	if nearest_slot < 0 do return
+	w.units[nearest_slot].health -= CANNON_DAMAGE
+	if w.units[nearest_slot].health <= 0 do UnitDespawn(w, nearest_slot)
+	w.buildings.cooldown[building_slot] = CANNON_COOLDOWN
+}
+
+BuildingUpdateWatchtower :: proc(w: ^World, building_slot: int, delta_time: f32) {
+	if w.buildings.cooldown[building_slot] > 0 {
+		w.buildings.cooldown[building_slot] -= delta_time
+		return
+	}
+
+	nearest_slot := BuildingFindNearestHostileUnit(w, building_slot, WATCHTOWER_RANGE)
+	if nearest_slot < 0 do return
+	w.units[nearest_slot].health -= WATCHTOWER_DAMAGE
+	if w.units[nearest_slot].health <= 0 do UnitDespawn(w, nearest_slot)
+	w.buildings.cooldown[building_slot] = WATCHTOWER_COOLDOWN
+}
+
+BuildingFindNearestHostileUnit :: proc(w: ^World, building_slot: int, attack_range: f32) -> int {
 	kingdom_slot := w.buildings.kingdom[building_slot]
 	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
-		return
+		return -1
 	}
 
 	width, height := BuildingTileSize(w.buildings[building_slot].type)
@@ -90,13 +118,13 @@ BuildingUpdateCannon :: proc(w: ^World, building_slot: int, delta_time: f32) {
 	world_width := f32(w.maxX)
 	world_height := f32(w.maxY)
 	chunk_size := w.spatial.chunkSize
-	if chunk_size <= 0 do return
+	if chunk_size <= 0 do return -1
 
 	center_chunk_x := int(center_x)/chunk_size
 	center_chunk_y := int(center_y)/chunk_size
-	chunk_radius := int(CANNON_RANGE)/chunk_size+1
+	chunk_radius := int(attack_range)/chunk_size+1
 	nearest_slot := -1
-	nearest_distance: f32 = CANNON_RANGE
+	nearest_distance: f32 = attack_range
 	for offset_x in -chunk_radius..=chunk_radius {
 		chunk_x := WorldWrapCoordinate(center_chunk_x+offset_x, w.spatial.chunksX)
 		for offset_y in -chunk_radius..=chunk_radius {
@@ -116,11 +144,7 @@ BuildingUpdateCannon :: proc(w: ^World, building_slot: int, delta_time: f32) {
 			}
 		}
 	}
-
-	if nearest_slot < 0 do return
-	w.units[nearest_slot].health -= CANNON_DAMAGE
-	if w.units[nearest_slot].health <= 0 do UnitDespawn(w, nearest_slot)
-	w.buildings.cooldown[building_slot] = CANNON_COOLDOWN
+	return nearest_slot
 }
 
 TownBuilderConstruct :: proc(w: ^World, kingdom_slot, town_slot: int, can_grow: bool) -> bool {
@@ -128,6 +152,11 @@ TownBuilderConstruct :: proc(w: ^World, kingdom_slot, town_slot: int, can_grow: 
 	if town.constructionActive do return false
 	if town.homes < town.citizens || (can_grow && town.homes == town.citizens) {
 		if TownBuilderStartBuilding(w, kingdom_slot, town_slot, Home{}) do return true
+	}
+	if town.wood >= TOWN_WOOD_TARGET || KingdomAtWarWithAny(w, kingdom_slot) {
+		if x, y, found := TownAutoWallSite(w, kingdom_slot, town_slot); found {
+			if TownStartConstruction(w, kingdom_slot, town_slot, .Wall, x, y) do return true
+		}
 	}
 	for kind in AUTO_TRAINING_BUILDINGS {
 		if kind in town.unlockedBuildings && town.buildingCounts[kind] == 0 {
@@ -138,6 +167,11 @@ TownBuilderConstruct :: proc(w: ^World, kingdom_slot, town_slot: int, can_grow: 
 	}
 	if town.farmlands < town.farmers {
 		if TownBuilderStartBuilding(w, kingdom_slot, town_slot, Farmland{}) do return true
+	}
+	if town.wood >= 15 {
+		if x, y, found := TownAutoPathSite(w, kingdom_slot, town_slot); found {
+			if TownStartConstruction(w, kingdom_slot, town_slot, .Path, x, y) do return true
+		}
 	}
 	return false
 }
@@ -165,6 +199,8 @@ TownStartConstruction :: proc(
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if town.constructionActive do return false
 	if !(kind in town.unlockedBuildings) do return false
+	if BuildingIsCombat(kind) do return false
+	if CombatSiteOverlaps(w, x, y, kind) do return false
 
 	building_type := BuildingTypeFromKind(kind)
 	if !WorldBuildingValid(w, x, y, building_type) do return false
@@ -291,16 +327,174 @@ TownConstructionWork :: proc(
 	return .Completed
 }
 
-TownBuildManual :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind, x, y: int) -> bool {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
-	if !BuildingIsManual(kind) do return false
+// Walls grow as an automatic palisade around the town, leaving periodic gaps
+// so nobody is trapped inside their own defences.
+TownAutoWallSite :: proc(w: ^World, kingdom_slot, town_slot: int) -> (int, int, bool) {
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	if !(kind in town.unlockedBuildings) do return false
-	if TownUnitCount(w, kingdom_slot, town_slot, .Builder) <= 0 do return false
+	radius := min(town.areaRadius, 9)
+	if radius < 4 do return 0, 0, false
 
-	building_type := BuildingTypeFromKind(kind)
-	if !TownBuildingInArea(w, kingdom_slot, town_slot, x, y, building_type) do return false
-	return TownStartConstruction(w, kingdom_slot, town_slot, kind, x, y)
+	perimeter := 8*radius
+	for step in 0..<perimeter {
+		index := (town.wallCursor+step)%perimeter
+		town.wallCursor = (index+1)%perimeter
+		if index%6 == 0 do continue
+
+		x, y := TownSquareRingPosition(town.x+2, town.y+2, radius, index)
+		if !TownBuildingInArea(w, kingdom_slot, town_slot, x, y, Wall{}) do continue
+		wrapped_x := WorldWrapCoordinate(x, int(w.maxX))
+		wrapped_y := WorldWrapCoordinate(y, int(w.maxY))
+		if !WorldBuildingValid(w, wrapped_x, wrapped_y, Wall{}) do continue
+		if CombatSiteOverlaps(w, wrapped_x, wrapped_y, .Wall) do continue
+		return wrapped_x, wrapped_y, true
+	}
+	return 0, 0, false
+}
+
+TownSquareRingPosition :: proc(center_x, center_y, radius, index: int) -> (int, int) {
+	side_length := radius*2
+	side := index/side_length
+	offset := index%side_length
+	switch side {
+	case 0:
+		return center_x-radius+offset, center_y-radius
+	case 1:
+		return center_x+radius, center_y-radius+offset
+	case 2:
+		return center_x+radius-offset, center_y+radius
+	case:
+		return center_x-radius, center_y+radius-offset
+	}
+}
+
+// Roads grow automatically: first a stub from the hall, then one tile at a time
+// from the edge of the existing road network toward a building without access.
+TownPathCandidate :: struct {
+	x, y: int,
+	distance: int,
+	score: f32,
+	found: bool,
+}
+
+TownAutoPathSite :: proc(w: ^World, kingdom_slot, town_slot: int) -> (int, int, bool) {
+	target_x, target_y, found := TownPathTarget(w, kingdom_slot, town_slot)
+	if !found do return 0, 0, false
+
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	candidate := TownPathCandidate{distance = max(int), score = -1}
+	seed := u64(kingdom_slot*TOWN_CAPACITY+town_slot)+0xBA7D
+
+	for x in town.x-1 ..= town.x+4 {
+		for y in town.y-1 ..= town.y+4 {
+			if x >= town.x && x < town.x+4 && y >= town.y && y < town.y+4 do continue
+			TownConsiderPathSite(
+				w,
+				kingdom_slot,
+				town_slot,
+				x,
+				y,
+				target_x,
+				target_y,
+				seed,
+				&candidate,
+			)
+		}
+	}
+
+	for building_slot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[building_slot] do continue
+		if w.buildings.kingdom[building_slot] != kingdom_slot ||
+			w.buildings.town[building_slot] != town_slot {
+			continue
+		}
+		if BuildingKindOf(w.buildings[building_slot].type) != .Path do continue
+		offsets := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
+		for offset in offsets {
+			TownConsiderPathSite(
+				w,
+				kingdom_slot,
+				town_slot,
+				WorldWrapCoordinate(w.buildings.x[building_slot]+offset[0], int(w.maxX)),
+				WorldWrapCoordinate(w.buildings.y[building_slot]+offset[1], int(w.maxY)),
+				target_x,
+				target_y,
+				seed,
+				&candidate,
+			)
+		}
+	}
+	return candidate.x, candidate.y, candidate.found
+}
+
+TownConsiderPathSite :: proc(
+	w: ^World,
+	kingdom_slot, town_slot, x, y, target_x, target_y: int,
+	seed: u64,
+	candidate: ^TownPathCandidate,
+) {
+	if !TownPointInArea(w, kingdom_slot, town_slot, x, y) do return
+	wrapped_x := WorldWrapCoordinate(x, int(w.maxX))
+	wrapped_y := WorldWrapCoordinate(y, int(w.maxY))
+	if !WorldBuildingValid(w, wrapped_x, wrapped_y, Path{}) do return
+	if CombatSiteOverlaps(w, wrapped_x, wrapped_y, .Path) do return
+
+	delta_x := target_x-x
+	delta_y := target_y-y
+	distance := delta_x*delta_x+delta_y*delta_y
+	score := WorldNoiseHash(x, y, seed)
+	if candidate.found && (distance > candidate.distance ||
+		(distance == candidate.distance && score <= candidate.score)) {
+		return
+	}
+	candidate.x = wrapped_x
+	candidate.y = wrapped_y
+	candidate.distance = distance
+	candidate.score = score
+	candidate.found = true
+}
+
+TownPathTarget :: proc(w: ^World, kingdom_slot, town_slot: int) -> (int, int, bool) {
+	for building_slot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[building_slot] do continue
+		if w.buildings.kingdom[building_slot] != kingdom_slot ||
+			w.buildings.town[building_slot] != town_slot {
+			continue
+		}
+		kind := BuildingKindOf(w.buildings[building_slot].type)
+		if kind == .Path || kind == .Wall || kind == .TownHall do continue
+
+		width, height := BuildingTileSize(w.buildings[building_slot].type)
+		has_path := false
+		for x in w.buildings.x[building_slot]-1 ..= w.buildings.x[building_slot]+width {
+			for y in w.buildings.y[building_slot]-1 ..= w.buildings.y[building_slot]+height {
+				if WorldTileHasPath(w, x, y) do has_path = true
+			}
+		}
+		if has_path do continue
+		return w.buildings.x[building_slot]+width/2, w.buildings.y[building_slot]+height/2, true
+	}
+	return 0, 0, false
+}
+
+// Automatic construction also reserves its footprint, so a player cannot drop a
+// combat site on top of a house that is already being raised.
+TownConstructionSiteOverlaps :: proc(w: ^World, x, y: int, kind: BuildingKind) -> bool {
+	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
+	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdom_slot] do continue
+		for town_slot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
+			town := &w.kingdoms[kingdom_slot].towns[town_slot]
+			if !town.constructionActive do continue
+			site := town.construction
+			other_width, other_height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+			if x < site.x+other_width && site.x < x+width &&
+				y < site.y+other_height && site.y < y+height {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 TownFindBuildingSite :: proc(w: ^World, kingdom_slot, town_slot: int, building_type: BuildingType) -> (int, int, bool) {
@@ -326,6 +520,7 @@ TownFindBuildingSite :: proc(w: ^World, kingdom_slot, town_slot: int, building_t
 				if !TownBuildingInArea(w, kingdom_slot, town_slot, x, y, building_type) {
 					continue
 				}
+				if CombatSiteOverlaps(w, x, y, BuildingKindOf(building_type)) do continue
 				if WorldBuildingValid(w, x, y, building_type) do return x, y, true
 			}
 		}

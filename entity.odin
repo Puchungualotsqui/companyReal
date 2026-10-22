@@ -16,6 +16,7 @@ BuildingKind :: enum {
 	Wall,
 	Bridge,
 	Cannon,
+	Watchtower,
 	ArcheryRange,
 	MagicSchool,
 	GiantPen,
@@ -32,6 +33,7 @@ BuildingType :: union {
 	Wall,
 	Bridge,
 	Cannon,
+	Watchtower,
 	ArcheryRange,
 	MagicSchool,
 	GiantPen,
@@ -47,6 +49,7 @@ Farmland :: struct {}
 Wall :: struct {}
 Bridge :: struct {}
 Cannon :: struct {}
+Watchtower :: struct {}
 ArcheryRange :: struct {}
 MagicSchool :: struct {}
 GiantPen :: struct {}
@@ -69,6 +72,8 @@ BuildingKindOf :: proc(type: BuildingType) -> BuildingKind {
 		return .Bridge
 	case Cannon:
 		return .Cannon
+	case Watchtower:
+		return .Watchtower
 	case ArcheryRange:
 		return .ArcheryRange
 	case MagicSchool:
@@ -101,6 +106,8 @@ BuildingTypeFromKind :: proc(kind: BuildingKind) -> BuildingType {
 		return Bridge{}
 	case .Cannon:
 		return Cannon{}
+	case .Watchtower:
+		return Watchtower{}
 	case .ArcheryRange:
 		return ArcheryRange{}
 	case .MagicSchool:
@@ -134,6 +141,8 @@ BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
 		return 1, 1
 	case Cannon:
 		return 2, 2
+	case Watchtower:
+		return 1, 1
 	case ArcheryRange, MagicSchool, TurtlePen:
 		return 3, 3
 	case GiantPen:
@@ -160,6 +169,8 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 		return 150
 	case Cannon:
 		return 250
+	case Watchtower:
+		return 200
 	case ArcheryRange, MagicSchool, TurtlePen:
 		return 300
 	case GiantPen:
@@ -184,10 +195,8 @@ BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
 		return 8
 	case .Wall:
 		return 4
-	case .Bridge:
-		return 6
-	case .Cannon:
-		return 25
+	case .Bridge, .Cannon, .Watchtower:
+		return 0
 	case .ArcheryRange:
 		return 25
 	case .MagicSchool:
@@ -224,7 +233,7 @@ BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 			return false
 		}
 
-	case TownHall, Home, Wall, Cannon, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path:
+	case TownHall, Home, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path:
 		switch tType {
 		case .Ground, .FertileGround, .Forest, .Hill, .Desert, .Sand:
 			return true
@@ -239,17 +248,19 @@ BuildingWalkable :: proc(type: BuildingType) -> bool {
 	switch _ in type {
 	case Bridge, Path:
 		return true
-	case TownHall, Home, Farmland, Wall, Cannon, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild:
+	case TownHall, Home, Farmland, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild:
 		return false
 	}
 	unreachable()
 }
 
-BuildingIsManual :: proc(kind: BuildingKind) -> bool {
+// Combat buildings are placed by the player anywhere in the world and raised by
+// combat builders without wood. Everything else is built by the town itself.
+BuildingIsCombat :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .Wall, .Bridge, .Cannon, .Path:
+	case .Bridge, .Cannon, .Watchtower:
 		return true
-	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
+	case .TownHall, .Home, .Farmland, .Wall, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path:
 		return false
 	}
 	unreachable()
@@ -259,7 +270,7 @@ BuildingIsTraining :: proc(kind: BuildingKind) -> bool {
 	switch kind {
 	case .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
 		return true
-	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Path:
+	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Watchtower, .Path:
 		return false
 	}
 	unreachable()
@@ -295,6 +306,7 @@ UnitEffects :: enum {
 UnitKind :: enum {
 	Villager,
 	Builder,
+	CombatBuilder,
 	WaterCollector,
 	Farmer,
 	Knight,
@@ -309,6 +321,7 @@ UnitKind :: enum {
 UnitType :: union {
 	Villager,
 	Builder,
+	CombatBuilder,
 	WaterCollector,
 	Farmer,
 	Knight,
@@ -403,6 +416,13 @@ Builder :: struct {
 	taskSequence:     int,
 	targetDecoration: int,
 }
+CombatBuilder :: struct {
+	site:            int,
+	siteSequence:    int,
+	failedSite:      int,
+	failedRevision:  u64,
+	scanTimer:       f32,
+}
 WaterCollector :: struct {
 	carriedResource: f32,
 	taskSequence: int,
@@ -425,6 +445,8 @@ UnitKindOf :: proc(type: UnitType) -> UnitKind {
 		return .Villager
 	case Builder:
 		return .Builder
+	case CombatBuilder:
+		return .CombatBuilder
 	case WaterCollector:
 		return .WaterCollector
 	case Farmer:
@@ -453,6 +475,8 @@ UnitTypeFromKind :: proc(kind: UnitKind) -> UnitType {
 		return Villager{}
 	case .Builder:
 		return Builder{}
+	case .CombatBuilder:
+		return CombatBuilder{}
 	case .WaterCollector:
 		return WaterCollector{}
 	case .Farmer:
@@ -479,7 +503,7 @@ UnitIsWarrior :: proc(type: UnitType) -> bool {
 	switch _ in type {
 	case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
 		return true
-	case Villager, Builder, WaterCollector, Farmer:
+	case Villager, Builder, CombatBuilder, WaterCollector, Farmer:
 		return false
 	}
 	unreachable()
@@ -487,7 +511,7 @@ UnitIsWarrior :: proc(type: UnitType) -> bool {
 
 UnitTrainingBuildingKind :: proc(kind: UnitKind) -> BuildingKind {
 	switch kind {
-	case .Villager, .Builder, .WaterCollector, .Farmer, .Knight:
+	case .Villager, .Builder, .CombatBuilder, .WaterCollector, .Farmer, .Knight:
 		return .TownHall
 	case .Archer:
 		return .ArcheryRange
@@ -509,6 +533,8 @@ UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
 		return 15
+	case CombatBuilder:
+		return 10
 	case Knight:
 		return 50
 	case Archer:
@@ -533,6 +559,8 @@ UnitDefaultSpeed :: proc(type: UnitType) -> f32 {
 		return 3
 	case Builder, WaterCollector, Farmer:
 		return 2.5
+	case CombatBuilder:
+		return 3
 	case Knight:
 		return 3.5
 	case Archer:
@@ -555,6 +583,8 @@ UnitDefaultCooldown :: proc(type: UnitType) -> f32 {
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
 		return 0
+	case CombatBuilder:
+		return 2
 	case Knight:
 		return 1
 	case Archer:
@@ -577,6 +607,8 @@ UnitDefaultRange :: proc(type: UnitType) -> f32 {
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
 		return 0
+	case CombatBuilder:
+		return 1.2
 	case Knight:
 		return 0.75
 	case Archer:
@@ -599,6 +631,8 @@ UnitDefaultVision :: proc(type: UnitType) -> f32 {
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
 		return 30
+	case CombatBuilder:
+		return 24
 	case Knight:
 		return 25
 	case Archer:
@@ -621,6 +655,8 @@ UnitDefaultDamage :: proc(type: UnitType) -> f32 {
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
 		return 0
+	case CombatBuilder:
+		return 3
 	case Knight:
 		return 15
 	case Archer:
@@ -649,6 +685,8 @@ UnitDefaultAreaRadius :: proc(type: UnitType) -> f32 {
 		return 3.5
 	case Villager, Builder, WaterCollector, Farmer, Knight, Archer, Turtle, Rogue:
 		return 0
+	case CombatBuilder:
+		return 0
 	}
 	unreachable()
 }
@@ -659,6 +697,8 @@ UnitDefaultTrainingTime :: proc(kind: UnitKind) -> f32 {
 		return 1
 	case .Builder, .WaterCollector, .Farmer:
 		return 1.5
+	case .CombatBuilder:
+		return 2.5
 	case .Knight:
 		return 2
 	case .Archer:
@@ -685,6 +725,8 @@ UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
 			return true
 		case Villager, Builder, WaterCollector, Farmer, Knight, Archer, Mage, Giant, Catapult, Rogue:
 			return false
+		case CombatBuilder:
+			return false
 		}
 
 	case .Ground, .FertileGround, .Forest, .Hill, .Desert, .River, .Sand:
@@ -710,6 +752,9 @@ UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
 		unit.state = StatePacific.Roaming
 	case Builder:
 		unit.type = Builder{carriedResource = 0, taskSequence = 0, targetDecoration = -1}
+		unit.state = StatePacific.Roaming
+	case CombatBuilder:
+		unit.type = CombatBuilder{site = -1, failedSite = -1}
 		unit.state = StatePacific.Roaming
 	case WaterCollector:
 		unit.type = WaterCollector{carriedResource = 0, taskSequence = 0}

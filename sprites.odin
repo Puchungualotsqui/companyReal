@@ -69,13 +69,14 @@ C_ARCANE_GLOW := rl.Color{128, 226, 255, 255}
 
 C_WHITE := rl.Color{238, 238, 244, 255}
 
-ALL_BUILDING_KINDS := [13]BuildingKind{
+ALL_BUILDING_KINDS := [14]BuildingKind{
 	.TownHall,
 	.Home,
 	.Farmland,
 	.Wall,
 	.Bridge,
 	.Cannon,
+	.Watchtower,
 	.ArcheryRange,
 	.MagicSchool,
 	.GiantPen,
@@ -85,9 +86,10 @@ ALL_BUILDING_KINDS := [13]BuildingKind{
 	.Path,
 }
 
-ALL_UNIT_KINDS := [11]UnitKind{
+ALL_UNIT_KINDS := [12]UnitKind{
 	.Villager,
 	.Builder,
+	.CombatBuilder,
 	.WaterCollector,
 	.Farmer,
 	.Knight,
@@ -135,7 +137,7 @@ UnitSpriteScale :: proc(kind: UnitKind) -> f32 {
 		return 1.55
 	case .Knight, .Rogue:
 		return 1.1
-	case .Villager, .Builder, .WaterCollector, .Farmer, .Archer, .Mage:
+	case .Villager, .Builder, .CombatBuilder, .WaterCollector, .Farmer, .Archer, .Mage:
 		return 1
 	}
 	return 1
@@ -345,7 +347,7 @@ create_glow_texture :: proc() -> rl.Texture2D {
 // Buildings with lit interiors and windows cast a warm pool of light at night.
 BuildingHasNightLight :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .TownHall, .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .ThievesGuild:
+	case .TownHall, .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .ThievesGuild, .Watchtower:
 		return true
 	case .Farmland, .Wall, .Bridge, .Cannon, .TurtlePen, .Path:
 		return false
@@ -413,6 +415,8 @@ draw_building_sprite :: proc(kind: BuildingKind, accent: rl.Color) -> Art {
 		draw_bridge(&art, accent)
 	case .Cannon:
 		draw_cannon(&art, accent)
+	case .Watchtower:
+		draw_watchtower(&art, accent)
 	case .ArcheryRange:
 		draw_archery_range(&art, accent)
 	case .MagicSchool:
@@ -669,6 +673,30 @@ draw_cannon :: proc(art: ^Art, accent: rl.Color) {
 	draw_flag(art, 26, 5, accent)
 }
 
+draw_watchtower :: proc(art: ^Art, accent: rl.Color) {
+	draw_shadow(art, 8, 14, 6, 2)
+
+	art_rect(art, 2, 4, 12, 11, C_OUTLINE)
+	art_rect(art, 3, 5, 10, 9, C_STONE_DARK)
+	draw_stone_seams(art, 3, 5, 10, 9, 3, C_STONE_DARKEST)
+
+	art_rect(art, 1, 1, 14, 4, C_OUTLINE)
+	art_rect(art, 2, 2, 12, 2, C_STONE)
+	for x in 2..<14 {
+		if x%4 == 0 do art_rect(art, x, 0, 2, 3, C_OUTLINE)
+	}
+
+	art_rect(art, 6, 6, 4, 5, C_OUTLINE)
+	art_rect(art, 7, 7, 2, 3, C_GOLD_LIGHT)
+	art_rect(art, 4, 9, 2, 2, C_OUTLINE)
+	art_rect(art, 5, 10, 1, 1, C_STONE_LIGHT)
+
+	art_line(art, 12, 15, 12, 5, C_OUTLINE)
+	art_rect(art, 12, 3, 3, 4, accent)
+	art_rect_outline(art, 12, 3, 3, 4, C_OUTLINE)
+	art_pixel(art, 13, 4, C_GOLD_LIGHT)
+}
+
 draw_archery_range :: proc(art: ^Art, accent: rl.Color) {
 	draw_shadow(art, 24, 45, 20, 3)
 	art_rect(art, 4, 18, 26, 22, C_OUTLINE)
@@ -909,6 +937,8 @@ draw_unit_sprite :: proc(kind: UnitKind, accent: rl.Color) -> Art {
 		draw_unit_villager(&art, accent)
 	case .Builder:
 		draw_unit_builder(&art, accent)
+	case .CombatBuilder:
+		draw_unit_combat_builder(&art, accent)
 	case .WaterCollector:
 		draw_unit_water_collector(&art, accent)
 	case .Farmer:
@@ -977,6 +1007,33 @@ draw_unit_builder :: proc(art: ^Art, accent: rl.Color) {
 	art_rect(art, 12, 4, 3, 2, C_OUTLINE)
 	art_rect(art, 13, 5, 1, 1, C_IRON)
 	art_rect(art, 10, 10, 2, 2, C_WOOD_DARK)
+}
+
+draw_unit_combat_builder :: proc(art: ^Art, accent: rl.Color) {
+	unit_shadow(art)
+	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
+	art_rect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
+	art_rect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
+	art_rect(art, 4, 6, 8, 6, C_OUTLINE)
+	art_rect(art, 5, 7, 6, 5, C_IRON_DARK)
+	art_rect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
+	art_rect(art, 5, 7, 6, 1, accent)
+	art_rect(art, 3, 7, 1, 4, C_OUTLINE)
+	art_rect(art, 12, 7, 1, 4, C_OUTLINE)
+
+	art_circle(art, 8, 4, 3, C_OUTLINE)
+	art_circle(art, 8, 4, 2, C_SKIN)
+	art_rect(art, 5, 1, 7, 3, C_OUTLINE)
+	art_rect(art, 6, 2, 5, 2, C_IRON)
+	art_rect(art, 7, 2, 3, 1, C_IRON_LIGHT)
+	art_pixel(art, 7, 4, C_OUTLINE)
+	art_pixel(art, 9, 4, C_OUTLINE)
+
+	art_line(art, 12, 12, 14, 4, C_OUTLINE)
+	art_line(art, 12, 11, 13, 4, C_WOOD_LIGHT)
+	art_rect(art, 12, 3, 4, 4, C_OUTLINE)
+	art_rect(art, 13, 4, 2, 2, C_STONE)
+	art_rect(art, 10, 10, 2, 2, C_IRON_DARK)
 }
 
 draw_unit_water_collector :: proc(art: ^Art, accent: rl.Color) {
@@ -1264,6 +1321,10 @@ draw_decoration_sprite :: proc(kind: DecorationKind) -> Art {
 		art := art_init(16, 10)
 		draw_decoration_stump(&art)
 		return art
+	case .Lamp:
+		art := art_init(16, 28)
+		draw_decoration_lamp(&art)
+		return art
 	}
 	return art_init(1, 1)
 }
@@ -1407,6 +1468,25 @@ draw_decoration_stump :: proc(art: ^Art) {
 	art_pixel(art, 7, 6, C_WOOD_LIGHT)
 	art_rect(art, 4, 8, 2, 1, C_WOOD_DARKEST)
 	art_rect(art, 11, 8, 2, 1, C_WOOD_DARKEST)
+}
+
+draw_decoration_lamp :: proc(art: ^Art) {
+	draw_shadow(art, 8, 26, 4, 1)
+
+	art_rect(art, 7, 10, 3, 16, C_OUTLINE)
+	art_rect(art, 8, 11, 1, 14, C_IRON_DARK)
+	art_rect(art, 6, 24, 5, 2, C_OUTLINE)
+	art_rect(art, 7, 25, 3, 1, C_IRON)
+
+	art_rect(art, 5, 4, 7, 7, C_OUTLINE)
+	art_rect(art, 6, 5, 5, 5, C_GOLD_DARK)
+	art_rect(art, 7, 6, 3, 3, C_GOLD_LIGHT)
+	art_pixel(art, 8, 7, C_WHITE)
+
+	art_rect(art, 4, 2, 9, 2, C_OUTLINE)
+	art_rect(art, 5, 3, 7, 1, C_IRON)
+	art_pixel(art, 8, 0, C_IRON_LIGHT)
+	art_pixel(art, 8, 1, C_IRON)
 }
 
 SpriteSet :: struct {

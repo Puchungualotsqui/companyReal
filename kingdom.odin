@@ -52,7 +52,7 @@ MilestoneOption :: struct {
 	unlocks: bit_set[BuildingKind],
 }
 
-TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Wall, .Path}
+TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Wall, .Path, .Watchtower}
 
 TOWN_MILESTONE_OPTIONS := [TOWN_MILESTONE_COUNT][2]MilestoneOption{
 	{
@@ -105,6 +105,7 @@ Town :: struct {
 	unlockedBuildings: bit_set[BuildingKind],
 	buildingCounts: [BuildingKind]int,
 	buildingSlots: [BuildingKind]int,
+	wallCursor: int,
 	milestonesReached: int,
 	milestonePending: bool,
 	conversions: [MAX_CONVERSION_JOBS]ConversionJob,
@@ -399,6 +400,13 @@ KingdomAtWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) -> bool {
 		w.kingdoms[kingdomSlotA].kingdomWar[kingdomSlotB]
 }
 
+KingdomAtWarWithAny :: proc(w: ^World, kingdom_slot: int) -> bool {
+	for other in 0..<KINGDOMS_CAPACITY {
+		if KingdomAtWar(w, kingdom_slot, other) do return true
+	}
+	return false
+}
+
 // Turns the sparse order matrices into a compact list the warrior update can
 // index in constant time. Called only when orders change, never per tick.
 TownOrdersRebuild :: proc(w: ^World, kingdom_slot, town_slot: int) {
@@ -584,6 +592,7 @@ KingdomAbsorb :: proc(w: ^World, defeated, destroyer, capital_town, capital_buil
 	}
 
 	KingdomEndWar(w, defeated)
+	CombatSiteKingdomClear(w, defeated)
 
 	town_mapping: [TOWN_CAPACITY]int
 	reserved: [TOWN_CAPACITY]bool

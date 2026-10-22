@@ -402,6 +402,33 @@ WorldRenderSprites :: proc(
 				}
 			}
 
+			for site_slot in 0 ..< COMBAT_SITE_CAPACITY {
+				if !w.combatSiteUsed[site_slot] do continue
+				texture := renderer.sprites.construction[FactionSpriteIndex(w.combatSites.kingdom[site_slot])]
+				if texture.id == 0 do continue
+				site_x := w.combatSites.x[site_slot]
+				site_y := w.combatSites.y[site_slot]
+				width, height := BuildingTileSize(BuildingTypeFromKind(w.combatSites.kind[site_slot]))
+				for tile_x in site_x ..< site_x+width {
+					for tile_y in site_y ..< site_y+height {
+						if f32(tile_x)+1 < min_x || f32(tile_x) > max_x ||
+							f32(tile_y)+1 < min_y || f32(tile_y) > max_y {
+							continue
+						}
+						append(&renderer.items, RenderItem{
+							base_y = -1e9,
+							dest = rl.Rectangle{
+								offset_x+f32(tile_x),
+								offset_y+f32(tile_y),
+								1,
+								1,
+							},
+							texture = texture,
+						})
+					}
+				}
+			}
+
 			if camera.zoom >= DECORATION_MIN_ZOOM && w.spatial.chunkSize > 0 {
 				chunks_x := w.spatial.chunksX
 				chunks_y := w.spatial.chunksY
@@ -450,6 +477,21 @@ WorldRenderSprites :: proc(
 								texture = texture,
 								flip_x = (variant & 1) == 1,
 							})
+
+							if night > 0.02 && w.decorations.kind[decoration_slot] == .Lamp {
+								light_width: f32 = 2.2
+								light_height: f32 = 1.9
+								flicker := 90+8*math.sin(w.simulationTime*3.1+f32(decoration_slot)*1.3)
+								append(&renderer.lights, RenderQuad{
+									dest = rl.Rectangle{
+										offset_x+decoration_x-light_width*0.5,
+										offset_y+decoration_y-1.15-light_height*0.5,
+										light_width,
+										light_height,
+									},
+									alpha = u8(night*flicker),
+								})
+							}
 						}
 					}
 				}

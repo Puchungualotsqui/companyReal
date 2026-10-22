@@ -15,9 +15,10 @@ DecorationKind :: enum {
 	Cactus,
 	Reed,
 	Stump,
+	Lamp,
 }
 
-ALL_DECORATION_KINDS := [8]DecorationKind {
+ALL_DECORATION_KINDS := [9]DecorationKind {
 	.Tree,
 	.Pine,
 	.Bush,
@@ -26,6 +27,7 @@ ALL_DECORATION_KINDS := [8]DecorationKind {
 	.Cactus,
 	.Reed,
 	.Stump,
+	.Lamp,
 }
 
 Decoration :: struct {
@@ -42,7 +44,7 @@ DecorationHealth :: proc(kind: DecorationKind) -> f32 {
 		return 60
 	case .Pine:
 		return 50
-	case .Bush, .Flowers, .Reed:
+	case .Bush, .Flowers, .Reed, .Lamp:
 		return 12
 	case .Rock:
 		return 120
@@ -55,14 +57,20 @@ DecorationHealth :: proc(kind: DecorationKind) -> f32 {
 }
 
 DecorationIsFlammable :: proc(kind: DecorationKind) -> bool {
-	return kind != .Rock
+	switch kind {
+	case .Rock:
+		return false
+	case .Tree, .Pine, .Bush, .Flowers, .Cactus, .Reed, .Stump, .Lamp:
+		return true
+	}
+	unreachable()
 }
 
 DecorationChoppable :: proc(kind: DecorationKind) -> bool {
 	switch kind {
 	case .Tree, .Pine, .Bush:
 		return true
-	case .Rock, .Flowers, .Cactus, .Reed, .Stump:
+	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp:
 		return false
 	}
 	return false
@@ -76,7 +84,7 @@ DecorationChopSeconds :: proc(kind: DecorationKind) -> f32 {
 		return 3
 	case .Bush:
 		return 1.2
-	case .Rock, .Flowers, .Cactus, .Reed, .Stump:
+	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp:
 		return 0
 	}
 	return 0
@@ -100,6 +108,8 @@ DecorationClearSeconds :: proc(kind: DecorationKind) -> f32 {
 		return 1
 	case .Flowers, .Reed:
 		return 0.4
+	case .Lamp:
+		return 0.6
 	}
 	return 0
 }
@@ -112,7 +122,7 @@ DecorationWoodYield :: proc(kind: DecorationKind) -> f32 {
 		return 4
 	case .Bush:
 		return 1
-	case .Rock, .Flowers, .Cactus, .Reed, .Stump:
+	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp:
 		return 0
 	}
 	return 0
@@ -142,6 +152,29 @@ WorldDecorationSpawn :: proc(w: ^World, x, y: f32, kind: DecorationKind, variant
 	return slot, true
 }
 
+// Roads are decorated automatically: a deterministic share of path tiles gets
+// a street lamp, which also lights the town at night.
+WorldSpawnStreetLamp :: proc(w: ^World, x, y: int) {
+	if WorldNoiseHash(x, y, 0x1A3B) >= 0.45 do return
+	if WorldTileHasLamp(w, x, y) do return
+	WorldDecorationSpawn(w, f32(x)+0.5, f32(y)+0.9, .Lamp, u8(WorldNoiseHash(y, x, 0x1A3C)*4) & 3)
+}
+
+WorldTileHasLamp :: proc(w: ^World, x, y: int) -> bool {
+	chunk_size := w.spatial.chunkSize
+	if chunk_size <= 0 do return false
+	wrapped_x := WorldWrapCoordinate(x, int(w.maxX))
+	wrapped_y := WorldWrapCoordinate(y, int(w.maxY))
+	chunk := (wrapped_x/chunk_size)*w.spatial.chunksY+wrapped_y/chunk_size
+	for slot := w.spatial.decorationHead[chunk]; slot >= 0; slot = w.spatial.decorationNext[slot] {
+		if w.decorations.kind[slot] != .Lamp do continue
+		if int(w.decorations.x[slot]) == wrapped_x && int(w.decorations.y[slot]) == wrapped_y {
+			return true
+		}
+	}
+	return false
+}
+
 WorldDecorationDespawn :: proc(w: ^World, slot: int) -> bool {
 	if slot < 0 || slot >= DECORATION_CAPACITY || !w.decorationUsed[slot] do return false
 	if w.decorations.kind[slot] == .Stump do w.decorationStumps -= 1
@@ -159,7 +192,7 @@ DecorationFell :: proc(w: ^World, slot: int) {
 		w.decorations.health[slot] = DecorationHealth(.Stump)
 		w.decorations.regrowTimer[slot] = 0
 		w.decorationStumps += 1
-	case .Bush, .Flowers, .Cactus, .Reed, .Stump:
+	case .Bush, .Flowers, .Cactus, .Reed, .Stump, .Lamp:
 		WorldDecorationDespawn(w, slot)
 	case .Rock:
 	}
