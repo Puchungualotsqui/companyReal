@@ -3,7 +3,6 @@ package main
 import "core:math"
 
 WARRIOR_SCAN_INTERVAL :: 0.5
-WARRIOR_AGGRO_FACTOR :: 0.5
 WARRIOR_CASCADE_UNIT_CHANCE :: 0.85
 WARRIOR_CASCADE_BUILDING_CHANCE :: 0.75
 WARRIOR_HOME_PATROL_RADIUS :: 8
@@ -35,14 +34,8 @@ UnitWarriorReset :: proc(w: ^World, unit_slot: int) {
 	)
 }
 
-// Units react to enemies once they cross the midpoint between weapon range
-// and vision. That is the distance at which a declared war "detonates".
-WarriorAggroRange :: proc(unit_type: UnitType) -> f32 {
-	attack_range := UnitDefaultRange(unit_type)
-	vision := UnitDefaultVision(unit_type)
-	return attack_range + (vision-attack_range)*WARRIOR_AGGRO_FACTOR
-}
-
+// Units react to enemies inside their distraction radius, which is usually
+// wider than the radius that reveals fog for the player.
 UnitUpdateWarrior :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	unit := &w.units[unit_slot]
 	if !UnitIsWarrior(unit.type) do return
@@ -192,7 +185,7 @@ WarriorFocusValid :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) -> bo
 		delta_x := WorldShortestWrappedDelta(w.units.x[target.slot]-unit.x, f32(w.maxX))
 		delta_y := WorldShortestWrappedDelta(w.units.y[target.slot]-unit.y, f32(w.maxY))
 		return delta_x*delta_x+delta_y*delta_y <=
-			UnitDefaultVision(unit.type)*UnitDefaultVision(unit.type)
+			UnitDistraction(unit.type)*UnitDistraction(unit.type)
 	case TargetBuilding:
 		if target.slot < 0 || target.slot >= BUILDING_CAPACITY || !w.buildingUsed[target.slot] {
 			return false
@@ -204,8 +197,7 @@ WarriorFocusValid :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) -> bo
 
 WarriorFindFocus :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) -> WarriorTarget {
 	unit := &w.units[unit_slot]
-	vision := UnitDefaultVision(unit.type)
-	aggro := WarriorAggroRange(unit.type)
+	aggro := UnitDistraction(unit.type)
 	is_attack_order := false
 	switch _ in state.order {
 	case WarriorAttack:
@@ -215,7 +207,7 @@ WarriorFindFocus :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) -> War
 
 	state.scanSequence += 1
 	near_unit, unit_distance, near_building, building_distance :=
-		WarriorFindNearbyHostiles(w, unit_slot, vision)
+		WarriorFindNearbyHostiles(w, unit_slot, max(UnitDefaultVision(unit.type), aggro))
 	seed := u64(unit_slot)+u64(state.scanSequence)*7919+1307
 
 	if near_unit >= 0 {

@@ -416,10 +416,11 @@ UISelectionValid :: proc(w: ^World, selection: Selection) -> bool {
 	switch selection.kind {
 	case .Unit:
 		return selection.slot >= 0 && selection.slot < UNIT_CAPACITY &&
-			w.unitUsed[selection.slot] && w.units[selection.slot].type != nil
+			w.unitUsed[selection.slot] && w.units[selection.slot].type != nil &&
+			FogUnitVisible(w, selection.slot)
 	case .Building:
 		return selection.slot >= 0 && selection.slot < BUILDING_CAPACITY &&
-			w.buildingUsed[selection.slot]
+			w.buildingUsed[selection.slot] && FogBuildingVisible(w, selection.slot)
 	case .None:
 		return false
 	}
@@ -455,6 +456,7 @@ UIAttackOrderValid :: proc(w: ^World, kingdom, town, target_kingdom, target_town
 	if !WorldTownExists(w, kingdom, town) || !WorldTownExists(w, target_kingdom, target_town) {
 		return false
 	}
+	if !FogTownDiscovered(w, target_kingdom, target_town) do return false
 	if w.kingdoms[kingdom].towns[town].attackOrders[target_kingdom][target_town] {
 		return false
 	}
@@ -466,6 +468,7 @@ UIDefendOrderValid :: proc(w: ^World, kingdom, town, target_kingdom, target_town
 	if !WorldTownExists(w, kingdom, town) || !WorldTownExists(w, target_kingdom, target_town) {
 		return false
 	}
+	if !FogTownDiscovered(w, target_kingdom, target_town) do return false
 	if KingdomAtWar(w, kingdom, target_kingdom) do return false
 	if w.kingdoms[kingdom].towns[town].defendOrders[target_kingdom][target_town] do return false
 	return TownHallSlot(w, target_kingdom, target_town) >= 0
@@ -1094,7 +1097,7 @@ UIFindBuildingAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> S
 		return {}
 	}
 	slot := w.tileBuilding[tile_x*int(w.maxY)+tile_y]
-	if slot >= 0 && slot < BUILDING_CAPACITY && w.buildingUsed[slot] {
+	if slot >= 0 && slot < BUILDING_CAPACITY && w.buildingUsed[slot] && FogBuildingVisible(w, slot) {
 		return Selection{kind = .Building, slot = slot}
 	}
 	return {}
@@ -1102,13 +1105,22 @@ UIFindBuildingAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> S
 
 UIFindTownAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> (kingdom, town, hall_slot: int, found: bool) {
 	selection := UIFindBuildingAt(w, camera, mouse)
-	if selection.kind != .Building do return -1, -1, -1, false
-	kingdom = w.buildings[selection.slot].kingdom
-	town = w.buildings[selection.slot].town
-	if !WorldTownExists(w, kingdom, town) do return -1, -1, -1, false
+	if selection.kind == .Building {
+		kingdom = w.buildings[selection.slot].kingdom
+		town = w.buildings[selection.slot].town
+		if !WorldTownExists(w, kingdom, town) do return -1, -1, -1, false
+		hall_slot = TownHallSlot(w, kingdom, town)
+		if hall_slot < 0 do return -1, -1, -1, false
+		return kingdom, town, hall_slot, true
+	}
+
+	// Discovered but currently fogged towns remain valid order targets.
+	tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse)
+	if !ok do return -1, -1, -1, false
+	kingdom, town, found = FogFindTownAt(w, tile_x, tile_y)
+	if !found do return -1, -1, -1, false
 	hall_slot = TownHallSlot(w, kingdom, town)
-	if hall_slot < 0 do return -1, -1, -1, false
-	return kingdom, town, hall_slot, true
+	return
 }
 
 UIFindAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> Selection {
@@ -1123,6 +1135,7 @@ UIFindAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> Selection
 	for unit_slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unit_slot] do continue
 		if w.units[unit_slot].type == nil do continue
+		if !FogUnitVisible(w, unit_slot) do continue
 		if state, ok := w.units[unit_slot].state.(StateConverting); ok && state.inside {
 			continue
 		}
@@ -1148,7 +1161,7 @@ UIFindAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> Selection
 	tile_y := int(py)
 	if tile_x >= 0 && tile_x < int(w.maxX) && tile_y >= 0 && tile_y < int(w.maxY) {
 		slot := w.tileBuilding[tile_x*int(w.maxY)+tile_y]
-		if slot >= 0 && slot < BUILDING_CAPACITY && w.buildingUsed[slot] {
+		if slot >= 0 && slot < BUILDING_CAPACITY && w.buildingUsed[slot] && FogBuildingVisible(w, slot) {
 			return Selection{kind = .Building, slot = slot}
 		}
 	}
@@ -1827,6 +1840,7 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 		for attacker_town in 0..<TOWN_CAPACITY {
 			if !orders.attackedBy[attacker_kingdom][attacker_town] do continue
 			if !WorldTownExists(w, attacker_kingdom, attacker_town) do continue
+			if !FogTownDiscovered(w, attacker_kingdom, attacker_town) do continue
 			UIDrawOrderArrow(
 				w,
 				camera,
@@ -1843,6 +1857,7 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 		for defender_town in 0..<TOWN_CAPACITY {
 			if !orders.defendedBy[defender_kingdom][defender_town] do continue
 			if !WorldTownExists(w, defender_kingdom, defender_town) do continue
+			if !FogTownDiscovered(w, defender_kingdom, defender_town) do continue
 			if defender_kingdom == kingdom && defender_town == town do continue
 			UIDrawOrderArrow(
 				w,
@@ -1861,6 +1876,7 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 		for target_town in 0..<TOWN_CAPACITY {
 			if !orders.attackOrders[target_kingdom][target_town] do continue
 			if !WorldTownExists(w, target_kingdom, target_town) do continue
+			if !FogTownDiscovered(w, target_kingdom, target_town) do continue
 			UIDrawOrderArrow(w, camera, kingdom, town, target_kingdom, target_town, UI_COLOR_ATTACK, false)
 		}
 	}
@@ -1868,6 +1884,7 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 		for protected_town in 0..<TOWN_CAPACITY {
 			if !orders.defendOrders[protected_kingdom][protected_town] do continue
 			if !WorldTownExists(w, protected_kingdom, protected_town) do continue
+			if !FogTownDiscovered(w, protected_kingdom, protected_town) do continue
 			if protected_kingdom == kingdom && protected_town == town do continue
 			UIDrawOrderArrow(w, camera, kingdom, town, protected_kingdom, protected_town, UI_COLOR_DEFEND, false)
 		}

@@ -60,6 +60,10 @@ TownCombatConstructionValid :: proc(w: ^World, kingdom_slot, town_slot: int, kin
 	if !BuildingIsCombat(kind) do return false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if !(kind in town.unlockedBuildings) do return false
+	if kingdom_slot == PLAYER_KINGDOM {
+		width, height := BuildingTileSize(BuildingTypeFromKind(kind))
+		if !FogRectExplored(w, x, y, width, height) do return false
+	}
 	if !WorldBuildingValid(w, x, y, BuildingTypeFromKind(kind)) do return false
 	if CombatSiteOverlaps(w, x, y, kind) do return false
 	return !TownConstructionSiteOverlaps(w, x, y, kind)

@@ -185,6 +185,53 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 	unreachable()
 }
 
+// Buildings also uncover and keep watch over the surrounding area.
+BuildingVision :: proc(kind: BuildingKind) -> f32 {
+	switch kind {
+	case .TownHall:
+		return 14
+	case .Watchtower:
+		return 20
+	case .Cannon:
+		return 9
+	case .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
+		return 8
+	case .Home:
+		return 5
+	case .Farmland:
+		return 3
+	case .Wall:
+		return 2
+	case .Bridge:
+		return 3
+	case .Path:
+		return 2
+	}
+	unreachable()
+}
+
+// Radius at which an armed building notices a hostile and reacts. It is wider
+// than its vision, like a unit's distraction radius.
+BuildingDistraction :: proc(kind: BuildingKind) -> f32 {
+	switch kind {
+	case .TownHall:
+		return 20
+	case .Watchtower:
+		return 28
+	case .Cannon:
+		return 16
+	case .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
+		return 12
+	case .Home:
+		return 8
+	case .Farmland:
+		return 5
+	case .Wall, .Bridge, .Path:
+		return 4
+	}
+	unreachable()
+}
+
 BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
 	switch kind {
 	case .TownHall:
@@ -648,6 +695,32 @@ UnitDefaultVision :: proc(type: UnitType) -> f32 {
 		return 35
 	case Rogue:
 		return 30
+	}
+	unreachable()
+}
+
+// Enemy-detection radius used by combat AI. A unit may react before it can
+// actually reveal the area to the player, which keeps guards proactive.
+UnitDistraction :: proc(type: UnitType) -> f32 {
+	switch _ in type {
+	case Villager, Builder, WaterCollector, Farmer:
+		return 34
+	case CombatBuilder:
+		return 30
+	case Knight:
+		return 40
+	case Archer:
+		return 40
+	case Mage:
+		return 38
+	case Giant:
+		return 55
+	case Turtle:
+		return 45
+	case Catapult:
+		return 50
+	case Rogue:
+		return 45
 	}
 	unreachable()
 }

@@ -43,6 +43,7 @@ World :: struct {
 	flowFieldStamp: u64,
 	combatSites: #soa [COMBAT_SITE_CAPACITY]CombatSite,
 	combatSiteUsed: [COMBAT_SITE_CAPACITY]bool,
+	fog: FogOfWar,
 }
 
 WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerationSettings) -> bool {
@@ -54,6 +55,7 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.maxY = maxY
 	w.seed = settings.seed
 	w.dayTime = f32(WORLD_DAY_LENGTH_SECONDS)*6/24
+	if !FogInit(w) do return false
 	w.ground = make([dynamic][dynamic]Tile, maxX)
 	for &x in w.ground {
 		x = make([dynamic]Tile, maxY)
@@ -71,7 +73,9 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 		w.flowFields[i].unitKingdom = -1
 	}
 	WorldGenerate(w, settings)
-	return WorldSpawnInitialKingdoms(w, int(kingdoms), settings.seed)
+	ok := WorldSpawnInitialKingdoms(w, int(kingdoms), settings.seed)
+	if ok do FogUpdate(w)
+	return ok
 }
 
 WorldDeinit :: proc(w: ^World) {
@@ -92,6 +96,7 @@ WorldDeinit :: proc(w: ^World) {
 		delete(x)
 	}
 	delete(w.ground)
+	FogDeinit(w)
 }
 
 Tile :: struct {
@@ -303,6 +308,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 		}
 	}
 	SpatialBuildingRemove(w, slot)
+	FogBuildingDespawn(w, slot)
 	w.buildingUsed[slot] = false
 	w.navigationRevision += 1
 	return true

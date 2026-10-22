@@ -232,6 +232,10 @@ TownFoundingValid :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if town.constructionActive && town.construction.kind == .TownHall do return false
+	if kingdom_slot == PLAYER_KINGDOM {
+		width, height := BuildingTileSize(TownHall{})
+		if !FogRectExplored(w, x, y, width, height) do return false
+	}
 	if !WorldBuildingValid(w, x, y, TownHall{}) do return false
 	if CombatSiteOverlaps(w, x, y, .TownHall) do return false
 	if TownFoundingOverlapsOtherConstruction(w, kingdom_slot, town_slot, x, y) do return false

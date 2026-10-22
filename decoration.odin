@@ -178,6 +178,7 @@ WorldTileHasLamp :: proc(w: ^World, x, y: int) -> bool {
 WorldDecorationDespawn :: proc(w: ^World, slot: int) -> bool {
 	if slot < 0 || slot >= DECORATION_CAPACITY || !w.decorationUsed[slot] do return false
 	if w.decorations.kind[slot] == .Stump do w.decorationStumps -= 1
+	FogDecorationDespawn(w, slot)
 	SpatialDecorationRemove(w, slot)
 	w.decorationUsed[slot] = false
 	return true

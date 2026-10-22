@@ -9,6 +9,7 @@ RenderItem :: struct {
 	dest:    rl.Rectangle,
 	texture: rl.Texture2D,
 	flip_x:  bool,
+	tint:    rl.Color,
 }
 
 RenderQuad :: struct {
@@ -26,6 +27,10 @@ WorldRenderer :: struct {
 	items:   [dynamic]RenderItem,
 	shadows: [dynamic]RenderQuad,
 	lights:  [dynamic]RenderQuad,
+	memoryFires: [dynamic]RenderQuad,
+	fogTexture: rl.Texture2D,
+	fogPixels:  []u8,
+	fogRevision: u64,
 }
 
 WorldView :: struct {
@@ -42,13 +47,14 @@ WorldViewInit :: proc(w: ^World) -> WorldView {
 	if zoom < minimum_zoom do zoom = minimum_zoom
 	focus_x, focus_y := WorldCameraFocus(w)
 
-	return WorldView{
+	view := WorldView{
 		renderer = WorldRenderer{
 			terrain = TerrainRendererInit(w),
 			sprites = SpriteSetInit(),
 			items = make([dynamic]RenderItem, 0, 2048),
 			shadows = make([dynamic]RenderQuad, 0, 512),
 			lights = make([dynamic]RenderQuad, 0, 256),
+			memoryFires = make([dynamic]RenderQuad, 0, 64),
 		},
 		camera = rl.Camera2D{
 			offset = rl.Vector2{screen_width*0.5, screen_height*0.5},
@@ -57,6 +63,8 @@ WorldViewInit :: proc(w: ^World) -> WorldView {
 			zoom = zoom,
 		},
 	}
+	FogRenderInit(w, &view.renderer)
+	return view
 }
 
 // Sprites are authored at PIXELS_PER_TILE, so this zoom shows them 1:1.
@@ -84,6 +92,7 @@ WorldViewUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32) {
 
 WorldRendererUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
 	TerrainRendererUpdate(w, &renderer.terrain)
+	FogRenderUpdate(w, renderer)
 }
 
 WorldRendererDeinit :: proc(renderer: ^WorldRenderer) {
@@ -92,6 +101,8 @@ WorldRendererDeinit :: proc(renderer: ^WorldRenderer) {
 	delete(renderer.items)
 	delete(renderer.shadows)
 	delete(renderer.lights)
+	delete(renderer.memoryFires)
+	FogRenderDeinit(renderer)
 }
 
 
@@ -196,6 +207,7 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 		first_copy_y,
 		last_copy_y,
 	)
+	FogRenderDraw(w, renderer, first_copy_x, last_copy_x, first_copy_y, last_copy_y)
 	rl.EndMode2D()
 
 	ambient := WorldAmbientColor(w)
@@ -285,6 +297,140 @@ UnitRenderPosition :: proc(w: ^World, unit_slot: int) -> (x, y: f32) {
 	return
 }
 
+FogLiveBuildingAtAnchor :: proc(w: ^World, anchor: int) -> bool {
+	if anchor < 0 || anchor >= len(w.tileBuilding) do return false
+	slot := w.tileBuilding[anchor]
+	return slot >= 0 && slot < BUILDING_CAPACITY && w.buildingUsed[slot]
+}
+
+FogAppendMemoryBuilding :: proc(
+	w: ^World,
+	renderer: ^WorldRenderer,
+	offset_x, offset_y: f32,
+	anchor: int,
+	min_x, max_x, min_y, max_y: f32,
+) {
+	if anchor < 0 || anchor >= len(w.fog.buildingKind) do return
+	kind_byte := w.fog.buildingKind[anchor]
+	if kind_byte == FOG_NONE do return
+
+	kind := BuildingKind(kind_byte)
+	flags := w.fog.buildingFlags[anchor]
+	kingdom := int(w.fog.buildingKingdom[anchor])
+	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY do return
+
+	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
+	height_map := int(w.maxY)
+	tile_y := anchor%height_map
+	tile_x := anchor/height_map
+	x := f32(tile_x)
+	y := f32(tile_y)
+	if x+f32(width) < min_x || x > max_x || y+f32(height) < min_y || y > max_y {
+		return
+	}
+
+	faction := FactionSpriteIndex(kingdom)
+	if (flags & FOG_FLAG_CONSTRUCTION) != 0 {
+		texture := renderer.sprites.construction[faction]
+		if texture.id == 0 do return
+		for site_x in tile_x ..< tile_x+width {
+			for site_y in tile_y ..< tile_y+height {
+				if f32(site_x)+1 < min_x || f32(site_x) > max_x ||
+					f32(site_y)+1 < min_y || f32(site_y) > max_y {
+					continue
+				}
+				append(&renderer.items, RenderItem{
+					base_y = -1e9,
+					dest = rl.Rectangle{offset_x+f32(site_x), offset_y+f32(site_y), 1, 1},
+					texture = texture,
+					tint = FOG_MEMORY_TINT,
+				})
+			}
+		}
+		return
+	}
+
+	texture := renderer.sprites.building[faction][kind]
+	if texture.id == 0 do return
+	append(&renderer.items, RenderItem{
+		base_y = y+f32(height),
+		dest = rl.Rectangle{offset_x+x, offset_y+y, f32(width), f32(height)},
+		texture = texture,
+		tint = FOG_MEMORY_TINT,
+	})
+
+	if (flags & FOG_FLAG_BURNING) != 0 {
+		fire_width := f32(width)*0.8
+		fire_height := f32(height)*0.9
+		append(&renderer.memoryFires, RenderQuad{
+			dest = rl.Rectangle{
+				offset_x+x+(f32(width)-fire_width)*0.5,
+				offset_y+y+f32(height)-fire_height,
+				fire_width,
+				fire_height,
+			},
+			alpha = 165,
+		})
+	}
+}
+
+FogAppendMemoryDecorations :: proc(
+	w: ^World,
+	renderer: ^WorldRenderer,
+	offset_x, offset_y: f32,
+	min_x, max_x, min_y, max_y: f32,
+) {
+	world_width := int(w.maxX)
+	world_height := int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return
+
+	first_x := WorldFloor(min_x)-1
+	last_x := WorldFloor(max_x)+1
+	first_y := WorldFloor(min_y)-1
+	last_y := WorldFloor(max_y)+1
+	if last_x-first_x >= world_width {
+		first_x = 0
+		last_x = world_width-1
+	}
+	if last_y-first_y >= world_height {
+		first_y = 0
+		last_y = world_height-1
+	}
+
+	for y in first_y ..= last_y {
+		wrapped_y := WorldWrapCoordinate(y, world_height)
+		for x in first_x ..= last_x {
+			wrapped_x := WorldWrapCoordinate(x, world_width)
+			index := wrapped_x*world_height+wrapped_y
+			if !w.fog.explored[index] || w.fog.visible[index] do continue
+			kind_byte := w.fog.decorationKind[index]
+			if kind_byte == FOG_NONE do continue
+
+			kind := DecorationKind(kind_byte)
+			texture := renderer.sprites.decoration[kind]
+			if texture.id == 0 do continue
+			variant := w.fog.decorationVariant[index]
+			variant_scale := 0.94+f32((variant>>1)&3)*0.04
+			width := f32(texture.width)/PIXELS_PER_TILE*variant_scale
+			height := f32(texture.height)/PIXELS_PER_TILE*variant_scale
+			decoration_x := f32(x)+f32(w.fog.decorationOffsetX[index])/255
+			decoration_y := f32(y)+f32(w.fog.decorationOffsetY[index])/255
+			append(&renderer.items, RenderItem{
+				base_y = decoration_y,
+				dest = rl.Rectangle{
+					offset_x+decoration_x-width*0.5,
+					offset_y+decoration_y-height,
+					width,
+					height,
+				},
+				texture = texture,
+				flip_x = (variant & 1) == 1,
+				tint = FOG_MEMORY_TINT,
+			})
+		}
+	}
+}
+
 WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, first_copy_x, last_copy_x, first_copy_y, last_copy_y: int) {
 	world_width := f32(w.maxX)
 	world_height := f32(w.maxY)
@@ -312,6 +458,7 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 
 			clear(&renderer.items)
 			clear(&renderer.shadows)
+			clear(&renderer.memoryFires)
 
 			for building_slot in 0 ..< BUILDING_CAPACITY {
 				if !w.buildingUsed[building_slot] do continue
@@ -323,6 +470,21 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				kind := BuildingKindOf(w.buildings[building_slot].type)
 				if building_x+width < min_x || building_x > max_x ||
 					building_y+height < min_y || building_y > max_y {
+					continue
+				}
+
+				if !FogBuildingVisible(w, building_slot) {
+					FogAppendMemoryBuilding(
+						w,
+						renderer,
+						offset_x,
+						offset_y,
+						FogTileIndex(w, w.buildings.x[building_slot], w.buildings.y[building_slot]),
+						min_x,
+						max_x,
+						min_y,
+						max_y,
+					)
 					continue
 				}
 
@@ -366,6 +528,22 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				})
 			}
 
+			for anchor in w.fog.ghosts {
+				if FogTileVisibleIndex(w, anchor) do continue
+				if FogLiveBuildingAtAnchor(w, anchor) do continue
+				FogAppendMemoryBuilding(
+					w,
+					renderer,
+					offset_x,
+					offset_y,
+					anchor,
+					min_x,
+					max_x,
+					min_y,
+					max_y,
+				)
+			}
+
 			for kingdom_slot in 0 ..< KINGDOMS_CAPACITY {
 				if !w.kingdomUsed[kingdom_slot] do continue
 				texture := renderer.sprites.construction[FactionSpriteIndex(kingdom_slot)]
@@ -376,6 +554,20 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 					if !town.constructionActive do continue
 					site := town.construction
 					width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+					if !FogRectVisible(w, site.x, site.y, width, height) {
+						FogAppendMemoryBuilding(
+							w,
+							renderer,
+							offset_x,
+							offset_y,
+							FogTileIndex(w, site.x, site.y),
+							min_x,
+							max_x,
+							min_y,
+							max_y,
+						)
+						continue
+					}
 					for tile_x in site.x ..< site.x+width {
 						for tile_y in site.y ..< site.y+height {
 							if f32(tile_x)+1 < min_x || f32(tile_x) > max_x ||
@@ -404,6 +596,7 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				site_x := w.combatSites.x[site_slot]
 				site_y := w.combatSites.y[site_slot]
 				width, height := BuildingTileSize(BuildingTypeFromKind(w.combatSites.kind[site_slot]))
+				if !FogRectVisible(w, site_x, site_y, width, height) do continue
 				for tile_x in site_x ..< site_x+width {
 					for tile_y in site_y ..< site_y+height {
 						if f32(tile_x)+1 < min_x || f32(tile_x) > max_x ||
@@ -456,6 +649,7 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 							height := f32(texture.height)/PIXELS_PER_TILE*variant_scale
 							decoration_x := w.decorations.x[decoration_slot]
 							decoration_y := w.decorations.y[decoration_slot]
+							if !FogTileVisible(w, int(decoration_x), int(decoration_y)) do continue
 							if decoration_x+width*0.5 < min_x || decoration_x-width*0.5 > max_x ||
 								decoration_y < min_y || decoration_y-height > max_y {
 								continue
@@ -490,6 +684,7 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 						}
 					}
 				}
+				FogAppendMemoryDecorations(w, renderer, offset_x, offset_y, min_x, max_x, min_y, max_y)
 			}
 
 			for unit_slot in 0 ..< UNIT_CAPACITY {
@@ -509,6 +704,10 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				}
 				if unit_x+scale+1 < min_x || unit_x-1 > max_x ||
 					unit_y+1 < min_y || unit_y-scale-1 > max_y {
+					continue
+				}
+				if w.units[unit_slot].kingdome != PLAYER_KINGDOM &&
+					!FogTileVisible(w, int(unit_x), int(unit_y)) {
 					continue
 				}
 
@@ -561,43 +760,58 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				if item.texture.id == 0 do continue
 				source := rl.Rectangle{0, 0, f32(item.texture.width), f32(item.texture.height)}
 				if item.flip_x do source.width = -source.width
-				rl.DrawTexturePro(item.texture, source, item.dest, rl.Vector2{0, 0}, 0, rl.WHITE)
+				color := item.tint
+				if color.a == 0 do color = rl.WHITE
+				rl.DrawTexturePro(item.texture, source, item.dest, rl.Vector2{0, 0}, 0, color)
 			}
 
-			if renderer.sprites.fire.id != 0 && w.fireCount > 0 {
+			if renderer.sprites.fire.id != 0 {
 				fire_source := rl.Rectangle{
 					0,
 					0,
 					f32(renderer.sprites.fire.width),
 					f32(renderer.sprites.fire.height),
 				}
-				for fire_slot in 0 ..< FIRE_CAPACITY {
-					if !w.fireUsed[fire_slot] do continue
-					fire_x := w.fires.x[fire_slot]
-					fire_y := w.fires.y[fire_slot]
-					if fire_x+1 < min_x || fire_x-1 > max_x ||
-						fire_y+1 < min_y || fire_y-1 > max_y {
-						continue
-					}
-
-					flicker := 0.9+0.12*math.sin(w.simulationTime*9+f32(fire_slot)*1.7)
-					intensity := w.fires.intensity[fire_slot]
-					width := (0.72+0.18*intensity)*flicker
-					height := (1.15+0.4*intensity)*flicker
-					jitter_x := (WorldNoiseHash(fire_slot, 1, 0xF12)-0.5)*0.3
+				for fire in renderer.memoryFires {
 					rl.DrawTexturePro(
 						renderer.sprites.fire,
 						fire_source,
-						rl.Rectangle{
-							offset_x+fire_x+jitter_x-width*0.5,
-							offset_y+fire_y+0.35-height,
-							width,
-							height,
-						},
+						fire.dest,
 						rl.Vector2{0, 0},
 						0,
-						rl.Color{255, 255, 255, 235},
+						rl.Color{176, 176, 176, fire.alpha},
 					)
+				}
+				if w.fireCount > 0 {
+					for fire_slot in 0 ..< FIRE_CAPACITY {
+						if !w.fireUsed[fire_slot] do continue
+						fire_x := w.fires.x[fire_slot]
+						fire_y := w.fires.y[fire_slot]
+						if fire_x+1 < min_x || fire_x-1 > max_x ||
+							fire_y+1 < min_y || fire_y-1 > max_y {
+							continue
+						}
+						if !FogTileVisible(w, int(fire_x), int(fire_y)) do continue
+
+						flicker := 0.9+0.12*math.sin(w.simulationTime*9+f32(fire_slot)*1.7)
+						intensity := w.fires.intensity[fire_slot]
+						width := (0.72+0.18*intensity)*flicker
+						height := (1.15+0.4*intensity)*flicker
+						jitter_x := (WorldNoiseHash(fire_slot, 1, 0xF12)-0.5)*0.3
+						rl.DrawTexturePro(
+							renderer.sprites.fire,
+							fire_source,
+							rl.Rectangle{
+								offset_x+fire_x+jitter_x-width*0.5,
+								offset_y+fire_y+0.35-height,
+								width,
+								height,
+							},
+							rl.Vector2{0, 0},
+							0,
+							rl.Color{255, 255, 255, 235},
+						)
+					}
 				}
 			}
 		}
