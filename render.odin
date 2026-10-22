@@ -110,7 +110,7 @@ WorldCameraUpdate :: proc(w: ^World, camera: ^rl.Camera2D, delta_time: f32) {
 	camera.target.x += pan_x * pan_distance
 	camera.target.y += pan_y * pan_distance
 
-	if rl.IsMouseButtonDown(.RIGHT) {
+	if rl.IsMouseButtonDown(.MIDDLE) {
 		mouse_delta := rl.GetMouseDelta()
 		camera.target.x -= mouse_delta.x / camera.zoom
 		camera.target.y -= mouse_delta.y / camera.zoom

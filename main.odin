@@ -5,7 +5,8 @@ import rl "vendor:raylib"
 main :: proc() {
 	settings := WorldGenerationSettingsDefault()
 	world := new(World)
-	if !WorldInit(world, 1024, 1024, 1, settings) do return
+	// Kingdom 0 is the player; the rest are neighbouring realms.
+	if !WorldInit(world, 1024, 1024, 4, settings) do return
 	defer WorldDeinit(world)
 
 	rl.InitWindow(1280, 800, "Compania Real")
