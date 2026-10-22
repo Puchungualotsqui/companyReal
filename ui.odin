@@ -442,13 +442,12 @@ UIDefendOrderValid :: proc(
 	w: ^World,
 	kingdom, town, target_kingdom, target_town: int,
 ) -> bool {
-	if kingdom != target_kingdom do return false
-	if town == target_town do return false
+	if kingdom == target_kingdom && town == target_town do return false
 	if !WorldTownExists(w, kingdom, town) || !WorldTownExists(w, target_kingdom, target_town) {
 		return false
 	}
 	if KingdomAtWar(w, kingdom, target_kingdom) do return false
-	if w.kingdoms[kingdom].towns[town].defendOrders[target_town] do return false
+	if w.kingdoms[kingdom].towns[town].defendOrders[target_kingdom][target_town] do return false
 	return TownHallSlot(w, target_kingdom, target_town) >= 0
 }
 
@@ -464,10 +463,12 @@ UIAttackTargetExists :: proc(w: ^World, kingdom, town: int) -> bool {
 }
 
 UIDefendTargetExists :: proc(w: ^World, kingdom, town: int) -> bool {
-	if !w.kingdomUsed[kingdom] do return false
-	for target_town in 0..<TOWN_CAPACITY {
-		if !w.kingdoms[kingdom].townUsed[target_town] do continue
-		if UIDefendOrderValid(w, kingdom, town, kingdom, target_town) do return true
+	for target_kingdom in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[target_kingdom] do continue
+		for target_town in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[target_kingdom].townUsed[target_town] do continue
+			if UIDefendOrderValid(w, kingdom, town, target_kingdom, target_town) do return true
+		}
 	}
 	return false
 }
@@ -483,9 +484,13 @@ UITownOrderCount :: proc(w: ^World, kingdom, town: int) -> int {
 			if WorldTownExists(w, target_kingdom, target_town) do count += 1
 		}
 	}
-	for target_town in 0..<TOWN_CAPACITY {
-		if !orders.defendOrders[target_town] do continue
-		if target_town != town && WorldTownExists(w, kingdom, target_town) do count += 1
+	for protected_kingdom in 0..<KINGDOMS_CAPACITY {
+		for protected_town in 0..<TOWN_CAPACITY {
+			if !orders.defendOrders[protected_kingdom][protected_town] do continue
+			if !WorldTownExists(w, protected_kingdom, protected_town) do continue
+			if protected_kingdom == kingdom && protected_town == town do continue
+			count += 1
+		}
 	}
 	return count
 }
@@ -510,11 +515,14 @@ UITownOrderAt :: proc(
 			count += 1
 		}
 	}
-	for other_town in 0..<TOWN_CAPACITY {
-		if !orders.defendOrders[other_town] do continue
-		if other_town == town || !WorldTownExists(w, kingdom, other_town) do continue
-		if count == index do return false, kingdom, other_town, true
-		count += 1
+	for protected_kingdom in 0..<KINGDOMS_CAPACITY {
+		for protected_town in 0..<TOWN_CAPACITY {
+			if !orders.defendOrders[protected_kingdom][protected_town] do continue
+			if !WorldTownExists(w, protected_kingdom, protected_town) do continue
+			if protected_kingdom == kingdom && protected_town == town do continue
+			if count == index do return false, protected_kingdom, protected_town, true
+			count += 1
+		}
 	}
 	return false, -1, -1, false
 }
@@ -786,7 +794,7 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 		if ui.command == .Attack {
 			TownStartAttack(w, kingdom, town, target_kingdom, target_town)
 		} else {
-			TownStartDefending(w, kingdom, town, target_town)
+			TownStartDefending(w, kingdom, town, target_kingdom, target_town)
 		}
 		ui.command = .Inspect
 
@@ -825,7 +833,7 @@ UIOrdersClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Ve
 		if attack {
 			TownStopAttack(w, kingdom, town, target_kingdom, target_town)
 		} else {
-			TownStopDefending(w, kingdom, town, target_town)
+			TownStopDefending(w, kingdom, town, target_kingdom, target_town)
 		}
 		return
 	}
@@ -1555,19 +1563,22 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 			)
 		}
 	}
-	for defender_town in 0..<TOWN_CAPACITY {
-		if !orders.defendedBy[defender_town] do continue
-		if defender_town == town || !WorldTownExists(w, kingdom, defender_town) do continue
-		UIDrawOrderArrow(
-			w,
-			camera,
-			kingdom,
-			defender_town,
-			kingdom,
-			town,
-			UI_COLOR_DEFEND_FAINT,
-			false,
-		)
+	for defender_kingdom in 0..<KINGDOMS_CAPACITY {
+		for defender_town in 0..<TOWN_CAPACITY {
+			if !orders.defendedBy[defender_kingdom][defender_town] do continue
+			if !WorldTownExists(w, defender_kingdom, defender_town) do continue
+			if defender_kingdom == kingdom && defender_town == town do continue
+			UIDrawOrderArrow(
+				w,
+				camera,
+				defender_kingdom,
+				defender_town,
+				kingdom,
+				town,
+				UI_COLOR_DEFEND_FAINT,
+				false,
+			)
+		}
 	}
 
 	for target_kingdom in 0..<KINGDOMS_CAPACITY {
@@ -1577,10 +1588,13 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 			UIDrawOrderArrow(w, camera, kingdom, town, target_kingdom, target_town, UI_COLOR_ATTACK, false)
 		}
 	}
-	for target_town in 0..<TOWN_CAPACITY {
-		if !orders.defendOrders[target_town] do continue
-		if target_town == town || !WorldTownExists(w, kingdom, target_town) do continue
-		UIDrawOrderArrow(w, camera, kingdom, town, kingdom, target_town, UI_COLOR_DEFEND, false)
+	for protected_kingdom in 0..<KINGDOMS_CAPACITY {
+		for protected_town in 0..<TOWN_CAPACITY {
+			if !orders.defendOrders[protected_kingdom][protected_town] do continue
+			if !WorldTownExists(w, protected_kingdom, protected_town) do continue
+			if protected_kingdom == kingdom && protected_town == town do continue
+			UIDrawOrderArrow(w, camera, kingdom, town, protected_kingdom, protected_town, UI_COLOR_DEFEND, false)
+		}
 	}
 }
 
@@ -1652,7 +1666,7 @@ UIDrawCommandHint :: proc(ui: ^UIState) {
 	case .Attack:
 		label = "Click a building of an enemy town  -  Esc to cancel"
 	case .Defend:
-		label = "Click a building of a friendly town  -  Esc to cancel"
+		label = "Click a building of a non-enemy town  -  Esc to cancel"
 	case .Inspect:
 		return
 	}

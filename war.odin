@@ -132,7 +132,7 @@ UnitWarriorAssignOrder :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) 
 		case TownAttackOrder:
 			new_order = WarriorAttack{kingdom = ref.kingdom, town = ref.town}
 		case TownDefendOrder:
-			new_order = WarriorDefend{kingdom = kingdom_slot, town = ref.town}
+			new_order = WarriorDefend{kingdom = ref.kingdom, town = ref.town}
 		}
 	} else {
 		new_order = WarriorIdle{}
