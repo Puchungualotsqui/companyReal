@@ -44,8 +44,9 @@ TownDefendOrder :: struct {
 	kingdom, town: int,
 }
 
-// Each population milestone offers two mutually exclusive paths. The chosen
-// option unlocks buildings; training buildings then unlock their unit kind.
+// Each population milestone offers two mutually exclusive paths. Options can
+// unlock unit kinds directly and buildings, including combat buildings.
+// Training buildings still gate their unit kind until they are raised.
 TownPath :: enum {
 	Rangers,
 	Mystics,
@@ -56,24 +57,50 @@ TownPath :: enum {
 }
 
 MilestoneOption :: struct {
-	path: TownPath,
+	path:    TownPath,
+	units:   bit_set[UnitKind],
 	unlocks: bit_set[BuildingKind],
 }
 
-TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Wall, .Path, .Watchtower}
+TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Wall, .Path}
+TOWN_BASE_UNLOCKED_UNITS :: bit_set[UnitKind]{.Villager, .Builder, .WaterCollector, .Farmer, .Knight}
 
 TOWN_MILESTONE_OPTIONS := [TOWN_MILESTONE_COUNT][2]MilestoneOption{
 	{
-		{path = .Rangers, unlocks = {.ArcheryRange, .Bridge}},
-		{path = .Mystics, unlocks = {.MagicSchool, .Cannon}},
+		{
+			path = .Rangers,
+			units = {.Archer, .CombatBuilder},
+			unlocks = {.ArcheryRange, .Bridge},
+		},
+		{
+			path = .Mystics,
+			units = {.Mage, .CombatBuilder},
+			unlocks = {.MagicSchool, .Cannon},
+		},
 	},
 	{
-		{path = .Beasts, unlocks = {.GiantPen, .Cannon}},
-		{path = .Siege, unlocks = {.SiegeWorkshop, .Bridge}},
+		{
+			path = .Beasts,
+			units = {.Giant},
+			unlocks = {.GiantPen, .Watchtower},
+		},
+		{
+			path = .Siege,
+			units = {.Catapult},
+			unlocks = {.SiegeWorkshop, .Cannon},
+		},
 	},
 	{
-		{path = .Tide, unlocks = {.TurtlePen, .Bridge}},
-		{path = .Shadows, unlocks = {.ThievesGuild, .Cannon}},
+		{
+			path = .Tide,
+			units = {.Turtle},
+			unlocks = {.TurtlePen, .Bridge},
+		},
+		{
+			path = .Shadows,
+			units = {.Rogue},
+			unlocks = {.ThievesGuild, .Watchtower},
+		},
 	},
 }
 
@@ -111,6 +138,7 @@ Town :: struct {
 	foodShortage, waterShortage: f32,
 	areaRadius: int,
 	unlockedBuildings: bit_set[BuildingKind],
+	unlockedUnits: bit_set[UnitKind],
 	buildingCounts: [BuildingKind]int,
 	buildingSlots: [BuildingKind]int,
 	wallCursor: int,
@@ -159,6 +187,7 @@ TownInitialize :: proc(
 		wood = starting_wood,
 		areaRadius = TOWN_START_AREA_RADIUS,
 		unlockedBuildings = TOWN_BASE_UNLOCKED_BUILDINGS,
+		unlockedUnits = TOWN_BASE_UNLOCKED_UNITS,
 	}
 	for &slot in town.buildingSlots do slot = -1
 	town.buildingSlots[.TownHall] = hall_slot
@@ -367,8 +396,13 @@ TownFindBuilding :: proc(w: ^World, kingdom_slot, town_slot: int, kind: Building
 }
 
 TownUnitAvailable :: proc(w: ^World, kingdom_slot, town_slot: int, kind: UnitKind) -> bool {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
+	if !TownUnitUnlocked(w, kingdom_slot, town_slot, kind) do return false
 	return TownFindBuilding(w, kingdom_slot, town_slot, UnitTrainingBuildingKind(kind)) >= 0
+}
+
+TownUnitUnlocked :: proc(w: ^World, kingdom_slot, town_slot: int, kind: UnitKind) -> bool {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
+	return kind in w.kingdoms[kingdom_slot].towns[town_slot].unlockedUnits
 }
 
 TownUnitCount :: proc(w: ^World, kingdom_slot, town_slot: int, kind: UnitKind) -> int {
@@ -446,6 +480,7 @@ TownChooseMilestone :: proc(w: ^World, kingdom_slot, town_slot, option: int) -> 
 
 	choice := TOWN_MILESTONE_OPTIONS[town.milestonesReached][option]
 	town.unlockedBuildings |= choice.unlocks
+	town.unlockedUnits |= choice.units
 	town.areaRadius += TOWN_AREA_EXPANSION
 	town.milestonesReached += 1
 	town.milestonePending = false

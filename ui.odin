@@ -566,7 +566,7 @@ UIMilestoneTown :: proc(w: ^World) -> (kingdom, town: int, pending: bool) {
 
 UIMilestoneRect :: proc() -> rl.Rectangle {
 	width: f32 = 620
-	height: f32 = 250
+	height: f32 = 340
 	screen_width := f32(rl.GetScreenWidth())
 	screen_height := f32(rl.GetScreenHeight())
 	return rl.Rectangle{(screen_width-width)*0.5, (screen_height-height)*0.5, width, height}
@@ -739,6 +739,22 @@ UIHasCombatBuildKind :: proc(w: ^World, kingdom, town: int) -> bool {
 	return false
 }
 
+UIBuildButtonVisible :: proc(w: ^World, ui: ^UIState) -> bool {
+	if ui.command == .Build || ui.command == .Place {
+		return WorldTownExists(w, ui.buildKingdom, ui.buildTown)
+	}
+	kingdom, town, found := UIPlayerBuildTown(w, ui)
+	return found && TownUnitUnlocked(w, kingdom, town, .CombatBuilder)
+}
+
+UIBuildButtonEnabled :: proc(w: ^World, ui: ^UIState) -> bool {
+	if ui.command == .Build || ui.command == .Place {
+		return WorldTownExists(w, ui.buildKingdom, ui.buildTown)
+	}
+	kingdom, town, found := UIPlayerBuildTown(w, ui)
+	return found && UIHasCombatBuildKind(w, kingdom, town)
+}
+
 UIBuildPaletteRects :: proc(
 	w: ^World,
 	kingdom, town: int,
@@ -775,7 +791,8 @@ UIBuildButtonPress :: proc(w: ^World, ui: ^UIState) {
 		return
 	}
 	kingdom, town, found := UIPlayerBuildTown(w, ui)
-	if !found || !UIHasCombatBuildKind(w, kingdom, town) do return
+	if !found || !TownUnitUnlocked(w, kingdom, town, .CombatBuilder) do return
+	if !UIHasCombatBuildKind(w, kingdom, town) do return
 	ui.buildKingdom = kingdom
 	ui.buildTown = town
 	ui.command = .Build
@@ -855,13 +872,9 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 
 	over_ui := false
 
-	build_kingdom, build_town, build_found := UIPlayerBuildTown(w, ui)
 	build_rect := UIBuildButtonRect()
-	build_enabled := build_found && UIHasCombatBuildKind(w, build_kingdom, build_town)
-	if ui.command == .Build || ui.command == .Place {
-		build_enabled = WorldTownExists(w, ui.buildKingdom, ui.buildTown)
-	}
-	if build_enabled && rl.CheckCollisionPointRec(mouse, build_rect) {
+	build_visible := UIBuildButtonVisible(w, ui)
+	if build_visible && rl.CheckCollisionPointRec(mouse, build_rect) {
 		over_ui = true
 		ui.hover = {}
 		if rl.IsMouseButtonPressed(.LEFT) {
@@ -1975,10 +1988,10 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState) {
 	build_rect := UIBuildButtonRect()
 	if rl.CheckCollisionPointRec(mouse, attack_rect) ||
 		rl.CheckCollisionPointRec(mouse, defend_rect) ||
-		rl.CheckCollisionPointRec(mouse, found_rect) ||
-		rl.CheckCollisionPointRec(mouse, build_rect) {
+		rl.CheckCollisionPointRec(mouse, found_rect) {
 		return
 	}
+	if UIBuildButtonVisible(w, ui) && rl.CheckCollisionPointRec(mouse, build_rect) do return
 	if ui.command == .Build {
 		palette, _, count := UIBuildPaletteRects(w, ui.buildKingdom, ui.buildTown)
 		for index in 0..<count {
@@ -2020,11 +2033,9 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState) {
 
 UIDrawBuildButton :: proc(w: ^World, ui: ^UIState) {
 	if !w.kingdomUsed[PLAYER_KINGDOM] do return
-	kingdom, town, found := UIPlayerBuildTown(w, ui)
-	enabled := found && UIHasCombatBuildKind(w, kingdom, town)
+	if !UIBuildButtonVisible(w, ui) do return
 	active := ui.command == .Build || ui.command == .Place
-	if active do enabled = WorldTownExists(w, ui.buildKingdom, ui.buildTown)
-	UIDrawCommandIcon(UIBuildButtonRect(), .Build, enabled, active)
+	UIDrawCommandIcon(UIBuildButtonRect(), .Build, UIBuildButtonEnabled(w, ui), active)
 }
 
 UIDrawBuildPalette :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
@@ -2162,6 +2173,18 @@ UIDrawMilestone :: proc(w: ^World, renderer: ^WorldRenderer, kingdom, town: int)
 
 		ui_title(UITownPathName(option.path), card.x+UI_PAD, card.y+8, UI_COLOR_GOLD)
 		row := 0
+		for kind in UnitKind {
+			if !(kind in option.units) do continue
+			row_y := card.y+42+f32(row)*28
+			texture := renderer.sprites.unit[FactionSpriteIndex(kingdom)][kind]
+			if texture.id != 0 {
+				icon := rl.Rectangle{card.x+UI_PAD, row_y+2, 24, 24}
+				source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+				rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
+			}
+			ui_text(UIUnitName(kind), card.x+UI_PAD+32, row_y+2, UI_COLOR_TEXT)
+			row += 1
+		}
 		for kind in BuildingKind {
 			if !(kind in option.unlocks) do continue
 			row_y := card.y+42+f32(row)*28
