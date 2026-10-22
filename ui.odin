@@ -72,13 +72,13 @@ UI_HEADER_H : f32 : 92
 UI_DESC_Y : f32 : 102
 UI_STAT_Y : f32 : 136
 UI_STAT_H : f32 : 24
-UI_GROWTH_Y : f32 : 240
+UI_GROWTH_Y : f32 : 264
 UI_GROWTH_H : f32 : 20
-UI_TOWN_DIVIDER : f32 : 266
-UI_TABS_Y : f32 : 274
+UI_TOWN_DIVIDER : f32 : 290
+UI_TABS_Y : f32 : 298
 UI_TABS_H : f32 : 24
 UI_SECTION_HEADER : f32 : 26
-UI_ROWS_TOP : f32 : 306
+UI_ROWS_TOP : f32 : 330
 UI_ROW_HEIGHT : f32 : 36
 UI_BUTTON : f32 : 20
 UI_TEXT_BUTTON_H : f32 : 26
@@ -648,7 +648,7 @@ UIStatCount :: proc(w: ^World, selection: Selection) -> int {
 	case .Unit:
 		return 2
 	case .Building:
-		if UISelectionTownHall(w, selection) do return 4
+		if UISelectionTownHall(w, selection) do return 7
 		kind := BuildingKindOf(w.buildings[selection.slot].type)
 		if BuildingIsTraining(kind) do return 2
 		return 1
@@ -1002,7 +1002,7 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 		}
 		tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse)
 		if !ok do return
-		if !TownCombatConstructionValid(w, ui.buildKingdom, ui.buildTown, ui.buildKind, tile_x, tile_y) {
+		if TownCombatConstructionFailure(w, ui.buildKingdom, ui.buildTown, ui.buildKind, tile_x, tile_y) != .None {
 			return
 		}
 		if !rl.IsMouseButtonPressed(.LEFT) do return
@@ -1019,7 +1019,7 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 		}
 		tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse)
 		if !ok do return
-		if !TownFoundingValid(w, kingdom, town, tile_x, tile_y) do return
+		if TownFoundingFailure(w, kingdom, town, tile_x, tile_y) != .None do return
 		if !rl.IsMouseButtonPressed(.LEFT) do return
 		if TownStartFounding(w, kingdom, town, tile_x, tile_y) do ui.command = .Inspect
 		return
@@ -1270,7 +1270,7 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 	}
 	UIDrawBuildPreview(w, renderer, camera, ui)
 	UIDrawFoundPreview(w, renderer, camera, ui)
-	UIDrawCommandHint(w, ui)
+	UIDrawCommandHint(w, ui, camera)
 	if !milestone_pending {
 		UIDrawHud(w, ui)
 		UIDrawSidePanel(w, ui)
@@ -1443,12 +1443,32 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 	case .None:
 	}
 
-	stats: [5]UIStat
+	stats: [8]UIStat
 	stat_count := UIFillStats(w, ui, &stats)
-	for i in 0..<stat_count {
-		y := panel.y+UI_STAT_Y+f32(i)*UI_STAT_H
-		ui_text(stats[i].label, panel.x+UI_PAD, y, UI_COLOR_DIM)
-		ui_text(stats[i].value, panel.x+UI_PAD+104, y, UI_COLOR_TEXT)
+	if UISelectionTownHall(w, ui.selection) {
+		left_label_x := panel.x+UI_PAD
+		left_value_x := panel.x+UI_PAD+170
+		right_label_x := panel.x+UI_PAD+186
+		right_value_x := panel.x+panel.width-UI_PAD
+		for i in 0..<stat_count {
+			column := i/4
+			row := i%4
+			y := panel.y+UI_STAT_Y+f32(row)*UI_STAT_H
+			if column == 0 {
+				ui_text(stats[i].label, left_label_x, y, UI_COLOR_DIM)
+				ui_text_right(stats[i].value, left_value_x, y, UI_COLOR_TEXT)
+			} else {
+				ui_text(stats[i].label, right_label_x, y, UI_COLOR_DIM)
+				ui_text_right(stats[i].value, right_value_x, y, UI_COLOR_TEXT)
+			}
+		}
+		UIDrawConstructionStatus(w, panel, kingdom, town)
+	} else {
+		for i in 0..<stat_count {
+			y := panel.y+UI_STAT_Y+f32(i)*UI_STAT_H
+			ui_text(stats[i].label, panel.x+UI_PAD, y, UI_COLOR_DIM)
+			ui_text(stats[i].value, panel.x+UI_PAD+104, y, UI_COLOR_TEXT)
+		}
 	}
 
 	if UISelectionTownHall(w, ui.selection) {
@@ -1525,7 +1545,12 @@ UIDrawPortrait :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, box: r
 	rl.DrawTexturePro(texture, source, dest, rl.Vector2{0, 0}, 0, rl.WHITE)
 }
 
-UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[5]UIStat) -> int {
+UIResourceStatus :: proc(potential, shortage: f32) -> cstring {
+	if shortage > 0.01 do return fmt.ctprintf("%d  -%d%%", int(potential), int(shortage*100+0.5))
+	return fmt.ctprintf("%d  ok", int(potential))
+}
+
+UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[8]UIStat) -> int {
 	switch ui.selection.kind {
 	case .Unit:
 		unit := w.units[ui.selection.slot]
@@ -1549,7 +1574,11 @@ UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[5]UIStat) -> int {
 			} else {
 				stats[3] = {"Milestone", "Complete"}
 			}
-			return 4
+			stats[4] = {"Food", UIResourceStatus(t.foodPotential, t.foodShortage)}
+			stats[5] = {"Water", UIResourceStatus(t.waterPotential, t.waterShortage)}
+			free_homes := max(t.homes-t.citizens, 0)
+			stats[6] = {"Housing", fmt.ctprintf("%d free", free_homes)}
+			return 7
 		}
 		if BuildingIsTraining(kind) {
 			stats[1] = {"Trains", UIUnitName(UIUnitFromTraining(kind))}
@@ -1587,12 +1616,58 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	rl.DrawRectangleLinesEx(bar, 1, UI_COLOR_BORDER_INNER)
 }
 
+UIDrawConstructionStatus :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
+	if !WorldTownExists(w, kingdom, town) do return
+	t := &w.kingdoms[kingdom].towns[town]
+	y := panel.y+UI_STAT_Y+4*UI_STAT_H
+	ui_text("Construction", panel.x+UI_PAD, y, UI_COLOR_DIM)
+
+	value: cstring = "None"
+	if t.constructionActive {
+		site := t.construction
+		if ConstructionPendingDecoration(w, site) >= 0 {
+			value = fmt.ctprintf("%s  clearing", UIBuildingName(site.kind))
+		} else {
+			seconds := BuildingBuildSeconds(site.kind)
+			progress: f32 = 0
+			if seconds > 0 do progress = clamp(site.buildWork/seconds, 0, 1)
+			value = fmt.ctprintf("%s  %d%%", UIBuildingName(site.kind), int(progress*100))
+		}
+	}
+	ui_text(value, panel.x+UI_PAD+150, y, UI_COLOR_TEXT)
+}
+
 UIDrawConversions :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle, kingdom, town: int) {
 	kinds: [len(UnitKind)]UnitKind
 	count := UIConversionRows(w, ui.selection, &kinds)
 	for i in 0..<count {
 		UIDrawConversionRow(w, renderer, ui, panel, i, kinds[i], kingdom, town)
 	}
+}
+
+UIConversionProgress :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> (assigned, remaining, training: int, progress: f32, has_job: bool) {
+	if !WorldTownExists(w, kingdom, town) do return
+	t := &w.kingdoms[kingdom].towns[town]
+	for job_index in 0..<t.conversionCount {
+		job := t.conversions[job_index]
+		if job.to != kind do continue
+		has_job = true
+		assigned += job.assigned
+		remaining += job.remaining
+	}
+	if !has_job do return
+
+	for unit_slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unit_slot] do continue
+		if w.units[unit_slot].kingdome != kingdom || w.units[unit_slot].town != town do continue
+		state, converting := w.units[unit_slot].state.(StateConverting)
+		if !converting || state.to != kind || !state.inside do continue
+		training += 1
+		seconds := UnitDefaultTrainingTime(kind)
+		if seconds > 0 do progress += 1-clamp(state.timer/seconds, 0, 1)
+	}
+	if training > 0 do progress /= f32(training)
+	return
 }
 
 UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle, index: int, kind: UnitKind, kingdom, town: int) {
@@ -1609,6 +1684,25 @@ UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, p
 	ui_text(UIUnitName(kind), panel.x+UI_PAD+38, row_y+8, UI_COLOR_TEXT)
 
 	minus, plus := UIButtonRects(panel, index)
+	_, remaining, training, progress, has_job := UIConversionProgress(w, kingdom, town, kind)
+	if has_job && remaining > 0 {
+		ui_text(fmt.ctprintf("%d/%d", training, remaining), minus.x-112, row_y+8, UI_COLOR_DIM)
+
+		bar := rl.Rectangle{
+			panel.x+UI_PAD+38,
+			row_y+31,
+			max(minus.x-130-(panel.x+UI_PAD+38), 20),
+			3,
+		}
+		rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
+		if progress > 0 {
+			rl.DrawRectangleRec(
+				rl.Rectangle{bar.x, bar.y, bar.width*progress, bar.height},
+				UI_COLOR_GOLD,
+			)
+		}
+	}
+
 	pending := UIConversionPending(w, kingdom, town, kind)
 	if pending != 0 {
 		ui_text(fmt.ctprintf("%+d", pending), minus.x-56, row_y+8, UI_COLOR_GOLD)
@@ -1646,7 +1740,7 @@ UIDrawOrdersTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle
 			rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
 		}
 
-		label := attack ? fmt.ctprintf("Attack  K%d T%d", target_kingdom+1, target_town+1) : fmt.ctprintf("Defend  K%d T%d", target_kingdom+1, target_town+1)
+		label := attack ? fmt.ctprintf("Attack  %s", NameTownCString(w, target_kingdom, target_town)) : fmt.ctprintf("Defend  %s", NameTownCString(w, target_kingdom, target_town))
 		label_color := attack ? UI_COLOR_ATTACK : UI_COLOR_DEFEND
 		ui_text(label, panel.x+UI_PAD+38, row_y+8, label_color)
 		UIButton(UIOrderCancelRect(panel, index), "Cancel", true)
@@ -1993,7 +2087,33 @@ UIDrawOrderArrow :: proc(w: ^World, camera: rl.Camera2D, from_kingdom, from_town
 	rl.DrawTriangle(end, left, right, line_color)
 }
 
-UIDrawCommandHint :: proc(w: ^World, ui: ^UIState) {
+UIPlacementFailureText :: proc(failure: PlacementFailure) -> cstring {
+	switch failure {
+	case .None:
+		return ""
+	case .NoTown:
+		return "Town no longer exists"
+	case .AlreadyFounding:
+		return "A town hall is already under construction"
+	case .Unexplored:
+		return "Area not explored"
+	case .InvalidTerrain:
+		return "Invalid or blocked terrain"
+	case .CombatSiteOverlap:
+		return "Overlaps a combat construction site"
+	case .ConstructionOverlap:
+		return "Overlaps another construction site"
+	case .TooClose:
+		return "Too close to another town"
+	case .NotCombat:
+		return "Not a combat building"
+	case .NotUnlocked:
+		return "Not unlocked"
+	}
+	return ""
+}
+
+UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 	if ui.command == .Inspect do return
 
 	mouse := rl.GetMousePosition()
@@ -2023,10 +2143,26 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState) {
 			"Click land to found a town  -  %d wood  -  Esc to cancel",
 			TOWN_FOUNDING_WOOD,
 		)
+		kingdom, town := UISelectionTown(w, ui.selection)
+		if tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse); ok {
+			failure := TownFoundingFailure(w, kingdom, town, tile_x, tile_y)
+			if failure != .None do label = UIPlacementFailureText(failure)
+		}
 	case .Build:
 		label = "Choose a combat building  -  Esc to cancel"
 	case .Place:
 		label = fmt.ctprintf("Place %s  -  right click to stop", UIBuildingName(ui.buildKind))
+		if tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse); ok {
+			failure := TownCombatConstructionFailure(
+				w,
+				ui.buildKingdom,
+				ui.buildTown,
+				ui.buildKind,
+				tile_x,
+				tile_y,
+			)
+			if failure != .None do label = UIPlacementFailureText(failure)
+		}
 	case .Inspect:
 		return
 	}
@@ -2072,7 +2208,16 @@ UIDrawBuildPalette :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			rl.DrawTexturePro(texture, source, rl.Rectangle{rect.x+8, rect.y+12, 30, 30}, rl.Vector2{0, 0}, 0, rl.WHITE)
 		}
 		ui_text(UIBuildingName(kind), rect.x+44, rect.y+8, UI_COLOR_TEXT)
-		ui_text("No wood", rect.x+44, rect.y+30, UI_COLOR_DIM)
+		cost := BuildingWoodCost(kind)
+		cost_label: cstring = "Free"
+		cost_color := UI_COLOR_DIM
+		if cost > 0 {
+			cost_label = fmt.ctprintf("%d wood", int(cost))
+			town := &w.kingdoms[ui.buildKingdom].towns[ui.buildTown]
+			if town.wood >= cost do cost_color = UI_COLOR_TEXT
+			if town.wood < cost do cost_color = UI_COLOR_ATTACK
+		}
+		ui_text(cost_label, rect.x+44, rect.y+30, cost_color)
 	}
 }
 
@@ -2085,7 +2230,7 @@ UIDrawBuildPreview :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 	town := ui.buildTown
 
 	width, height := BuildingTileSize(BuildingTypeFromKind(ui.buildKind))
-	valid := TownCombatConstructionValid(w, kingdom, town, ui.buildKind, tile_x, tile_y)
+	valid := TownCombatConstructionFailure(w, kingdom, town, ui.buildKind, tile_x, tile_y) == .None
 	color := rl.Color{110, 218, 128, 220}
 	if !valid do color = rl.Color{228, 92, 82, 220}
 
@@ -2111,7 +2256,7 @@ UIDrawFoundPreview :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 	tile_x, tile_y, ok := UITileAtMouse(w, camera, rl.GetMousePosition())
 	if !ok do return
 	width, height := BuildingTileSize(TownHall{})
-	valid := TownFoundingValid(w, kingdom, town, tile_x, tile_y)
+	valid := TownFoundingFailure(w, kingdom, town, tile_x, tile_y) == .None
 	color := rl.Color{110, 218, 128, 220}
 	if !valid do color = rl.Color{228, 92, 82, 220}
 

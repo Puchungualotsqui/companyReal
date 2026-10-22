@@ -229,20 +229,36 @@ TownFound :: proc(w: ^World, kingdom_slot, x, y: int) -> bool {
 	return true
 }
 
+PlacementFailure :: enum {
+	None,
+	NoTown,
+	AlreadyFounding,
+	Unexplored,
+	InvalidTerrain,
+	CombatSiteOverlap,
+	ConstructionOverlap,
+	TooClose,
+	NotCombat,
+	NotUnlocked,
+}
+
 // Cheap checks for the placement preview. Reachability is validated once when
 // the order is actually placed.
-TownFoundingValid :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
+TownFoundingFailure :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> PlacementFailure {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return .NoTown
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	if town.constructionActive && town.construction.kind == .TownHall do return false
+	if town.constructionActive && town.construction.kind == .TownHall do return .AlreadyFounding
 	if kingdom_slot == PLAYER_KINGDOM {
 		width, height := BuildingTileSize(TownHall{})
-		if !FogRectExplored(w, x, y, width, height) do return false
+		if !FogRectExplored(w, x, y, width, height) do return .Unexplored
 	}
-	if !WorldBuildingValid(w, x, y, TownHall{}) do return false
-	if CombatSiteOverlaps(w, x, y, .TownHall) do return false
-	if TownFoundingOverlapsOtherConstruction(w, kingdom_slot, town_slot, x, y) do return false
-	return !TownFoundingTooClose(w, x, y)
+	if !WorldBuildingValid(w, x, y, TownHall{}) do return .InvalidTerrain
+	if CombatSiteOverlaps(w, x, y, .TownHall) do return .CombatSiteOverlap
+	if TownFoundingOverlapsOtherConstruction(w, kingdom_slot, town_slot, x, y) {
+		return .ConstructionOverlap
+	}
+	if TownFoundingTooClose(w, x, y) do return .TooClose
+	return .None
 }
 
 TownFoundingOverlapsOtherConstruction :: proc(w: ^World, source_kingdom, source_town, x, y: int) -> bool {
@@ -332,7 +348,7 @@ TownFoundingReachable :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> 
 // builders receive a town-hall construction site. An automatic construction is
 // refunded and replaced, because a player order takes priority.
 TownStartFounding :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
-	if !TownFoundingValid(w, kingdom_slot, town_slot, x, y) do return false
+	if TownFoundingFailure(w, kingdom_slot, town_slot, x, y) != .None do return false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if town.wood < TOWN_FOUNDING_WOOD do return false
 	if town.citizens < TOWN_FOUNDING_MIN_CITIZENS do return false

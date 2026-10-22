@@ -37,7 +37,7 @@ CombatBuildingSeconds :: proc(kind: BuildingKind) -> f32 {
 // Player order: place a combat building anywhere in the world. No wood is
 // paid and no town area is required.
 TownStartCombatConstruction :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind, x, y: int) -> bool {
-	if !TownCombatConstructionValid(w, kingdom_slot, town_slot, kind, x, y) do return false
+	if TownCombatConstructionFailure(w, kingdom_slot, town_slot, kind, x, y) != .None do return false
 
 	slot := -1
 	for index in 0..<COMBAT_SITE_CAPACITY {
@@ -55,18 +55,19 @@ TownStartCombatConstruction :: proc(w: ^World, kingdom_slot, town_slot: int, kin
 	return true
 }
 
-TownCombatConstructionValid :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind, x, y: int) -> bool {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
-	if !BuildingIsCombat(kind) do return false
+TownCombatConstructionFailure :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind, x, y: int) -> PlacementFailure {
+	if !WorldTownExists(w, kingdom_slot, town_slot) do return .NoTown
+	if !BuildingIsCombat(kind) do return .NotCombat
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	if !(kind in town.unlockedBuildings) do return false
+	if !(kind in town.unlockedBuildings) do return .NotUnlocked
 	if kingdom_slot == PLAYER_KINGDOM {
 		width, height := BuildingTileSize(BuildingTypeFromKind(kind))
-		if !FogRectExplored(w, x, y, width, height) do return false
+		if !FogRectExplored(w, x, y, width, height) do return .Unexplored
 	}
-	if !WorldBuildingValid(w, x, y, BuildingTypeFromKind(kind)) do return false
-	if CombatSiteOverlaps(w, x, y, kind) do return false
-	return !TownConstructionSiteOverlaps(w, x, y, kind)
+	if !WorldBuildingValid(w, x, y, BuildingTypeFromKind(kind)) do return .InvalidTerrain
+	if CombatSiteOverlaps(w, x, y, kind) do return .CombatSiteOverlap
+	if TownConstructionSiteOverlaps(w, x, y, kind) do return .ConstructionOverlap
+	return .None
 }
 
 CombatSiteOverlaps :: proc(w: ^World, x, y: int, kind: BuildingKind) -> bool {
