@@ -194,7 +194,7 @@ BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
 	case .Farmland:
 		return 8
 	case .Wall:
-		return 4
+		return 0
 	case .Bridge, .Cannon, .Watchtower:
 		return 0
 	case .ArcheryRange:
@@ -258,9 +258,9 @@ BuildingWalkable :: proc(type: BuildingType) -> bool {
 // combat builders without wood. Everything else is built by the town itself.
 BuildingIsCombat :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .Bridge, .Cannon, .Watchtower:
+	case .Wall, .Bridge, .Cannon, .Watchtower:
 		return true
-	case .TownHall, .Home, .Farmland, .Wall, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path:
+	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path:
 		return false
 	}
 	unreachable()
@@ -295,6 +295,7 @@ Unit :: struct {
 	pathRevision: u64,
 	pathIndex: int,
 	pathReady, pathFound: bool,
+	jumpStarted: f32,
 }
 
 UnitEffects :: enum {
@@ -786,6 +787,7 @@ UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
 	}
 	unit.pathReady = false
 	unit.pathFound = false
+	unit.jumpStarted = -WALL_JUMP_SECONDS
 }
 
 UnitSetType :: proc(w: ^World, unit_slot: int, kind: UnitKind) {
@@ -812,7 +814,7 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 	if needs_path {
 		start_x := WorldWrapCoordinate(int(unit_x), world_width)
 		start_y := WorldWrapCoordinate(int(unit_y), world_height)
-		unit.pathFound = AStar(w, unit.type, start_x, start_y, target_x, target_y, &unit.path)
+		unit.pathFound = AStar(w, unit.type, unit.kingdome, start_x, start_y, target_x, target_y, &unit.path)
 		unit.pathTargetX = target_x
 		unit.pathTargetY = target_y
 		unit.pathRevision = w.navigationRevision
@@ -868,6 +870,9 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 			}
 		}
 
+		if WorldTileFriendlyWall(w, int(unit_x), int(unit_y), unit.kingdome) {
+			unit.jumpStarted = w.simulationTime
+		}
 		if !reached_waypoint do break
 		unit.pathIndex += 1
 	}

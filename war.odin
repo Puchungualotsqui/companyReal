@@ -11,6 +11,7 @@ WARRIOR_DEFEND_PATROL_RADIUS :: 12
 WARRIOR_ESCORT_CHANCE :: 0.35
 WARRIOR_GARRISON_ESCORT_RATIO :: 0.15
 WARRIOR_ESCORT_RADIUS :: 30
+WARRIOR_BREACH_RADIUS :: 40
 
 StateWarriorInit :: proc(unit_slot, kingdom_slot, town_slot: int) -> StateWarrior {
 	return StateWarrior{
@@ -95,9 +96,20 @@ UnitUpdateWarrior :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 		}
 	case WarriorAttack:
 		state.activity = .Moving
-		if UnitWarriorTravel(w, unit_slot, order.kingdom, order.town, delta_time) == .Arrived {
+		result := UnitWarriorTravel(w, unit_slot, order.kingdom, order.town, delta_time)
+		if result == .Arrived {
 			if hall := TownHallSlot(w, order.kingdom, order.town); hall >= 0 {
 				state.target = TargetBuilding{slot = hall}
+				state.activity = .Attacking
+			}
+		} else if result == .Unreachable {
+			// The town is enclosed. Break the ring: prefer its walls, then any
+			// nearby building of that town. If nothing is close enough yet, walk
+			// toward the hall until the wall is in breach range.
+			breach := WarriorFindBreachBuilding(w, unit_slot, order.kingdom, order.town)
+			if breach < 0 do breach = TownHallSlot(w, order.kingdom, order.town)
+			if breach >= 0 {
+				state.target = TargetBuilding{slot = breach}
 				state.activity = .Attacking
 			}
 		}
@@ -302,6 +314,65 @@ WarriorBuildingNearestPoint :: proc(w: ^World, x, y: f32, building_slot: int) ->
 	return
 }
 
+// When a town is fully enclosed, the flow field cannot reach it. This finds the
+// nearest piece of the ring to break: first a wall, then any other building of
+// the target town, and only last the hall itself.
+WarriorFindBreachBuilding :: proc(w: ^World, unit_slot, target_kingdom, target_town: int) -> int {
+	unit := &w.units[unit_slot]
+	chunk_size := w.spatial.chunkSize
+	if chunk_size <= 0 do return -1
+	if !KingdomAtWar(w, unit.kingdome, target_kingdom) do return -1
+
+	center_chunk_x := int(unit.x)/chunk_size
+	center_chunk_y := int(unit.y)/chunk_size
+	chunk_radius := int(WARRIOR_BREACH_RADIUS)/chunk_size+1
+	best_wall := -1
+	best_wall_distance: f32 = WARRIOR_BREACH_RADIUS
+	best_building := -1
+	best_building_distance: f32 = WARRIOR_BREACH_RADIUS
+	best_hall := -1
+	best_hall_distance: f32 = WARRIOR_BREACH_RADIUS
+
+	for offset_x in -chunk_radius..=chunk_radius {
+		chunk_x := WorldWrapCoordinate(center_chunk_x+offset_x, w.spatial.chunksX)
+		for offset_y in -chunk_radius..=chunk_radius {
+			chunk_y := WorldWrapCoordinate(center_chunk_y+offset_y, w.spatial.chunksY)
+			chunk := chunk_x*w.spatial.chunksY+chunk_y
+			for building_slot := w.spatial.buildingHead[chunk]; building_slot >= 0;
+				building_slot = w.spatial.buildingNext[building_slot] {
+				if !w.buildingUsed[building_slot] do continue
+				if w.buildings.kingdom[building_slot] != target_kingdom do continue
+				same_town := w.buildings.town[building_slot] == target_town
+
+				distance, _, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, building_slot)
+				if distance > WARRIOR_BREACH_RADIUS do continue
+				kind := BuildingKindOf(w.buildings[building_slot].type)
+				switch kind {
+				case .Wall:
+					if distance < best_wall_distance {
+						best_wall_distance = distance
+						best_wall = building_slot
+					}
+				case .TownHall:
+					if same_town && distance < best_hall_distance {
+						best_hall_distance = distance
+						best_hall = building_slot
+					}
+				case .Home, .Farmland, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path:
+					if same_town && distance < best_building_distance {
+						best_building_distance = distance
+						best_building = building_slot
+					}
+				}
+			}
+		}
+	}
+
+	if best_wall >= 0 do return best_wall
+	if best_building >= 0 do return best_building
+	return best_hall
+}
+
 UnitWarriorEngage :: proc(w: ^World, unit_slot: int, state: ^StateWarrior, delta_time: f32) -> bool {
 	unit := &w.units[unit_slot]
 	target_x, target_y: f32
@@ -416,7 +487,13 @@ WarriorAreaUnitDamage :: proc(w: ^World, attacker_slot: int, x, y, radius, damag
 }
 
 UnitWarriorTravel :: proc(w: ^World, unit_slot, kingdom_slot, town_slot: int, delta_time: f32) -> FlowFollowResult {
-	field, ok := FlowFieldGet(w, kingdom_slot, town_slot, w.units[unit_slot].type)
+	field, ok := FlowFieldGet(
+		w,
+		kingdom_slot,
+		town_slot,
+		w.units[unit_slot].type,
+		w.units[unit_slot].kingdome,
+	)
 	if !ok do return .Unreachable
 	return UnitFollowFlowField(w, unit_slot, field, delta_time)
 }

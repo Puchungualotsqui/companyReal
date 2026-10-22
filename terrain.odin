@@ -82,11 +82,7 @@ TerrainChunksClear :: proc(renderer: ^TerrainRenderer) {
 	renderer.clock = 0
 }
 
-TerrainRenderLow :: proc(
-	renderer: ^TerrainRenderer,
-	world_width, world_height: f32,
-	first_copy_x, last_copy_x, first_copy_y, last_copy_y: int,
-) {
+TerrainRenderLow :: proc(renderer: ^TerrainRenderer, world_width, world_height: f32, first_copy_x, last_copy_x, first_copy_y, last_copy_y: int) {
 	source := rl.Rectangle{0, 0, world_width, world_height}
 	for copy_x in first_copy_x ..< last_copy_x+1 {
 		for copy_y in first_copy_y ..< last_copy_y+1 {
@@ -101,12 +97,7 @@ TerrainRenderLow :: proc(
 	}
 }
 
-TerrainRenderChunks :: proc(
-	w: ^World,
-	renderer: ^TerrainRenderer,
-	camera: rl.Camera2D,
-	first_copy_x, last_copy_x, first_copy_y, last_copy_y: int,
-) {
+TerrainRenderChunks :: proc(w: ^World, renderer: ^TerrainRenderer, camera: rl.Camera2D, first_copy_x, last_copy_x, first_copy_y, last_copy_y: int) {
 	world_width := f32(w.maxX)
 	world_height := f32(w.maxY)
 	chunk_count_x := (int(w.maxX)+TERRAIN_CHUNK_TILES-1)/TERRAIN_CHUNK_TILES
@@ -162,11 +153,7 @@ TerrainRenderChunks :: proc(
 	}
 }
 
-TerrainEnsureChunk :: proc(
-	w: ^World,
-	renderer: ^TerrainRenderer,
-	chunk_x, chunk_y: int,
-) -> (rl.Texture2D, bool) {
+TerrainEnsureChunk :: proc(w: ^World, renderer: ^TerrainRenderer, chunk_x, chunk_y: int) -> (rl.Texture2D, bool) {
 	renderer.clock += 1
 	for &chunk in renderer.chunks {
 		if chunk.chunk_x == chunk_x && chunk.chunk_y == chunk_y {
@@ -202,11 +189,7 @@ TerrainEnsureChunk :: proc(
 	return texture, true
 }
 
-TerrainCreateChunkTexture :: proc(
-	w: ^World,
-	renderer: ^TerrainRenderer,
-	chunk_x, chunk_y: int,
-) -> rl.Texture2D {
+TerrainCreateChunkTexture :: proc(w: ^World, renderer: ^TerrainRenderer, chunk_x, chunk_y: int) -> rl.Texture2D {
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
 	image := rl.GenImageColor(TERRAIN_CHUNK_PIXELS, TERRAIN_CHUNK_PIXELS, rl.BLACK)
@@ -241,11 +224,7 @@ TerrainCreateChunkTexture :: proc(
 // Softens the hard tile boundary by speckling the neighbour's ground colour into
 // this tile, so grass/sand/water transitions read organically instead of as a
 // 16-pixel staircase.
-TerrainDitherTileEdges :: proc(
-	dst: [^]u8,
-	w: ^World,
-	world_x, world_y, pixel_x, pixel_y: int,
-) {
+TerrainDitherTileEdges :: proc(dst: [^]u8, w: ^World, world_x, world_y, pixel_x, pixel_y: int) {
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
 	kind := w.ground[world_x][world_y].type

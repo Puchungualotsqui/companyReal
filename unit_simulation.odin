@@ -44,6 +44,7 @@ UnitTryExtinguish :: proc(w: ^World, unit_slot: int, delta_time: f32) -> bool {
 		int(w.fires.x[fire_slot]),
 		int(w.fires.y[fire_slot]),
 		unit.type,
+		unit.kingdome,
 	)
 	if !found do return false
 	if !unit.pathReady || unit.pathTargetX != target_x || unit.pathTargetY != target_y {
@@ -564,7 +565,7 @@ UnitFindResourceTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int
 					source_x := int(w.decorations.x[slot])
 					source_y := int(w.decorations.y[slot])
 					if WorldTileOccupied(w, source_x, source_y) do continue
-					if !WorldTileWalkable(w, source_x, source_y, w.units[unit_slot].type) do continue
+					if !WorldTileWalkable(w, source_x, source_y, w.units[unit_slot].type, w.units[unit_slot].kingdome) do continue
 
 					delta_x := WorldShortestWrappedDelta(f32(source_x)-f32(unit_x), f32(world_width))
 					delta_y := WorldShortestWrappedDelta(f32(source_y)-f32(unit_y), f32(world_height))
@@ -589,7 +590,7 @@ UnitFindResourceTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int
 			source_x := int(w.decorations.x[slot])
 			source_y := int(w.decorations.y[slot])
 			if WorldTileOccupied(w, source_x, source_y) do continue
-			if !WorldTileWalkable(w, source_x, source_y, w.units[unit_slot].type) do continue
+			if !WorldTileWalkable(w, source_x, source_y, w.units[unit_slot].type, w.units[unit_slot].kingdome) do continue
 
 			delta_x := WorldShortestWrappedDelta(f32(source_x)-f32(unit_x), f32(world_width))
 			delta_y := WorldShortestWrappedDelta(f32(source_y)-f32(unit_y), f32(world_height))
@@ -795,8 +796,8 @@ UnitFindBuildingAccessPoint :: proc(w: ^World, unit_slot, building_slot: int, ta
 				}
 				wrapped_x := WorldWrapCoordinate(x, world_width)
 				wrapped_y := WorldWrapCoordinate(y, world_height)
-				if !WorldTileWalkable(w, wrapped_x, wrapped_y, unit.type) do continue
-				if !WorldTileWalkable(w, wrapped_x, wrapped_y, target_type) do continue
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, unit.type, unit.kingdome) do continue
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, target_type, unit.kingdome) do continue
 				return wrapped_x, wrapped_y, true
 			}
 		}

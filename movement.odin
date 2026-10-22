@@ -11,6 +11,10 @@ PATH_STEP_COST :: 3
 PLAIN_STEP_COST :: 4
 PATH_HEURISTIC_COST :: 3
 
+// Units hop over their own walls instead of being trapped by them.
+WALL_JUMP_SECONDS :: 0.35
+WALL_JUMP_HEIGHT :: 0.55
+
 FlowDirection :: enum u8 {
 	Blocked,
 	None,
@@ -28,6 +32,7 @@ FlowFollowResult :: enum {
 
 FlowField :: struct {
 	targetKingdom, targetTown: int,
+	unitKingdom: int,
 	hallX, hallY: int,
 	walkWater: bool,
 	navigationRevision: u64,
@@ -60,7 +65,7 @@ WorldNavigationDeinit :: proc(w: ^World) {
 	}
 }
 
-AStar :: proc(w: ^World, unit_type: UnitType, start_x, start_y, goal_x, goal_y: int, path: ^[dynamic]int) -> bool {
+AStar :: proc(w: ^World, unit_type: UnitType, unit_kingdom: int, start_x, start_y, goal_x, goal_y: int, path: ^[dynamic]int) -> bool {
 	clear(path)
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
@@ -76,7 +81,7 @@ AStar :: proc(w: ^World, unit_type: UnitType, start_x, start_y, goal_x, goal_y: 
 	wrapped_goal_x := WorldWrapCoordinate(goal_x, world_width)
 	wrapped_goal_y := WorldWrapCoordinate(goal_y, world_height)
 
-	if !WorldTileWalkable(w, wrapped_goal_x, wrapped_goal_y, unit_type) do return false
+	if !WorldTileWalkable(w, wrapped_goal_x, wrapped_goal_y, unit_type, unit_kingdom) do return false
 
 	start_index := wrapped_start_x*world_height + wrapped_start_y
 	goal_index := wrapped_goal_x*world_height + wrapped_goal_y
@@ -160,7 +165,7 @@ AStar :: proc(w: ^World, unit_type: UnitType, start_x, start_y, goal_x, goal_y: 
 			}
 			next_x = WorldWrapCoordinate(next_x, world_width)
 			next_y = WorldWrapCoordinate(next_y, world_height)
-			if !WorldTileWalkable(w, next_x, next_y, unit_type) do continue
+			if !WorldTileWalkable(w, next_x, next_y, unit_type, unit_kingdom) do continue
 
 			next_index := next_x*world_height + next_y
 			if stamp[next_index] != search_id {
@@ -209,7 +214,7 @@ AStar :: proc(w: ^World, unit_type: UnitType, start_x, start_y, goal_x, goal_y: 
 // Every warrior heading to that town follows the same field instead of
 // running its own A* search, so pathing cost is independent of unit count.
 // Knights and giants share walkability, so one field serves both.
-FlowFieldGet :: proc(w: ^World, kingdom, town: int, unit_type: UnitType) -> (^FlowField, bool) {
+FlowFieldGet :: proc(w: ^World, kingdom, town: int, unit_type: UnitType, unit_kingdom: int) -> (^FlowField, bool) {
 	if !WorldTownExists(w, kingdom, town) do return nil, false
 	if TownHallSlot(w, kingdom, town) < 0 do return nil, false
 	hall_x := w.kingdoms[kingdom].towns[town].x
@@ -221,7 +226,7 @@ FlowFieldGet :: proc(w: ^World, kingdom, town: int, unit_type: UnitType) -> (^Fl
 		field := &w.flowFields[i]
 		if field.targetKingdom == kingdom && field.targetTown == town &&
 			field.hallX == hall_x && field.hallY == hall_y &&
-			field.walkWater == walk_water {
+			field.walkWater == walk_water && field.unitKingdom == unit_kingdom {
 			slot = i
 			break
 		}
@@ -249,13 +254,14 @@ FlowFieldGet :: proc(w: ^World, kingdom, town: int, unit_type: UnitType) -> (^Fl
 	field.stamp = w.flowFieldStamp
 	if field.targetKingdom == kingdom && field.targetTown == town &&
 		field.hallX == hall_x && field.hallY == hall_y &&
-		field.walkWater == walk_water &&
+		field.walkWater == walk_water && field.unitKingdom == unit_kingdom &&
 		field.navigationRevision == w.navigationRevision {
 		return field, field.valid
 	}
 
 	field.targetKingdom = kingdom
 	field.targetTown = town
+	field.unitKingdom = unit_kingdom
 	field.hallX = hall_x
 	field.hallY = hall_y
 	field.walkWater = walk_water
@@ -305,7 +311,7 @@ FlowFieldCompute :: proc(w: ^World, field: ^FlowField) -> bool {
 				}
 				wrapped_x := WorldWrapCoordinate(x, world_width)
 				wrapped_y := WorldWrapCoordinate(y, world_height)
-				if !WorldTileWalkable(w, wrapped_x, wrapped_y, walk_type) do continue
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, walk_type, field.unitKingdom) do continue
 				index := wrapped_x*world_height+wrapped_y
 				if distance[index] == 0 do continue
 				distance[index] = 0
@@ -333,7 +339,7 @@ FlowFieldCompute :: proc(w: ^World, field: ^FlowField) -> bool {
 			case 2: next_y = WorldWrapCoordinate(current_y+1, world_height)
 			case 3: next_y = WorldWrapCoordinate(current_y-1, world_height)
 			}
-			if !WorldTileWalkable(w, next_x, next_y, walk_type) do continue
+			if !WorldTileWalkable(w, next_x, next_y, walk_type, field.unitKingdom) do continue
 
 			next_index := next_x*world_height+next_y
 			if distance[next_index] != -1 do continue
@@ -424,8 +430,12 @@ UnitStepTowards :: proc(w: ^World, unit_slot: int, target_x, target_y, distance:
 		current_tile_x := int(WorldWrapPosition(unit.x, world_width))
 		current_tile_y := int(WorldWrapPosition(unit.y, world_height))
 		if (tile_x != current_tile_x || tile_y != current_tile_y) &&
-			!WorldTileWalkable(w, tile_x, tile_y, unit.type) {
+			!WorldTileWalkable(w, tile_x, tile_y, unit.type, unit.kingdome) {
 			return false, true, remaining
+		}
+		if (tile_x != current_tile_x || tile_y != current_tile_y) &&
+			WorldTileFriendlyWall(w, tile_x, tile_y, unit.kingdome) {
+			unit.jumpStarted = w.simulationTime
 		}
 
 		unit.x = next_x
@@ -440,7 +450,7 @@ UnitStepTowards :: proc(w: ^World, unit_slot: int, target_x, target_y, distance:
 	return false, false, remaining
 }
 
-WorldTileWalkable :: proc(w: ^World, x, y: int, unit_type: UnitType) -> bool {
+WorldTileWalkable :: proc(w: ^World, x, y: int, unit_type: UnitType, unit_kingdom: int) -> bool {
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
 	if world_width <= 0 || world_height <= 0 do return false
@@ -448,9 +458,25 @@ WorldTileWalkable :: proc(w: ^World, x, y: int, unit_type: UnitType) -> bool {
 	wrapped_y := WorldWrapCoordinate(y, world_height)
 	index := wrapped_x*world_height+wrapped_y
 	if building_slot := w.tileBuilding[index]; building_slot >= 0 {
+		if BuildingKindOf(w.buildings[building_slot].type) == .Wall &&
+			w.buildings[building_slot].kingdom == unit_kingdom {
+			return true
+		}
 		return BuildingWalkable(w.buildings[building_slot].type)
 	}
 	return UnitValidTileType(unit_type, w.ground[wrapped_x][wrapped_y].type)
+}
+
+WorldTileFriendlyWall :: proc(w: ^World, x, y: int, kingdom: int) -> bool {
+	world_width := int(w.maxX)
+	world_height := int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return false
+	wrapped_x := WorldWrapCoordinate(x, world_width)
+	wrapped_y := WorldWrapCoordinate(y, world_height)
+	slot := w.tileBuilding[wrapped_x*world_height+wrapped_y]
+	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] do return false
+	if BuildingKindOf(w.buildings[slot].type) != .Wall do return false
+	return w.buildings[slot].kingdom == kingdom
 }
 
 WorldTileHasPath :: proc(w: ^World, x, y: int) -> bool {

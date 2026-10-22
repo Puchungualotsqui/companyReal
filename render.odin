@@ -285,12 +285,7 @@ UnitRenderPosition :: proc(w: ^World, unit_slot: int) -> (x, y: f32) {
 	return
 }
 
-WorldRenderSprites :: proc(
-	w: ^World,
-	renderer: ^WorldRenderer,
-	camera: rl.Camera2D,
-	first_copy_x, last_copy_x, first_copy_y, last_copy_y: int,
-) {
+WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, first_copy_x, last_copy_x, first_copy_y, last_copy_y: int) {
 	world_width := f32(w.maxX)
 	world_height := f32(w.maxY)
 	screen_width := f32(rl.GetScreenWidth())
@@ -507,6 +502,11 @@ WorldRenderSprites :: proc(
 				kind := UnitKindOf(w.units[unit_slot].type)
 				scale := UnitSpriteScale(kind)
 				unit_x, unit_y := UnitRenderPosition(w, unit_slot)
+				jump: f32 = 0
+				jump_elapsed := w.simulationTime+w.simulationAccumulator-w.units.jumpStarted[unit_slot]
+				if jump_elapsed >= 0 && jump_elapsed < WALL_JUMP_SECONDS {
+					jump = math.sin(jump_elapsed/WALL_JUMP_SECONDS*math.PI)*WALL_JUMP_HEIGHT
+				}
 				if unit_x+scale+1 < min_x || unit_x-1 > max_x ||
 					unit_y+1 < min_y || unit_y-scale-1 > max_y {
 					continue
@@ -535,7 +535,7 @@ WorldRenderSprites :: proc(
 					base_y = unit_y+0.5,
 					dest = rl.Rectangle{
 						x = offset_x+unit_x-scale*0.5,
-						y = offset_y+unit_y+0.5-scale+bob,
+						y = offset_y+unit_y+0.5-scale+bob-jump,
 						width = scale,
 						height = scale,
 					},

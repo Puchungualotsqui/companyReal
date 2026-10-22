@@ -102,7 +102,8 @@ UI_CONVERSION_KINDS := [len(UnitKind)-1]UnitKind{
 	.Rogue,
 }
 
-UI_COMBAT_BUILD_KINDS := [3]BuildingKind{
+UI_COMBAT_BUILD_KINDS := [4]BuildingKind{
+	.Wall,
 	.Bridge,
 	.Watchtower,
 	.Cannon,
@@ -460,10 +461,7 @@ UIAttackOrderValid :: proc(w: ^World, kingdom, town, target_kingdom, target_town
 	return TownHallSlot(w, target_kingdom, target_town) >= 0
 }
 
-UIDefendOrderValid :: proc(
-	w: ^World,
-	kingdom, town, target_kingdom, target_town: int,
-) -> bool {
+UIDefendOrderValid :: proc(w: ^World, kingdom, town, target_kingdom, target_town: int) -> bool {
 	if kingdom == target_kingdom && town == target_town do return false
 	if !WorldTownExists(w, kingdom, town) || !WorldTownExists(w, target_kingdom, target_town) {
 		return false
@@ -518,14 +516,7 @@ UITownOrderCount :: proc(w: ^World, kingdom, town: int) -> int {
 }
 
 // Orders are listed attacks first, then defends.
-UITownOrderAt :: proc(
-	w: ^World,
-	kingdom, town, index: int,
-) -> (
-	attack: bool,
-	target_kingdom, target_town: int,
-	ok: bool,
-) {
+UITownOrderAt :: proc(w: ^World, kingdom, town, index: int) -> (attack: bool, target_kingdom, target_town: int, ok: bool) {
 	if !WorldTownExists(w, kingdom, town) do return false, -1, -1, false
 	orders := &w.kingdoms[kingdom].towns[town]
 	count := 0
@@ -755,14 +746,7 @@ UIBuildButtonEnabled :: proc(w: ^World, ui: ^UIState) -> bool {
 	return found && UIHasCombatBuildKind(w, kingdom, town)
 }
 
-UIBuildPaletteRects :: proc(
-	w: ^World,
-	kingdom, town: int,
-) -> (
-	rects: [len(UI_COMBAT_BUILD_KINDS)]rl.Rectangle,
-	kinds: [len(UI_COMBAT_BUILD_KINDS)]BuildingKind,
-	count: int,
-) {
+UIBuildPaletteRects :: proc(w: ^World, kingdom, town: int) -> (rects: [len(UI_COMBAT_BUILD_KINDS)]rl.Rectangle, kinds: [len(UI_COMBAT_BUILD_KINDS)]BuildingKind, count: int) {
 	if !WorldTownExists(w, kingdom, town) do return
 	town_data := &w.kingdoms[kingdom].towns[town]
 	for kind in UI_COMBAT_BUILD_KINDS {
@@ -1082,14 +1066,7 @@ UICommandBarPress :: proc(w: ^World, ui: ^UIState, mouse: rl.Vector2) {
 	}
 }
 
-UITileAtMouse :: proc(
-	w: ^World,
-	camera: rl.Camera2D,
-	mouse: rl.Vector2,
-) -> (
-	tile_x, tile_y: int,
-	ok: bool,
-) {
+UITileAtMouse :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> (tile_x, tile_y: int, ok: bool) {
 	if w.maxX == 0 || w.maxY == 0 do return 0, 0, false
 	world := rl.GetScreenToWorld2D(mouse, camera)
 	return int(WorldWrapPosition(world.x, f32(w.maxX))),
@@ -1123,14 +1100,7 @@ UIFindBuildingAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> S
 	return {}
 }
 
-UIFindTownAt :: proc(
-	w: ^World,
-	camera: rl.Camera2D,
-	mouse: rl.Vector2,
-) -> (
-	kingdom, town, hall_slot: int,
-	found: bool,
-) {
+UIFindTownAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> (kingdom, town, hall_slot: int, found: bool) {
 	selection := UIFindBuildingAt(w, camera, mouse)
 	if selection.kind != .Building do return -1, -1, -1, false
 	kingdom = w.buildings[selection.slot].kingdom
@@ -1253,12 +1223,7 @@ UIDrawTownArea :: proc(w: ^World, camera: rl.Camera2D, selection: Selection, fai
 	UIDrawTownAreaFor(w, camera, building.kingdom, building.town, faint)
 }
 
-UIDrawTownAreaFor :: proc(
-	w: ^World,
-	camera: rl.Camera2D,
-	kingdom, town_slot: int,
-	faint: bool,
-) {
+UIDrawTownAreaFor :: proc(w: ^World, camera: rl.Camera2D, kingdom, town_slot: int, faint: bool) {
 	if !WorldTownExists(w, kingdom, town_slot) do return
 	town := &w.kingdoms[kingdom].towns[town_slot]
 
@@ -1547,13 +1512,7 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	rl.DrawRectangleLinesEx(bar, 1, UI_COLOR_BORDER_INNER)
 }
 
-UIDrawConversions :: proc(
-	w: ^World,
-	renderer: ^WorldRenderer,
-	ui: ^UIState,
-	panel: rl.Rectangle,
-	kingdom, town: int,
-) {
+UIDrawConversions :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle, kingdom, town: int) {
 	kinds: [len(UnitKind)]UnitKind
 	count := UIConversionRows(w, ui.selection, &kinds)
 	for i in 0..<count {
@@ -1561,15 +1520,7 @@ UIDrawConversions :: proc(
 	}
 }
 
-UIDrawConversionRow :: proc(
-	w: ^World,
-	renderer: ^WorldRenderer,
-	ui: ^UIState,
-	panel: rl.Rectangle,
-	index: int,
-	kind: UnitKind,
-	kingdom, town: int,
-) {
+UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle, index: int, kind: UnitKind, kingdom, town: int) {
 	row_y := panel.y+UI_ROWS_TOP+f32(index)*UI_ROW_HEIGHT
 
 	faction := FactionSpriteIndex(kingdom)
@@ -1594,12 +1545,7 @@ UIDrawConversionRow :: proc(
 	UIButton(plus, "+", UICanConvertTo(w, kingdom, town, kind))
 }
 
-UIDrawOrdersTab :: proc(
-	w: ^World,
-	renderer: ^WorldRenderer,
-	panel: rl.Rectangle,
-	kingdom, town: int,
-) {
+UIDrawOrdersTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, kingdom, town: int) {
 	if !WorldTownExists(w, kingdom, town) do return
 	top := panel.y+UI_ROWS_TOP
 	orders := UITownOrderCount(w, kingdom, town)
@@ -1848,13 +1794,7 @@ UIDrawCommandTargets :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 	UIDrawOrderArrow(w, camera, kingdom, town, hover_kingdom, hover_town, preview_color, true)
 }
 
-UIDrawTownHallOutline :: proc(
-	w: ^World,
-	camera: rl.Camera2D,
-	kingdom, town: int,
-	alpha: u8,
-	pixel_width: f32,
-) {
+UIDrawTownHallOutline :: proc(w: ^World, camera: rl.Camera2D, kingdom, town: int, alpha: u8, pixel_width: f32) {
 	hall := TownHallSlot(w, kingdom, town)
 	if hall < 0 do return
 	width, height := BuildingTileSize(w.buildings[hall].type)
@@ -1928,13 +1868,7 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 }
 
 // Arrows are drawn in screen space so their heads keep a constant size at any zoom.
-UIDrawOrderArrow :: proc(
-	w: ^World,
-	camera: rl.Camera2D,
-	from_kingdom, from_town, to_kingdom, to_town: int,
-	color: rl.Color,
-	preview: bool,
-) {
+UIDrawOrderArrow :: proc(w: ^World, camera: rl.Camera2D, from_kingdom, from_town, to_kingdom, to_town: int, color: rl.Color, preview: bool) {
 	from_hall := TownHallSlot(w, from_kingdom, from_town)
 	to_hall := TownHallSlot(w, to_kingdom, to_town)
 	if from_hall < 0 || to_hall < 0 do return
@@ -2063,12 +1997,7 @@ UIDrawBuildPalette :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 	}
 }
 
-UIDrawBuildPreview :: proc(
-	w: ^World,
-	renderer: ^WorldRenderer,
-	camera: rl.Camera2D,
-	ui: ^UIState,
-) {
+UIDrawBuildPreview :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui: ^UIState) {
 	if ui.command != .Place do return
 	tile_x, tile_y, ok := UITileAtMouse(w, camera, rl.GetMousePosition())
 	if !ok do return
@@ -2095,12 +2024,7 @@ UIDrawBuildPreview :: proc(
 	rl.EndMode2D()
 }
 
-UIDrawFoundPreview :: proc(
-	w: ^World,
-	renderer: ^WorldRenderer,
-	camera: rl.Camera2D,
-	ui: ^UIState,
-) {
+UIDrawFoundPreview :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui: ^UIState) {
 	if ui.command != .Found do return
 	kingdom, town := UISelectionTown(w, ui.selection)
 	if !WorldTownExists(w, kingdom, town) do return

@@ -1,7 +1,6 @@
 # Things to do
-- Add automatic town names and kingdom names. All should be unique. Each kingdom could have town names of different cultures, for example towns of spain/santa cruz bolivia/mexico/argentina - germany/austria/ - etc. But the idea would be to group them by language, only latin alphabetic languages. The kingdoms must have invented names but in coherence with the town names.
-- Verify there are no edge cases of a town that is ordered to be attacked, but it is sorrounded of buildings, likely walls and they must break them and go through them. Also, walls becomes combat building and it should be unlocked as the same time of combat builders. Verify if there is some doors or some mechanism for the units to go through friendly walls, if there is not, we could make them jump with a little animation the frindly walls like in clash of clans
-- fog of war
+- Add automatic town names and kingdom names. All should be unique. Each kingdom could have town names of different cultures, for example towns of spain/santa cruz bolivia/mexico/argentina - germany/austria/ - etc. But the idea would be to group them by language, only latin alphabetic languages. The kingdoms must have invented names but in coherence with the town names. The list must be really long to not repeat any name in a in game match, the name selected should be random of the town, but the kingdom name should not be random.
+- fog of war. Preliminar design: all covered by clouds or similar initially. Any unit and or building with vision uncovers it and actively see it. Units of other kingdoms only appears if 
 - explorer unit, it should not be a warrior unit. It will simply walk around exploring, prefering parts with fog of war. Coming back to its home town for a while and then going out again. It should be an initial unit. And the initial villagers should be expanded to 6
 - UI incomplete: build manually (a button on the bottom right for show the possible buildings and then click which one and where) and declare war to kingdom without attacking a town yet (I need an identity color [maybe even its own default flag] for each kingdom option and an icon, to later show steam profile picture)
 - Description to enrich the world of the buildings and units
@@ -16,9 +15,10 @@
 # Ideas
 - Ataques aereos de pociones, like in company of heroes
 - Weather and enviroment events
+- Newspaper with notifications like: town destroyed, capital destroyed, kingdom destroyed, Civilianz dead, etc.
 
 # Bugs
-- Shadow of home/house is a bit lower. I think we should recheck all building shadows
+- Shadow of home/house is a bit lower. I think we should recheck all building shadows. Also shadows of units jumping is not excellent.
 
 # Things to check
 - Easy to see what kingdom is from the town defended or attacked in the townhall options and by arrows color when town selected

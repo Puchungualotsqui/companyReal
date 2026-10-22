@@ -19,25 +19,24 @@ CombatSite :: struct {
 }
 
 CombatBuildingSeconds :: proc(kind: BuildingKind) -> f32 {
-	#partial switch kind {
+	switch kind {
+	case .Wall:
+		return 2
 	case .Bridge:
 		return 5
 	case .Watchtower:
 		return 8
 	case .Cannon:
 		return 12
+	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path:
+		return 6
 	}
-	return 6
+	unreachable()
 }
 
 // Player order: place a combat building anywhere in the world. No wood is
 // paid and no town area is required.
-TownStartCombatConstruction :: proc(
-	w: ^World,
-	kingdom_slot, town_slot: int,
-	kind: BuildingKind,
-	x, y: int,
-) -> bool {
+TownStartCombatConstruction :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind, x, y: int) -> bool {
 	if !TownCombatConstructionValid(w, kingdom_slot, town_slot, kind, x, y) do return false
 
 	slot := -1
@@ -56,12 +55,7 @@ TownStartCombatConstruction :: proc(
 	return true
 }
 
-TownCombatConstructionValid :: proc(
-	w: ^World,
-	kingdom_slot, town_slot: int,
-	kind: BuildingKind,
-	x, y: int,
-) -> bool {
+TownCombatConstructionValid :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind, x, y: int) -> bool {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
 	if !BuildingIsCombat(kind) do return false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
@@ -111,11 +105,7 @@ CombatSiteKingdomClear :: proc(w: ^World, kingdom_slot: int) {
 
 // Builders work from any walkable tile on the ring around the footprint. An
 // isolated bridge has no such tile until another bridge reaches it.
-CombatSiteAccessPoint :: proc(
-	w: ^World,
-	site_slot: int,
-	unit_type: UnitType,
-) -> (int, int, bool) {
+CombatSiteAccessPoint :: proc(w: ^World, site_slot: int, unit_type: UnitType, unit_kingdom: int) -> (int, int, bool) {
 	if site_slot < 0 || site_slot >= COMBAT_SITE_CAPACITY || !w.combatSiteUsed[site_slot] {
 		return 0, 0, false
 	}
@@ -138,7 +128,7 @@ CombatSiteAccessPoint :: proc(
 				}
 				wrapped_x := WorldWrapCoordinate(x, world_width)
 				wrapped_y := WorldWrapCoordinate(y, world_height)
-				if !WorldTileWalkable(w, wrapped_x, wrapped_y, unit_type) do continue
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, unit_type, unit_kingdom) do continue
 				return wrapped_x, wrapped_y, true
 			}
 		}
@@ -149,13 +139,7 @@ CombatSiteAccessPoint :: proc(
 // Nearest reachable-looking site of the builder's town. The previous failure is
 // skipped until navigation changes, which is when a new bridge may have made it
 // reachable.
-CombatSiteFindNearest :: proc(
-	w: ^World,
-	unit_slot: int,
-	sequence: int,
-	skip_slot: int,
-	skip_revision: u64,
-) -> (site_slot, access_x, access_y: int, found: bool) {
+CombatSiteFindNearest :: proc(w: ^World, unit_slot: int, sequence: int, skip_slot: int, skip_revision: u64) -> (site_slot, access_x, access_y: int, found: bool) {
 	unit := &w.units[unit_slot]
 	world_width := f32(w.maxX)
 	world_height := f32(w.maxY)
@@ -172,7 +156,7 @@ CombatSiteFindNearest :: proc(
 		}
 		if slot == skip_slot && skip_revision == w.navigationRevision do continue
 
-		x, y, ok := CombatSiteAccessPoint(w, slot, unit.type)
+		x, y, ok := CombatSiteAccessPoint(w, slot, unit.type, unit.kingdome)
 		if !ok do continue
 
 		site_width, site_height := BuildingTileSize(

@@ -65,6 +65,7 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	for i in 0..<FLOW_FIELD_CAPACITY {
 		w.flowFields[i].targetKingdom = -1
 		w.flowFields[i].targetTown = -1
+		w.flowFields[i].unitKingdom = -1
 	}
 	WorldGenerate(w, settings)
 	return WorldSpawnInitialKingdoms(w, int(kingdoms), settings.seed)

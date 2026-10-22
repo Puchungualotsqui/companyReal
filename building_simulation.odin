@@ -153,11 +153,6 @@ TownBuilderConstruct :: proc(w: ^World, kingdom_slot, town_slot: int, can_grow: 
 	if town.homes < town.citizens || (can_grow && town.homes == town.citizens) {
 		if TownBuilderStartBuilding(w, kingdom_slot, town_slot, Home{}) do return true
 	}
-	if town.wood >= TOWN_WOOD_TARGET || KingdomAtWarWithAny(w, kingdom_slot) {
-		if x, y, found := TownAutoWallSite(w, kingdom_slot, town_slot); found {
-			if TownStartConstruction(w, kingdom_slot, town_slot, .Wall, x, y) do return true
-		}
-	}
 	for kind in AUTO_TRAINING_BUILDINGS {
 		if kind in town.unlockedBuildings && town.buildingCounts[kind] == 0 {
 			if TownBuilderStartBuilding(w, kingdom_slot, town_slot, BuildingTypeFromKind(kind)) {
@@ -189,12 +184,7 @@ TownBuilderStartBuilding :: proc(w: ^World, kingdom_slot, town_slot: int, buildi
 
 // Orders a building: the town pays for it and gets a construction site that
 // builders must clear and then raise.
-TownStartConstruction :: proc(
-	w: ^World,
-	kingdom_slot, town_slot: int,
-	kind: BuildingKind,
-	x, y: int,
-) -> bool {
+TownStartConstruction :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind, x, y: int) -> bool {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if town.constructionActive do return false
@@ -271,10 +261,7 @@ ConstructionPendingDecoration :: proc(w: ^World, site: ConstructionSite) -> int 
 }
 
 // Builders work the site from a walkable tile on the ring around the footprint.
-TownConstructionAccessPoint :: proc(
-	w: ^World,
-	unit_slot, kingdom_slot, town_slot: int,
-) -> (int, int, bool) {
+TownConstructionAccessPoint :: proc(w: ^World, unit_slot, kingdom_slot, town_slot: int) -> (int, int, bool) {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return 0, 0, false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if !town.constructionActive do return 0, 0, false
@@ -297,7 +284,7 @@ TownConstructionAccessPoint :: proc(
 				}
 				wrapped_x := WorldWrapCoordinate(x, world_width)
 				wrapped_y := WorldWrapCoordinate(y, world_height)
-				if !WorldTileWalkable(w, wrapped_x, wrapped_y, w.units[unit_slot].type) do continue
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, w.units[unit_slot].type, w.units[unit_slot].kingdome) do continue
 				return wrapped_x, wrapped_y, true
 			}
 		}
@@ -311,11 +298,7 @@ ConstructionProgress :: enum {
 }
 
 // Advances one builder's share of site work: clearing first, then raising.
-TownConstructionWork :: proc(
-	w: ^World,
-	kingdom_slot, town_slot: int,
-	delta_time: f32,
-) -> ConstructionProgress {
+TownConstructionWork :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time: f32) -> ConstructionProgress {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return .Completed
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if !town.constructionActive do return .Completed
@@ -353,46 +336,6 @@ TownConstructionWork :: proc(
 	town.constructionActive = false
 	town.construction = {}
 	return .Completed
-}
-
-// Walls grow as an automatic palisade around the town, leaving periodic gaps
-// so nobody is trapped inside their own defences.
-TownAutoWallSite :: proc(w: ^World, kingdom_slot, town_slot: int) -> (int, int, bool) {
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	radius := min(town.areaRadius, 9)
-	if radius < 4 do return 0, 0, false
-
-	perimeter := 8*radius
-	for step in 0..<perimeter {
-		index := (town.wallCursor+step)%perimeter
-		town.wallCursor = (index+1)%perimeter
-		if index%6 == 0 do continue
-
-		x, y := TownSquareRingPosition(town.x+2, town.y+2, radius, index)
-		if !TownBuildingInArea(w, kingdom_slot, town_slot, x, y, Wall{}) do continue
-		wrapped_x := WorldWrapCoordinate(x, int(w.maxX))
-		wrapped_y := WorldWrapCoordinate(y, int(w.maxY))
-		if !WorldBuildingValid(w, wrapped_x, wrapped_y, Wall{}) do continue
-		if CombatSiteOverlaps(w, wrapped_x, wrapped_y, .Wall) do continue
-		return wrapped_x, wrapped_y, true
-	}
-	return 0, 0, false
-}
-
-TownSquareRingPosition :: proc(center_x, center_y, radius, index: int) -> (int, int) {
-	side_length := radius*2
-	side := index/side_length
-	offset := index%side_length
-	switch side {
-	case 0:
-		return center_x-radius+offset, center_y-radius
-	case 1:
-		return center_x+radius, center_y-radius+offset
-	case 2:
-		return center_x+radius-offset, center_y+radius
-	case:
-		return center_x-radius, center_y+radius-offset
-	}
 }
 
 // Roads grow automatically: first a stub from the hall, then one tile at a time
@@ -454,12 +397,7 @@ TownAutoPathSite :: proc(w: ^World, kingdom_slot, town_slot: int) -> (int, int, 
 	return candidate.x, candidate.y, candidate.found
 }
 
-TownConsiderPathSite :: proc(
-	w: ^World,
-	kingdom_slot, town_slot, x, y, target_x, target_y: int,
-	seed: u64,
-	candidate: ^TownPathCandidate,
-) {
+TownConsiderPathSite :: proc(w: ^World, kingdom_slot, town_slot, x, y, target_x, target_y: int, seed: u64, candidate: ^TownPathCandidate) {
 	if !TownPointInArea(w, kingdom_slot, town_slot, x, y) do return
 	wrapped_x := WorldWrapCoordinate(x, int(w.maxX))
 	wrapped_y := WorldWrapCoordinate(y, int(w.maxY))

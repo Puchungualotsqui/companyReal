@@ -62,7 +62,7 @@ MilestoneOption :: struct {
 	unlocks: bit_set[BuildingKind],
 }
 
-TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Wall, .Path}
+TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Path}
 TOWN_BASE_UNLOCKED_UNITS :: bit_set[UnitKind]{.Villager, .Builder, .WaterCollector, .Farmer, .Knight}
 
 TOWN_MILESTONE_OPTIONS := [TOWN_MILESTONE_COUNT][2]MilestoneOption{
@@ -70,12 +70,12 @@ TOWN_MILESTONE_OPTIONS := [TOWN_MILESTONE_COUNT][2]MilestoneOption{
 		{
 			path = .Rangers,
 			units = {.Archer, .CombatBuilder},
-			unlocks = {.ArcheryRange, .Bridge},
+			unlocks = {.ArcheryRange, .Bridge, .Wall},
 		},
 		{
 			path = .Mystics,
 			units = {.Mage, .CombatBuilder},
-			unlocks = {.MagicSchool, .Cannon},
+			unlocks = {.MagicSchool, .Cannon, .Wall},
 		},
 	},
 	{
@@ -141,7 +141,6 @@ Town :: struct {
 	unlockedUnits: bit_set[UnitKind],
 	buildingCounts: [BuildingKind]int,
 	buildingSlots: [BuildingKind]int,
-	wallCursor: int,
 	milestonesReached: int,
 	milestonePending: bool,
 	conversions: [MAX_CONVERSION_JOBS]ConversionJob,
@@ -174,11 +173,7 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 }
 
 // Shared town setup for the initial kingdom spawn and for founded towns.
-TownInitialize :: proc(
-	w: ^World,
-	kingdom_slot, town_slot, hall_slot, x, y: int,
-	starting_wood: f32,
-) {
+TownInitialize :: proc(w: ^World, kingdom_slot, town_slot, hall_slot, x, y: int, starting_wood: f32) {
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	town^ = Town{
 		x = x,
@@ -239,10 +234,7 @@ TownFoundingValid :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool
 	return !TownFoundingTooClose(w, x, y)
 }
 
-TownFoundingOverlapsOtherConstruction :: proc(
-	w: ^World,
-	source_kingdom, source_town, x, y: int,
-) -> bool {
+TownFoundingOverlapsOtherConstruction :: proc(w: ^World, source_kingdom, source_town, x, y: int) -> bool {
 	width, height := BuildingTileSize(TownHall{})
 	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom_slot] do continue
@@ -287,11 +279,7 @@ TownFoundingTooClose :: proc(w: ^World, x, y: int) -> bool {
 	return false
 }
 
-TownFoundingAccessPoint :: proc(
-	w: ^World,
-	x, y: int,
-	unit_type: UnitType,
-) -> (int, int, bool) {
+TownFoundingAccessPoint :: proc(w: ^World, x, y: int, unit_type: UnitType, unit_kingdom: int) -> (int, int, bool) {
 	width, height := BuildingTileSize(TownHall{})
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
@@ -310,7 +298,7 @@ TownFoundingAccessPoint :: proc(
 				}
 				wrapped_x := WorldWrapCoordinate(tile_x, world_width)
 				wrapped_y := WorldWrapCoordinate(tile_y, world_height)
-				if !WorldTileWalkable(w, wrapped_x, wrapped_y, unit_type) do continue
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, unit_type, unit_kingdom) do continue
 				return wrapped_x, wrapped_y, true
 			}
 		}
@@ -321,12 +309,12 @@ TownFoundingAccessPoint :: proc(
 TownFoundingReachable :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
 	start_x, start_y, start_found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot)
 	if !start_found do return false
-	goal_x, goal_y, goal_found := TownFoundingAccessPoint(w, x, y, Builder{})
+	goal_x, goal_y, goal_found := TownFoundingAccessPoint(w, x, y, Builder{}, kingdom_slot)
 	if !goal_found do return false
 
 	path: [dynamic]int
 	defer delete(path)
-	return AStar(w, Builder{}, start_x, start_y, goal_x, goal_y, &path)
+	return AStar(w, Builder{}, kingdom_slot, start_x, start_y, goal_x, goal_y, &path)
 }
 
 // Player order: found a new town. The mother town pays the charter and its
@@ -513,11 +501,7 @@ TownStartAttack :: proc(w: ^World, kingdomSlotA, townSlotA, kingdomSlotB, townSl
 // Player order: defender town -> defend -> any non-enemy town. The defending
 // town sends a share of its warriors to patrol the protected town; the rest
 // stay home. Declaring war on the protected kingdom breaks the order.
-TownStartDefending :: proc(
-	w: ^World,
-	kingdomSlot, defenderTownSlot,
-	protectedKingdomSlot, protectedTownSlot: int,
-) {
+TownStartDefending :: proc(w: ^World, kingdomSlot, defenderTownSlot, protectedKingdomSlot, protectedTownSlot: int) {
 	if !WorldTownExists(w, kingdomSlot, defenderTownSlot) ||
 		!WorldTownExists(w, protectedKingdomSlot, protectedTownSlot) {
 		return
@@ -544,11 +528,7 @@ TownStopAttack :: proc(w: ^World, kingdomSlotA, townSlotA, kingdomSlotB, townSlo
 	TownOrdersRebuild(w, kingdomSlotA, townSlotA)
 }
 
-TownStopDefending :: proc(
-	w: ^World,
-	kingdomSlot, defenderTownSlot,
-	protectedKingdomSlot, protectedTownSlot: int,
-) {
+TownStopDefending :: proc(w: ^World, kingdomSlot, defenderTownSlot, protectedKingdomSlot, protectedTownSlot: int) {
 	if !WorldTownExists(w, kingdomSlot, defenderTownSlot) do return
 	if !w.kingdoms[kingdomSlot].towns[defenderTownSlot].defendOrders[protectedKingdomSlot][protectedTownSlot] {
 		return
@@ -610,12 +590,6 @@ KingdomAtWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) -> bool {
 		w.kingdoms[kingdomSlotA].kingdomWar[kingdomSlotB]
 }
 
-KingdomAtWarWithAny :: proc(w: ^World, kingdom_slot: int) -> bool {
-	for other in 0..<KINGDOMS_CAPACITY {
-		if KingdomAtWar(w, kingdom_slot, other) do return true
-	}
-	return false
-}
 
 // Turns the sparse order matrices into a compact list the warrior update can
 // index in constant time. Called only when orders change, never per tick.
