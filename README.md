@@ -1,5 +1,4 @@
 # Things to do
-- UI incomplete: build manually (a button on the bottom right for show the possible buildings and then click which one and where) and declare war to kingdom without attacking a town yet (I need an identity color [maybe even its own default flag] for each kingdom option and an icon, to later show steam profile picture)
 - Description to enrich the world of the buildings and units
 - Different phases of destruction of the buildings and different phases of the buildings being built
 - Add debris from destroyed buildings, different debris if it was on fire

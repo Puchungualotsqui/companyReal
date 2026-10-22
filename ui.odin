@@ -33,6 +33,12 @@ UICommand :: enum {
 	Place,
 }
 
+UIPanelMode :: enum {
+	None,
+	Towns,
+	Diplomacy,
+}
+
 UIState :: struct {
 	selection: Selection,
 	hover:     Selection,
@@ -40,6 +46,8 @@ UIState :: struct {
 	command:   UICommand,
 	buildKind: BuildingKind,
 	buildKingdom, buildTown: int,
+	panel:      UIPanelMode,
+	townScroll: int,
 }
 
 UI_COLOR_BG := rl.Color{26, 24, 28, 240}
@@ -861,6 +869,8 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 		return
 	}
 
+	if UIHudUpdate(w, view, mouse) do return
+
 	over_ui := false
 
 	build_rect := UIBuildButtonRect()
@@ -1225,6 +1235,11 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 	UIDrawBuildPreview(w, renderer, camera, ui)
 	UIDrawFoundPreview(w, renderer, camera, ui)
 	UIDrawCommandHint(w, ui)
+	if !milestone_pending {
+		UIDrawHud(w, ui)
+		UIDrawSidePanel(w, ui)
+		UIDrawAlerts(w)
+	}
 
 	if milestone_pending {
 		UIDrawMilestone(w, renderer, milestone_kingdom, milestone_town)
@@ -2180,4 +2195,477 @@ UIButton :: proc(rect: rl.Rectangle, label: cstring, enabled: bool) {
 		1,
 		color,
 	)
+}
+
+// --- kingdom HUD, town list, diplomacy, alerts -----------------------------
+
+UI_HUD_W :: 620
+UI_HUD_H :: 46
+UI_HUD_BUTTON_W :: 108
+UI_HUD_BUTTON_H :: 28
+UI_SIDE_PANEL_W :: 420
+UI_SIDE_ROW_H :: 30
+UI_SIDE_HEADER_H :: 36
+UI_SIDE_MAX_TOWN_ROWS :: 10
+UI_DIPLO_ROW_H :: 48
+UI_ALERT_W :: 380
+UI_ALERT_ROW_H :: 30
+UI_ALERT_MAX_ROWS :: 6
+
+UIHudRect :: proc() -> rl.Rectangle {
+	return rl.Rectangle{UI_MARGIN, UI_MARGIN, UI_HUD_W, UI_HUD_H}
+}
+
+UIHudTownsButtonRect :: proc() -> rl.Rectangle {
+	hud := UIHudRect()
+	return rl.Rectangle{
+		hud.x+hud.width-UI_HUD_BUTTON_W*2-20,
+		hud.y+(hud.height-UI_HUD_BUTTON_H)*0.5,
+		UI_HUD_BUTTON_W,
+		UI_HUD_BUTTON_H,
+	}
+}
+
+UIHudDiplomacyButtonRect :: proc() -> rl.Rectangle {
+	towns := UIHudTownsButtonRect()
+	return rl.Rectangle{
+		towns.x+towns.width+8,
+		towns.y,
+		UI_HUD_BUTTON_W,
+		UI_HUD_BUTTON_H,
+	}
+}
+
+UIPlayerTownCount :: proc(w: ^World) -> int {
+	count := 0
+	if !w.kingdomUsed[PLAYER_KINGDOM] do return 0
+	for town_slot in 0..<TOWN_CAPACITY {
+		if w.kingdoms[PLAYER_KINGDOM].townUsed[town_slot] do count += 1
+	}
+	return count
+}
+
+UIPlayerTownAt :: proc(w: ^World, index: int) -> (int, bool) {
+	if index < 0 || !w.kingdomUsed[PLAYER_KINGDOM] do return -1, false
+	seen := 0
+	for town_slot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[PLAYER_KINGDOM].townUsed[town_slot] do continue
+		if seen == index do return town_slot, true
+		seen += 1
+	}
+	return -1, false
+}
+
+UIDiplomacyCount :: proc(w: ^World) -> int {
+	count := 0
+	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
+		if kingdom_slot == PLAYER_KINGDOM || !KingdomDiscovered(w, kingdom_slot) do continue
+		count += 1
+	}
+	return count
+}
+
+UIDiplomacyAt :: proc(w: ^World, index: int) -> (int, bool) {
+	if index < 0 do return -1, false
+	seen := 0
+	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
+		if kingdom_slot == PLAYER_KINGDOM || !KingdomDiscovered(w, kingdom_slot) do continue
+		if seen == index do return kingdom_slot, true
+		seen += 1
+	}
+	return -1, false
+}
+
+UISidePanelRect :: proc(w: ^World, ui: ^UIState) -> rl.Rectangle {
+	if ui.panel == .None do return {}
+	hud := UIHudRect()
+	rows := 1
+	switch ui.panel {
+	case .Towns:
+		rows = min(max(UIPlayerTownCount(w), 1), UI_SIDE_MAX_TOWN_ROWS)
+	case .Diplomacy:
+		rows = max(UIDiplomacyCount(w), 1)
+	case .None:
+	}
+	row_height: f32 = UI_SIDE_ROW_H
+	if ui.panel == .Diplomacy do row_height = UI_DIPLO_ROW_H
+	height := UI_SIDE_HEADER_H+f32(rows)*row_height+12
+	return rl.Rectangle{hud.x, hud.y+hud.height+8, UI_SIDE_PANEL_W, height}
+}
+
+UIAlertPanelRect :: proc(w: ^World) -> rl.Rectangle {
+	rows := min(w.alerts.count, UI_ALERT_MAX_ROWS)
+	if rows <= 0 do return {}
+	height := UI_SIDE_HEADER_H+f32(rows)*UI_ALERT_ROW_H+8
+	return rl.Rectangle{
+		f32(rl.GetScreenWidth())-UI_MARGIN-UI_ALERT_W,
+		UI_MARGIN,
+		UI_ALERT_W,
+		height,
+	}
+}
+
+UIDiplomacyActionRect :: proc(panel: rl.Rectangle, row: int) -> rl.Rectangle {
+	return rl.Rectangle{
+		panel.x+panel.width-UI_PAD-128,
+		panel.y+UI_SIDE_HEADER_H+f32(row)*UI_DIPLO_ROW_H+11,
+		128,
+		26,
+	}
+}
+
+UITownUnderAttack :: proc(w: ^World, kingdom, town: int) -> bool {
+	if !WorldTownExists(w, kingdom, town) do return false
+	orders := &w.kingdoms[kingdom].towns[town]
+	for attacker_kingdom in 0..<KINGDOMS_CAPACITY {
+		for attacker_town in 0..<TOWN_CAPACITY {
+			if orders.attackedBy[attacker_kingdom][attacker_town] do return true
+		}
+	}
+	return false
+}
+
+UIWarCount :: proc(w: ^World) -> int {
+	count := 0
+	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
+		if KingdomAtWar(w, PLAYER_KINGDOM, kingdom_slot) do count += 1
+	}
+	return count
+}
+
+UIFocusTown :: proc(w: ^World, view: ^WorldView, kingdom_slot, town_slot: int) {
+	hall := TownHallSlot(w, kingdom_slot, town_slot)
+	if hall < 0 do return
+	width, height := BuildingTileSize(w.buildings[hall].type)
+	view.camera.target = rl.Vector2{
+		f32(w.buildings[hall].x)+f32(width)*0.5,
+		f32(w.buildings[hall].y)+f32(height)*0.5,
+	}
+	view.ui.command = .Inspect
+	view.ui.hover = {}
+	view.ui.selection = {}
+	if kingdom_slot == PLAYER_KINGDOM || FogTownVisible(w, kingdom_slot, town_slot) {
+		view.ui.selection = Selection{kind = .Building, slot = hall}
+	}
+}
+
+UIFocusAlert :: proc(w: ^World, view: ^WorldView, alert: Alert) {
+	if alert.town >= 0 && WorldTownExists(w, alert.kingdom, alert.town) {
+		UIFocusTown(w, view, alert.kingdom, alert.town)
+		return
+	}
+	view.ui.command = .Inspect
+	view.ui.hover = {}
+	if alert.x != 0 || alert.y != 0 {
+		view.camera.target = rl.Vector2{alert.x+0.5, alert.y+0.5}
+		return
+	}
+	if alert.other >= 0 {
+		if town, found := FogFirstDiscoveredTown(w, alert.other); found {
+			UIFocusTown(w, view, alert.other, town)
+			return
+		}
+	}
+}
+
+UIAlertTownName :: proc(name: ^Name) -> cstring {
+	if name[0] == 0 do return "Unknown"
+	return cstring(&name[0])
+}
+
+UIAlertText :: proc(w: ^World, alert: ^Alert) -> cstring {
+	switch alert.kind {
+	case .TownFounded:
+		return fmt.ctprintf("%s founded", UIAlertTownName(&alert.town_name))
+	case .TownLost:
+		return fmt.ctprintf("%s lost", UIAlertTownName(&alert.town_name))
+	case .UnderAttack:
+		return fmt.ctprintf("%s under attack", UIAlertTownName(&alert.town_name))
+	case .EnemySpotted:
+		return fmt.ctprintf("Enemy spotted: %s", NameKingdomCString(w, alert.other))
+	case .Milestone:
+		return fmt.ctprintf("%s milestone ready", UIAlertTownName(&alert.town_name))
+	case .WarDeclared:
+		return fmt.ctprintf("War declared on %s", NameKingdomCString(w, alert.other))
+	case .PeaceMade:
+		return fmt.ctprintf("Peace with %s", NameKingdomCString(w, alert.other))
+	}
+	return ""
+}
+
+UIAlertColor :: proc(kind: AlertKind) -> rl.Color {
+	switch kind {
+	case .TownFounded:
+		return rl.Color{112, 200, 126, 255}
+	case .TownLost, .UnderAttack, .WarDeclared, .EnemySpotted:
+		return UI_COLOR_ATTACK
+	case .Milestone:
+		return UI_COLOR_GOLD
+	case .PeaceMade:
+		return UI_COLOR_DEFEND
+	}
+	return UI_COLOR_TEXT
+}
+
+UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
+	ui := &view.ui
+	ui.hover = {}
+
+	if rl.IsKeyPressed(.ESCAPE) && ui.panel != .None {
+		ui.panel = .None
+		return true
+	}
+	if rl.IsKeyPressed(.T) {
+		if ui.panel == .Towns { ui.panel = .None } else { ui.panel = .Towns }
+		ui.townScroll = 0
+		return true
+	}
+	if rl.IsKeyPressed(.K) {
+		if ui.panel == .Diplomacy { ui.panel = .None } else { ui.panel = .Diplomacy }
+		return true
+	}
+
+	if rl.CheckCollisionPointRec(mouse, UIHudRect()) {
+		if rl.IsMouseButtonPressed(.LEFT) {
+			if rl.CheckCollisionPointRec(mouse, UIHudTownsButtonRect()) {
+				if ui.panel == .Towns { ui.panel = .None } else { ui.panel = .Towns }
+				ui.townScroll = 0
+			} else if rl.CheckCollisionPointRec(mouse, UIHudDiplomacyButtonRect()) {
+				if ui.panel == .Diplomacy { ui.panel = .None } else { ui.panel = .Diplomacy }
+			}
+		}
+		return true
+	}
+
+	if ui.panel != .None {
+		panel := UISidePanelRect(w, ui)
+		if ui.panel == .Towns {
+			count := UIPlayerTownCount(w)
+			max_scroll := max(count-UI_SIDE_MAX_TOWN_ROWS, 0)
+			if rl.IsKeyPressed(.PAGE_UP) do ui.townScroll = max(ui.townScroll-UI_SIDE_MAX_TOWN_ROWS, 0)
+			if rl.IsKeyPressed(.PAGE_DOWN) do ui.townScroll = min(ui.townScroll+UI_SIDE_MAX_TOWN_ROWS, max_scroll)
+			ui.townScroll = clamp(ui.townScroll, 0, max_scroll)
+		}
+		if rl.CheckCollisionPointRec(mouse, panel) {
+			switch ui.panel {
+			case .Towns:
+				count := UIPlayerTownCount(w)
+				if rl.IsMouseButtonPressed(.LEFT) {
+					row := int((mouse.y-(panel.y+UI_SIDE_HEADER_H))/UI_SIDE_ROW_H)
+					if row >= 0 && row < min(count, UI_SIDE_MAX_TOWN_ROWS) {
+						if town_slot, found := UIPlayerTownAt(w, ui.townScroll+row); found {
+							UIFocusTown(w, view, PLAYER_KINGDOM, town_slot)
+						}
+					}
+				}
+			case .Diplomacy:
+				if rl.IsMouseButtonPressed(.LEFT) {
+					row := int((mouse.y-(panel.y+UI_SIDE_HEADER_H))/UI_DIPLO_ROW_H)
+					if row >= 0 && row < UIDiplomacyCount(w) {
+						if kingdom_slot, found := UIDiplomacyAt(w, row); found {
+							if rl.CheckCollisionPointRec(mouse, UIDiplomacyActionRect(panel, row)) {
+								if KingdomAtWar(w, PLAYER_KINGDOM, kingdom_slot) {
+									KingdomMakePeace(w, PLAYER_KINGDOM, kingdom_slot)
+								} else {
+									KingdomDeclareWar(w, PLAYER_KINGDOM, kingdom_slot)
+								}
+							} else if town_slot, found := FogFirstDiscoveredTown(w, kingdom_slot); found {
+								UIFocusTown(w, view, kingdom_slot, town_slot)
+							}
+						}
+					}
+				}
+			case .None:
+			}
+			return true
+		}
+	}
+
+	if w.alerts.count > 0 {
+		panel := UIAlertPanelRect(w)
+		if rl.CheckCollisionPointRec(mouse, panel) {
+			if rl.IsMouseButtonPressed(.LEFT) {
+				row := int((mouse.y-(panel.y+UI_SIDE_HEADER_H))/UI_ALERT_ROW_H)
+				if row >= 0 && row < min(w.alerts.count, UI_ALERT_MAX_ROWS) {
+					if alert, found := WorldAlertNewest(w, row); found {
+						UIFocusAlert(w, view, alert)
+					}
+				}
+			}
+			return true
+		}
+	}
+
+	return false
+}
+
+UIDrawHud :: proc(w: ^World, ui: ^UIState) {
+	hud := UIHudRect()
+	rl.DrawRectangleRec(hud, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(hud, 2, UI_COLOR_BORDER)
+	rl.DrawRectangleLinesEx(
+		rl.Rectangle{hud.x+3, hud.y+3, hud.width-6, hud.height-6},
+		1,
+		UI_COLOR_BORDER_INNER,
+	)
+	rl.DrawRectangleRec(
+		rl.Rectangle{hud.x+3, hud.y+3, 4, hud.height-6},
+		FactionColor(PLAYER_KINGDOM),
+	)
+
+	ui_text(NameKingdomCString(w, PLAYER_KINGDOM), hud.x+14, hud.y+5, UI_COLOR_GOLD)
+
+	hour_f := WorldTimeOfDay(w)
+	hour := int(hour_f)
+	minute := int((hour_f-f32(hour))*60)
+	ui_text(
+		fmt.ctprintf("Day %d   %02d:%02d", w.dayNumber+1, hour, minute),
+		hud.x+14,
+		hud.y+26,
+		UI_COLOR_DIM,
+	)
+
+	war_count := UIWarCount(w)
+	if war_count > 0 {
+		ui_text(
+			fmt.ctprintf("AT WAR: %d", war_count),
+			hud.x+210,
+			hud.y+26,
+			UI_COLOR_ATTACK,
+		)
+	} else {
+		ui_text("At peace", hud.x+210, hud.y+26, UI_COLOR_DIM)
+	}
+
+	towns_rect := UIHudTownsButtonRect()
+	diplomacy_rect := UIHudDiplomacyButtonRect()
+	UIButton(towns_rect, "TOWNS [T]", true)
+	UIButton(diplomacy_rect, "DIPLOMACY [K]", true)
+	if ui.panel == .Towns {
+		rl.DrawRectangleLinesEx(towns_rect, 2, UI_COLOR_GOLD)
+	}
+	if ui.panel == .Diplomacy {
+		rl.DrawRectangleLinesEx(diplomacy_rect, 2, UI_COLOR_GOLD)
+	}
+}
+
+UIDrawSidePanel :: proc(w: ^World, ui: ^UIState) {
+	if ui.panel == .None do return
+	panel := UISidePanelRect(w, ui)
+	rl.DrawRectangleRec(panel, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(panel, 2, UI_COLOR_BORDER)
+	rl.DrawRectangleLinesEx(
+		rl.Rectangle{panel.x+3, panel.y+3, panel.width-6, panel.height-6},
+		1,
+		UI_COLOR_BORDER_INNER,
+	)
+
+	switch ui.panel {
+	case .Towns:
+		ui_text("YOUR TOWNS", panel.x+UI_PAD, panel.y+9, UI_COLOR_GOLD)
+		count := UIPlayerTownCount(w)
+		if count == 0 {
+			ui_text("No towns yet.", panel.x+UI_PAD, panel.y+UI_SIDE_HEADER_H+6, UI_COLOR_DIM)
+			return
+		}
+		visible := min(count, UI_SIDE_MAX_TOWN_ROWS)
+		for row in 0..<visible {
+			town_slot, found := UIPlayerTownAt(w, ui.townScroll+row)
+			if !found do continue
+			town := &w.kingdoms[PLAYER_KINGDOM].towns[town_slot]
+			row_rect := rl.Rectangle{
+				panel.x+8,
+				panel.y+UI_SIDE_HEADER_H+f32(row)*UI_SIDE_ROW_H,
+				panel.width-16,
+				UI_SIDE_ROW_H-2,
+			}
+			hovered := rl.CheckCollisionPointRec(rl.GetMousePosition(), row_rect)
+			if hovered do rl.DrawRectangleRec(row_rect, UI_COLOR_BUTTON_HOVER)
+			ui_text(NameTownCString(w, PLAYER_KINGDOM, town_slot), row_rect.x+6, row_rect.y+4, UI_COLOR_TEXT)
+			ui_text_right(
+				fmt.ctprintf("C%d  W%d", town.citizens, int(town.wood)),
+				row_rect.x+row_rect.width-6,
+				row_rect.y+4,
+				UI_COLOR_DIM,
+			)
+			if UITownUnderAttack(w, PLAYER_KINGDOM, town_slot) {
+				ui_text("!", row_rect.x+row_rect.width-132, row_rect.y+4, UI_COLOR_ATTACK)
+			}
+		}
+		if count > UI_SIDE_MAX_TOWN_ROWS {
+			ui_text(
+				fmt.ctprintf("PgUp/PgDn  %d more", count-UI_SIDE_MAX_TOWN_ROWS),
+				panel.x+UI_PAD,
+				panel.y+panel.height-18,
+				UI_COLOR_DIM,
+			)
+		}
+	case .Diplomacy:
+		ui_text("DIPLOMACY", panel.x+UI_PAD, panel.y+9, UI_COLOR_GOLD)
+		count := UIDiplomacyCount(w)
+		if count == 0 {
+			ui_text("No kingdoms discovered.", panel.x+UI_PAD, panel.y+UI_SIDE_HEADER_H+6, UI_COLOR_DIM)
+			return
+		}
+		for row in 0..<count {
+			kingdom_slot, found := UIDiplomacyAt(w, row)
+			if !found do continue
+			row_rect := rl.Rectangle{
+				panel.x+8,
+				panel.y+UI_SIDE_HEADER_H+f32(row)*UI_DIPLO_ROW_H,
+				panel.width-16,
+				UI_DIPLO_ROW_H-2,
+			}
+			hovered := rl.CheckCollisionPointRec(rl.GetMousePosition(), row_rect)
+			if hovered do rl.DrawRectangleRec(row_rect, UI_COLOR_BUTTON_HOVER)
+			rl.DrawRectangleRec(
+				rl.Rectangle{row_rect.x+6, row_rect.y+8, 10, 24},
+				FactionColor(kingdom_slot),
+			)
+			ui_text(NameKingdomCString(w, kingdom_slot), row_rect.x+24, row_rect.y+4, UI_COLOR_TEXT)
+			at_war := KingdomAtWar(w, PLAYER_KINGDOM, kingdom_slot)
+			ui_text(
+				at_war ? "AT WAR" : "Peace",
+				row_rect.x+24,
+				row_rect.y+24,
+				at_war ? UI_COLOR_ATTACK : UI_COLOR_DIM,
+			)
+			action := UIDiplomacyActionRect(panel, row)
+			UIButton(action, at_war ? "Make Peace" : "Declare War", true)
+		}
+	case .None:
+	}
+}
+
+UIDrawAlerts :: proc(w: ^World) {
+	if w.alerts.count == 0 do return
+	panel := UIAlertPanelRect(w)
+	rl.DrawRectangleRec(panel, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(panel, 2, UI_COLOR_BORDER)
+	rl.DrawRectangleLinesEx(
+		rl.Rectangle{panel.x+3, panel.y+3, panel.width-6, panel.height-6},
+		1,
+		UI_COLOR_BORDER_INNER,
+	)
+	ui_text("ALERTS", panel.x+UI_PAD, panel.y+9, UI_COLOR_GOLD)
+
+	rows := min(w.alerts.count, UI_ALERT_MAX_ROWS)
+	for row in 0..<rows {
+		alert, found := WorldAlertNewest(w, row)
+		if !found do continue
+		row_rect := rl.Rectangle{
+			panel.x+8,
+			panel.y+UI_SIDE_HEADER_H+f32(row)*UI_ALERT_ROW_H,
+			panel.width-16,
+			UI_ALERT_ROW_H-2,
+		}
+		if rl.CheckCollisionPointRec(rl.GetMousePosition(), row_rect) {
+			rl.DrawRectangleRec(row_rect, UI_COLOR_BUTTON_HOVER)
+		}
+		rl.DrawRectangleRec(
+			rl.Rectangle{row_rect.x+2, row_rect.y+4, 3, row_rect.height-8},
+			UIAlertColor(alert.kind),
+		)
+		ui_text(UIAlertText(w, &alert), row_rect.x+12, row_rect.y+4, UI_COLOR_TEXT)
+	}
 }

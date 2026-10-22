@@ -44,6 +44,7 @@ World :: struct {
 	combatSites: #soa [COMBAT_SITE_CAPACITY]CombatSite,
 	combatSiteUsed: [COMBAT_SITE_CAPACITY]bool,
 	fog: FogOfWar,
+	alerts: AlertFeed,
 }
 
 WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerationSettings) -> bool {
@@ -266,6 +267,17 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 			town_slot < 0 || town_slot >= TOWN_CAPACITY ||
 			!w.kingdomUsed[kingdom_slot] || !w.kingdoms[kingdom_slot].townUsed[town_slot] {
 			return false
+		}
+		if kingdom_slot == PLAYER_KINGDOM {
+			WorldAlertAdd(
+				w,
+				.TownLost,
+				kingdom_slot,
+				town_slot,
+				-1,
+				f32(w.buildings[slot].x),
+				f32(w.buildings[slot].y),
+			)
 		}
 
 		if w.kingdoms[kingdom_slot].capitalSlot == town_slot {

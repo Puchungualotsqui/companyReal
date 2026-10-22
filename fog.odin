@@ -38,6 +38,7 @@ FogOfWar :: struct {
 	decorationVariant:   []u8,
 	decorationOffsetX:   []u8,
 	decorationOffsetY:   []u8,
+	enemyAlerted:        [KINGDOMS_CAPACITY]bool,
 
 	visibleTiles:        [dynamic]int,
 }
@@ -172,6 +173,29 @@ FogTownVisible :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
 	hall := TownHallSlot(w, kingdom_slot, town_slot)
 	if hall < 0 do return false
 	return FogBuildingVisible(w, hall)
+}
+
+KingdomDiscovered :: proc(w: ^World, kingdom_slot: int) -> bool {
+	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
+		return false
+	}
+	if kingdom_slot == PLAYER_KINGDOM do return true
+	for town_slot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
+		if FogTownDiscovered(w, kingdom_slot, town_slot) do return true
+	}
+	return false
+}
+
+FogFirstDiscoveredTown :: proc(w: ^World, kingdom_slot: int) -> (int, bool) {
+	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
+		return -1, false
+	}
+	for town_slot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
+		if FogTownDiscovered(w, kingdom_slot, town_slot) do return town_slot, true
+	}
+	return -1, false
 }
 
 // Resolves a remembered town hall under the cursor. Used by attack/defend
@@ -482,6 +506,26 @@ FogUpdate :: proc(w: ^World) {
 	for decoration_slot in 0..<DECORATION_CAPACITY {
 		if !w.decorationUsed[decoration_slot] do continue
 		FogSnapshotDecoration(w, decoration_slot)
+	}
+
+	visible_enemy: [KINGDOMS_CAPACITY]bool
+	for unit_slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil do continue
+		kingdom_slot := w.units[unit_slot].kingdome
+		if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || kingdom_slot == PLAYER_KINGDOM {
+			continue
+		}
+		x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
+		y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
+		if !FogTileVisible(w, x, y) do continue
+		visible_enemy[kingdom_slot] = true
+		if !w.fog.enemyAlerted[kingdom_slot] {
+			w.fog.enemyAlerted[kingdom_slot] = true
+			WorldAlertAdd(w, .EnemySpotted, PLAYER_KINGDOM, -1, kingdom_slot, w.units.x[unit_slot], w.units.y[unit_slot])
+		}
+	}
+	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
+		if !visible_enemy[kingdom_slot] do w.fog.enemyAlerted[kingdom_slot] = false
 	}
 
 	for index := 0; index < len(w.fog.ghosts); {

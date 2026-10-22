@@ -424,6 +424,19 @@ WarriorSwing :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
 		if target.slot < 0 || target.slot >= BUILDING_CAPACITY || !w.buildingUsed[target.slot] {
 			return
 		}
+		building := &w.buildings[target.slot]
+		if building.kingdom == PLAYER_KINGDOM && building.town >= 0 && building.town < TOWN_CAPACITY {
+			width, height := BuildingTileSize(building.type)
+			WorldAlertAdd(
+				w,
+				.UnderAttack,
+				building.kingdom,
+				building.town,
+				unit.kingdome,
+				f32(building.x)+f32(width)*0.5,
+				f32(building.y)+f32(height)*0.5,
+			)
+		}
 		impact_x, impact_y, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
 		w.buildings[target.slot].health -= damage
 		if w.buildings[target.slot].health <= 0 {

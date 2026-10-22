@@ -218,6 +218,9 @@ TownFound :: proc(w: ^World, kingdom_slot, x, y: int) -> bool {
 
 	TownInitialize(w, kingdom_slot, town_slot, hall_slot, x, y, 0)
 	w.kingdoms[kingdom_slot].townUsed[town_slot] = true
+	if kingdom_slot == PLAYER_KINGDOM {
+		WorldAlertAdd(w, .TownFounded, kingdom_slot, town_slot, -1, f32(x), f32(y))
+	}
 
 	for _ in 0..<TOWN_FOUNDING_SETTLERS {
 		TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{})
@@ -465,6 +468,9 @@ TownMilestoneCheck :: proc(w: ^World, kingdom_slot, town_slot: int) {
 	if town.milestonePending || town.milestonesReached >= TOWN_MILESTONE_COUNT do return
 	if town.citizens >= TOWN_MILESTONES[town.milestonesReached] {
 		town.milestonePending = true
+		if kingdom_slot == PLAYER_KINGDOM {
+			WorldAlertAdd(w, .Milestone, kingdom_slot, town_slot, -1, f32(town.x), f32(town.y))
+		}
 	}
 }
 
@@ -584,9 +590,60 @@ KingdomDeclareWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) {
 		kingdomSlotB < 0 || kingdomSlotB >= KINGDOMS_CAPACITY || kingdomSlotA == kingdomSlotB {
 		return
 	}
+	was_at_war := KingdomAtWar(w, kingdomSlotA, kingdomSlotB)
 	w.kingdoms[kingdomSlotA].kingdomWar[kingdomSlotB] = true
 	w.kingdoms[kingdomSlotB].kingdomWar[kingdomSlotA] = true
 	KingdomBreakDefenses(w, kingdomSlotA, kingdomSlotB)
+	if !was_at_war {
+		if kingdomSlotA == PLAYER_KINGDOM {
+			WorldAlertAdd(w, .WarDeclared, kingdomSlotA, -1, kingdomSlotB, 0, 0)
+		} else if kingdomSlotB == PLAYER_KINGDOM {
+			WorldAlertAdd(w, .WarDeclared, kingdomSlotB, -1, kingdomSlotA, 0, 0)
+		}
+	}
+}
+
+// Ends only the war between two kingdoms and removes their standing attack
+// orders in both directions. Other wars are untouched.
+KingdomMakePeace :: proc(w: ^World, kingdom_a, kingdom_b: int) {
+	if kingdom_a < 0 || kingdom_a >= KINGDOMS_CAPACITY ||
+		kingdom_b < 0 || kingdom_b >= KINGDOMS_CAPACITY || kingdom_a == kingdom_b {
+		return
+	}
+	if !w.kingdomUsed[kingdom_a] || !w.kingdomUsed[kingdom_b] do return
+	if !KingdomAtWar(w, kingdom_a, kingdom_b) do return
+
+	w.kingdoms[kingdom_a].kingdomWar[kingdom_b] = false
+	w.kingdoms[kingdom_b].kingdomWar[kingdom_a] = false
+
+	for pair in 0..<2 {
+		attacker := kingdom_a
+		defender := kingdom_b
+		if pair == 1 {
+			attacker = kingdom_b
+			defender = kingdom_a
+		}
+		for town_slot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[attacker].townUsed[town_slot] do continue
+			town := &w.kingdoms[attacker].towns[town_slot]
+			changed := false
+			for target_town in 0..<TOWN_CAPACITY {
+				if !town.attackOrders[defender][target_town] do continue
+				town.attackOrders[defender][target_town] = false
+				if WorldTownExists(w, defender, target_town) {
+					w.kingdoms[defender].towns[target_town].attackedBy[attacker][town_slot] = false
+				}
+				changed = true
+			}
+			if changed do TownOrdersRebuild(w, attacker, town_slot)
+		}
+	}
+
+	if kingdom_a == PLAYER_KINGDOM {
+		WorldAlertAdd(w, .PeaceMade, kingdom_a, -1, kingdom_b, 0, 0)
+	} else if kingdom_b == PLAYER_KINGDOM {
+		WorldAlertAdd(w, .PeaceMade, kingdom_b, -1, kingdom_a, 0, 0)
+	}
 }
 
 KingdomAtWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) -> bool {
