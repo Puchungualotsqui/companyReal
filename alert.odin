@@ -30,7 +30,7 @@ AlertFeed :: struct {
 }
 
 WorldAlertAdd :: proc(w: ^World, kind: AlertKind, kingdom, town, other: int, x, y: f32) {
-	if kingdom != PLAYER_KINGDOM do return
+	if w.observerKingdom < 0 || kingdom != w.observerKingdom do return
 
 	// Damage arrives many times per second; one alert per town is enough.
 	if kind == .UnderAttack {

@@ -218,7 +218,7 @@ TownFound :: proc(w: ^World, kingdom_slot, x, y: int) -> bool {
 
 	TownInitialize(w, kingdom_slot, town_slot, hall_slot, x, y, 0)
 	w.kingdoms[kingdom_slot].townUsed[town_slot] = true
-	if kingdom_slot == PLAYER_KINGDOM {
+	if kingdom_slot == w.observerKingdom {
 		WorldAlertAdd(w, .TownFounded, kingdom_slot, town_slot, -1, f32(x), f32(y))
 	}
 
@@ -248,7 +248,7 @@ TownFoundingFailure :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> Pl
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return .NoTown
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if town.constructionActive && town.construction.kind == .TownHall do return .AlreadyFounding
-	if kingdom_slot == PLAYER_KINGDOM {
+	if kingdom_slot == w.observerKingdom {
 		width, height := BuildingTileSize(TownHall{})
 		if !FogRectExplored(w, x, y, width, height) do return .Unexplored
 	}
@@ -498,7 +498,7 @@ TownMilestoneCheck :: proc(w: ^World, kingdom_slot, town_slot: int) {
 	if town.milestonePending || town.milestonesReached >= TOWN_MILESTONE_COUNT do return
 	if town.citizens >= TOWN_MILESTONES[town.milestonesReached] {
 		town.milestonePending = true
-		if kingdom_slot == PLAYER_KINGDOM {
+		if kingdom_slot == w.observerKingdom {
 			WorldAlertAdd(w, .Milestone, kingdom_slot, town_slot, -1, f32(town.x), f32(town.y))
 		}
 	}
@@ -625,9 +625,9 @@ KingdomDeclareWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) {
 	w.kingdoms[kingdomSlotB].kingdomWar[kingdomSlotA] = true
 	KingdomBreakDefenses(w, kingdomSlotA, kingdomSlotB)
 	if !was_at_war {
-		if kingdomSlotA == PLAYER_KINGDOM {
+		if kingdomSlotA == w.observerKingdom {
 			WorldAlertAdd(w, .WarDeclared, kingdomSlotA, -1, kingdomSlotB, 0, 0)
-		} else if kingdomSlotB == PLAYER_KINGDOM {
+		} else if kingdomSlotB == w.observerKingdom {
 			WorldAlertAdd(w, .WarDeclared, kingdomSlotB, -1, kingdomSlotA, 0, 0)
 		}
 	}
@@ -669,9 +669,9 @@ KingdomMakePeace :: proc(w: ^World, kingdom_a, kingdom_b: int) {
 		}
 	}
 
-	if kingdom_a == PLAYER_KINGDOM {
+	if kingdom_a == w.observerKingdom {
 		WorldAlertAdd(w, .PeaceMade, kingdom_a, -1, kingdom_b, 0, 0)
-	} else if kingdom_b == PLAYER_KINGDOM {
+	} else if kingdom_b == w.observerKingdom {
 		WorldAlertAdd(w, .PeaceMade, kingdom_b, -1, kingdom_a, 0, 0)
 	}
 }

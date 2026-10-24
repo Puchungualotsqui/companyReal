@@ -137,7 +137,8 @@ FogRectExplored :: proc(w: ^World, x, y, width, height: int) -> bool {
 
 FogUnitVisible :: proc(w: ^World, unit_slot: int) -> bool {
 	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return false
-	if w.units[unit_slot].kingdome == PLAYER_KINGDOM do return true
+	if w.observerKingdom < 0 do return true
+	if w.units[unit_slot].kingdome == w.observerKingdom do return true
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
 	if world_width <= 0 || world_height <= 0 do return false
@@ -150,7 +151,8 @@ FogBuildingVisible :: proc(w: ^World, building_slot: int) -> bool {
 	if building_slot < 0 || building_slot >= BUILDING_CAPACITY || !w.buildingUsed[building_slot] {
 		return false
 	}
-	if w.buildings[building_slot].kingdom == PLAYER_KINGDOM do return true
+	if w.observerKingdom < 0 do return true
+	if w.buildings[building_slot].kingdom == w.observerKingdom do return true
 	width, height := BuildingTileSize(w.buildings[building_slot].type)
 	return FogRectVisible(
 		w,
@@ -179,7 +181,8 @@ KingdomDiscovered :: proc(w: ^World, kingdom_slot: int) -> bool {
 	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
 		return false
 	}
-	if kingdom_slot == PLAYER_KINGDOM do return true
+	if w.observerKingdom < 0 do return true
+	if kingdom_slot == w.observerKingdom do return true
 	for town_slot in 0..<TOWN_CAPACITY {
 		if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
 		if FogTownDiscovered(w, kingdom_slot, town_slot) do return true
@@ -296,7 +299,7 @@ FogBuildingDespawn :: proc(w: ^World, building_slot: int) {
 	if anchor < 0 do return
 
 	if FogRectVisible(w, building.x, building.y, width, height) ||
-		building.kingdom == PLAYER_KINGDOM {
+		building.kingdom == w.observerKingdom {
 		for tile_x in building.x ..< building.x+width {
 			for tile_y in building.y ..< building.y+height {
 				index := FogTileIndex(w, tile_x, tile_y)
@@ -404,12 +407,26 @@ FogUpdate :: proc(w: ^World) {
 	count := int(w.maxX)*int(w.maxY)
 	if count <= 0 || len(w.fog.visible) != count do return
 
+	observer := w.observerKingdom
+	if observer < 0 {
+		// Spectators see the whole board; memory snapshots are unnecessary.
+		for i in 0 ..< count {
+			w.fog.visible[i] = true
+			w.fog.explored[i] = true
+		}
+		clear(&w.fog.visibleTiles)
+		clear(&w.fog.ghosts)
+		for i in 0 ..< KINGDOMS_CAPACITY do w.fog.enemyAlerted[i] = false
+		w.fog.revision += 1
+		return
+	}
+
 	for i in 0..<count do w.fog.visible[i] = false
 	clear(&w.fog.visibleTiles)
 
 	for unit_slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil do continue
-		if w.units[unit_slot].kingdome != PLAYER_KINGDOM do continue
+		if w.units[unit_slot].kingdome != observer do continue
 		vision := UnitDefaultVision(w.units[unit_slot].type)
 		x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
 		y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
@@ -418,7 +435,7 @@ FogUpdate :: proc(w: ^World) {
 
 	for building_slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[building_slot] do continue
-		if w.buildings[building_slot].kingdom != PLAYER_KINGDOM do continue
+		if w.buildings[building_slot].kingdom != observer do continue
 		building := &w.buildings[building_slot]
 		width, height := BuildingTileSize(building.type)
 		vision := BuildingVision(BuildingKindOf(building.type))
@@ -426,7 +443,7 @@ FogUpdate :: proc(w: ^World) {
 	}
 
 	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] || kingdom_slot != PLAYER_KINGDOM do continue
+		if !w.kingdomUsed[kingdom_slot] || kingdom_slot != observer do continue
 		for town_slot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
 			site := &w.kingdoms[kingdom_slot].towns[town_slot]
@@ -442,7 +459,7 @@ FogUpdate :: proc(w: ^World) {
 	}
 
 	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] || kingdom_slot != PLAYER_KINGDOM do continue
+		if !w.kingdomUsed[kingdom_slot] || kingdom_slot != observer do continue
 		width, height := BuildingTileSize(TownHall{})
 		for town_slot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
@@ -512,7 +529,7 @@ FogUpdate :: proc(w: ^World) {
 	for unit_slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil do continue
 		kingdom_slot := w.units[unit_slot].kingdome
-		if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || kingdom_slot == PLAYER_KINGDOM {
+		if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || kingdom_slot == observer {
 			continue
 		}
 		x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
@@ -521,7 +538,7 @@ FogUpdate :: proc(w: ^World) {
 		visible_enemy[kingdom_slot] = true
 		if !w.fog.enemyAlerted[kingdom_slot] {
 			w.fog.enemyAlerted[kingdom_slot] = true
-			WorldAlertAdd(w, .EnemySpotted, PLAYER_KINGDOM, -1, kingdom_slot, w.units.x[unit_slot], w.units.y[unit_slot])
+			WorldAlertAdd(w, .EnemySpotted, observer, -1, kingdom_slot, w.units.x[unit_slot], w.units.y[unit_slot])
 		}
 	}
 	for kingdom_slot in 0..<KINGDOMS_CAPACITY {

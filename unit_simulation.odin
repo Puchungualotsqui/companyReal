@@ -145,7 +145,7 @@ UnitFindExplorationTarget :: proc(w: ^World, unit_slot, journey: int) -> (int, i
 	unit_x := int(WorldWrapPosition(w.units.x[unit_slot], f32(world_width)))
 	unit_y := int(WorldWrapPosition(w.units.y[unit_slot], f32(world_height)))
 	unit_type := w.units[unit_slot].type
-	is_player := w.units[unit_slot].kingdome == PLAYER_KINGDOM
+	is_player := w.observerKingdom >= 0 && w.units[unit_slot].kingdome == w.observerKingdom
 	min_distance_squared := EXPLORER_SEARCH_MIN_DISTANCE*EXPLORER_SEARCH_MIN_DISTANCE
 	seed := u64(unit_slot)+u64(journey)*7919
 

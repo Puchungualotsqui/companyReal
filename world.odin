@@ -1,5 +1,7 @@
 package main
 
+import rl "vendor:raylib"
+
 UNIT_CAPACITY :: 10_000
 BUILDING_CAPACITY :: 5_000
 KINGDOMS_CAPACITY :: 5
@@ -26,6 +28,12 @@ World :: struct {
 	particleRandom: u64,
 	kingdoms: #soa [KINGDOMS_CAPACITY]Kingdom,
 	kingdomUsed: [KINGDOMS_CAPACITY]bool,
+	kingdomColors: [KINGDOMS_CAPACITY]rl.Color,
+	controllers: [KINGDOMS_CAPACITY]KingdomController,
+	playerKingdom: int,
+	observerKingdom: int,
+	gameOver: bool,
+	winnerKingdom: int,
 	usedTownName: [len(TownCulture)][TOWN_NAME_POOL_MAX]bool,
 	seed: u64,
 	maxX, maxY: uint,
@@ -83,7 +91,11 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	}
 	WorldGenerate(w, settings)
 	ok := WorldSpawnInitialKingdoms(w, int(kingdoms), settings.seed)
-	if ok do FogUpdate(w)
+	if ok {
+		AssignKingdomColors(0, KINGDOM_COLOR_PALETTE[0], &w.kingdomColors)
+		WorldConfigureGame(w, 0, false)
+		FogUpdate(w)
+	}
 	return ok
 }
 
@@ -284,7 +296,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 			!w.kingdomUsed[kingdom_slot] || !w.kingdoms[kingdom_slot].townUsed[town_slot] {
 			return false
 		}
-		if kingdom_slot == PLAYER_KINGDOM {
+		if kingdom_slot == w.observerKingdom {
 			WorldAlertAdd(
 				w,
 				.TownLost,

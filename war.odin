@@ -441,7 +441,7 @@ WarriorSwing :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
 			return
 		}
 		building := &w.buildings[target.slot]
-		if building.kingdom == PLAYER_KINGDOM && building.town >= 0 && building.town < TOWN_CAPACITY {
+		if building.kingdom == w.observerKingdom && building.town >= 0 && building.town < TOWN_CAPACITY {
 			width, height := BuildingTileSize(building.type)
 			WorldAlertAdd(
 				w,

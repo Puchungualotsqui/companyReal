@@ -60,7 +60,7 @@ TownCombatConstructionFailure :: proc(w: ^World, kingdom_slot, town_slot: int, k
 	if !BuildingIsCombat(kind) do return .NotCombat
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if !(kind in town.unlockedBuildings) do return .NotUnlocked
-	if kingdom_slot == PLAYER_KINGDOM {
+	if kingdom_slot == w.observerKingdom {
 		width, height := BuildingTileSize(BuildingTypeFromKind(kind))
 		if !FogRectExplored(w, x, y, width, height) do return .Unexplored
 	}

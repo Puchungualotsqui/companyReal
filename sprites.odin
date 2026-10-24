@@ -102,24 +102,57 @@ ALL_UNIT_KINDS := [13]UnitKind{
 	.Explorer,
 }
 
-KingdomColor :: proc(kingdom: int) -> rl.Color {
-	switch kingdom {
-	case 0:
-		return rl.Color{74, 126, 204, 255}
-	case 1:
-		return rl.Color{198, 74, 72, 255}
-	case 2:
-		return rl.Color{86, 158, 96, 255}
-	case 3:
-		return rl.Color{150, 104, 196, 255}
-	case 4:
-		return rl.Color{214, 164, 72, 255}
-	}
-	return rl.Color{150, 150, 158, 255}
+KINGDOM_COLOR_PALETTE := [8]rl.Color {
+	rl.Color{74, 126, 204, 255},
+	rl.Color{198, 74, 72, 255},
+	rl.Color{86, 158, 96, 255},
+	rl.Color{150, 104, 196, 255},
+	rl.Color{214, 164, 72, 255},
+	rl.Color{72, 168, 160, 255},
+	rl.Color{212, 116, 64, 255},
+	rl.Color{196, 104, 148, 255},
 }
 
-FactionColor :: proc(faction: int) -> rl.Color {
-	if faction >= 0 && faction < KINGDOMS_CAPACITY do return KingdomColor(faction)
+SameColor :: proc(a, b: rl.Color) -> bool {
+	return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a
+}
+
+// Assigns the chosen local colour and gives every other kingdom a distinct
+// palette colour. Called before sprites are generated so accents match.
+AssignKingdomColors :: proc(
+	local_kingdom: int,
+	local_color: rl.Color,
+	colors: ^[KINGDOMS_CAPACITY]rl.Color,
+) {
+	used: [len(KINGDOM_COLOR_PALETTE)]bool
+
+	for kingdom in 0 ..< KINGDOMS_CAPACITY {
+		colors[kingdom] = KINGDOM_COLOR_PALETTE[kingdom%len(KINGDOM_COLOR_PALETTE)]
+	}
+
+	if local_kingdom < 0 || local_kingdom >= KINGDOMS_CAPACITY {
+		return
+	}
+
+	colors[local_kingdom] = local_color
+	for color, index in KINGDOM_COLOR_PALETTE {
+		if SameColor(color, local_color) do used[index] = true
+	}
+
+	next := 0
+	for kingdom in 0 ..< KINGDOMS_CAPACITY {
+		if kingdom == local_kingdom do continue
+		for next < len(used) && used[next] do next += 1
+		if next < len(used) {
+			colors[kingdom] = KINGDOM_COLOR_PALETTE[next]
+			used[next] = true
+			next += 1
+		}
+	}
+}
+
+FactionColor :: proc(w: ^World, faction: int) -> rl.Color {
+	if faction >= 0 && faction < KINGDOMS_CAPACITY do return w.kingdomColors[faction]
 	return rl.Color{150, 150, 158, 255}
 }
 
@@ -1532,12 +1565,12 @@ SpriteSet :: struct {
 	glow:         rl.Texture2D,
 }
 
-SpriteSetInit :: proc() -> SpriteSet {
+SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 	set: SpriteSet
 	set.shadow = create_shadow_texture()
 	set.glow = create_glow_texture()
 	for faction in 0 ..< SPRITE_FACTION_COUNT {
-		accent := FactionColor(faction)
+		accent := FactionColor(w, faction)
 		for kind in ALL_BUILDING_KINDS {
 			art := draw_building_sprite(kind, accent)
 			art_grain(&art, u64(kind)+1)

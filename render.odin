@@ -52,7 +52,7 @@ WorldViewInit :: proc(w: ^World) -> WorldView {
 	view := WorldView{
 		renderer = WorldRenderer{
 			terrain = TerrainRendererInit(w),
-			sprites = SpriteSetInit(),
+			sprites = SpriteSetInit(w),
 			items = make([dynamic]RenderItem, 0, 2048),
 			shadows = make([dynamic]RenderQuad, 0, 512),
 			lights = make([dynamic]RenderQuad, 0, 256),
@@ -724,7 +724,7 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 					unit_y+1 < min_y || unit_y-scale-1 > max_y {
 					continue
 				}
-				if w.units[unit_slot].kingdome != PLAYER_KINGDOM &&
+				if w.units[unit_slot].kingdome != w.observerKingdom &&
 					!FogTileVisible(w, int(unit_x), int(unit_y)) {
 					continue
 				}
