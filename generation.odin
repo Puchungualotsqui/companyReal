@@ -440,72 +440,278 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdom_count: int, seed: u64) -> b
 
 	chosen_x: [KINGDOMS_CAPACITY]int
 	chosen_y: [KINGDOMS_CAPACITY]int
-	for kingdom_index in 0..<kingdom_count {
-		best_x := -1
-		best_y := -1
-		best_distance := -1
-		best_tie_break := f32(-1.0)
 
-		for x in 0..<world_width {
-			for y in 0..<world_height {
-				if !WorldBuildingOverTile(w, x, y, TownHall{}) do continue
+	// Capitals sit on evenly spaced rings around the map centre. Land is
+	// irregular, so several ring radii and rotations are sampled; every capital
+	// snaps to the nearest valid shore and the layout whose resulting pair
+	// distances are the most uniform wins. That keeps starting kingdoms about
+	// the same distance apart instead of collapsing onto one coastline.
+	center_x := f32(world_width)*0.5
+	center_y := f32(world_height)*0.5
+	base_radius := f32(min(world_width, world_height))*0.33
+	rotation := WorldNoiseHash(0, 0, seed+0xCA917A1)*6.2831853
+	minimum_spacing := f32(TOWN_FOUNDING_MIN_DISTANCE)
+	minimum_spacing_squared := minimum_spacing*minimum_spacing
+	half_width := f32(building_width)*0.5
+	half_height := f32(building_height)*0.5
 
-				is_occupied := false
-				for tile_x in x ..< (x + building_width) {
-					for tile_y in y ..< (y + building_height) {
-						if occupied[tile_x*world_height+tile_y] {
-							is_occupied = true
-							break
+	// One candidate per coarse block is plenty: the chosen site only needs to
+	// be on the right side of the map, and thinning the list keeps the ring
+	// search cheap even on the biggest maps.
+	SITE_BLOCK :: 4
+	block_width := (world_width+SITE_BLOCK-1)/SITE_BLOCK
+	block_height := (world_height+SITE_BLOCK-1)/SITE_BLOCK
+	site_x := make([dynamic]int, 0, block_width*block_height/2)
+	site_y := make([dynamic]int, 0, block_width*block_height/2)
+	defer delete(site_x)
+	defer delete(site_y)
+
+	for block_x in 0..<block_width {
+		for block_y in 0..<block_height {
+			block_site := -1
+			for offset_x in 0..<SITE_BLOCK {
+				if block_site >= 0 do break
+				x := block_x*SITE_BLOCK+offset_x
+				if x >= world_width do break
+				for offset_y in 0..<SITE_BLOCK {
+					y := block_y*SITE_BLOCK+offset_y
+					if y >= world_height do break
+					if !WorldBuildingOverTile(w, x, y, TownHall{}) do continue
+
+					is_occupied := false
+					for tile_x in x ..< (x + building_width) {
+						for tile_y in y ..< (y + building_height) {
+							if occupied[tile_x*world_height+tile_y] {
+								is_occupied = true
+								break
+							}
 						}
+						if is_occupied do break
 					}
-					if is_occupied do break
-				}
-				if is_occupied do continue
+					if is_occupied do continue
 
-				candidate_distance := 0
-				if kingdom_index == 0 {
-					candidate_distance = int(WorldNoiseHash(x, y, seed+u64(kingdom_index)+101)*1_000_000)
-				} else {
-					candidate_distance = world_width*world_width + world_height*world_height
-					center_x := x + building_width/2
-					center_y := y + building_height/2
-					for previous in 0..<kingdom_index {
-						delta_x := center_x - (chosen_x[previous] + building_width/2)
-						delta_y := center_y - (chosen_y[previous] + building_height/2)
-						if delta_x < 0 do delta_x = -delta_x
-						if delta_y < 0 do delta_y = -delta_y
-						delta_x = min(delta_x, world_width-delta_x)
-						delta_y = min(delta_y, world_height-delta_y)
-						distance := delta_x*delta_x + delta_y*delta_y
-						if distance < candidate_distance do candidate_distance = distance
+					block_site = len(site_x)
+					append(&site_x, x)
+					append(&site_y, y)
+					break
+				}
+			}
+		}
+	}
+	if len(site_x) < kingdom_count do return false
+
+	LAYOUT_RADII :: 3
+	LAYOUT_ROTATIONS :: 4
+	LAYOUT_COUNT :: LAYOUT_RADII*LAYOUT_ROTATIONS
+
+	layout_x: [LAYOUT_COUNT][KINGDOMS_CAPACITY]int
+	layout_y: [LAYOUT_COUNT][KINGDOMS_CAPACITY]int
+	best_layout := -1
+	best_layout_score := f32(1e30)
+
+	for variant in 0..<LAYOUT_COUNT {
+		radius_scale := 0.82+0.36*f32(variant%LAYOUT_RADII)/f32(LAYOUT_RADII-1)
+		phase := rotation+6.2831853*f32(variant/LAYOUT_RADII) /
+			f32(kingdom_count*LAYOUT_ROTATIONS)
+		radius := base_radius*radius_scale
+
+		variant_ok := true
+		for kingdom_index in 0..<kingdom_count {
+			angle := phase+6.2831853*f32(kingdom_index)/f32(kingdom_count)
+			target_x := center_x+math.cos(angle)*radius
+			target_y := center_y+math.sin(angle)*radius
+
+			best_site := -1
+			best_score := f32(1e30)
+			best_tie_break := f32(-1.0)
+			for site in 0..<len(site_x) {
+				candidate_x := f32(site_x[site])+half_width
+				candidate_y := f32(site_y[site])+half_height
+				delta_x := WorldShortestWrappedDelta(candidate_x-target_x, f32(world_width))
+				delta_y := WorldShortestWrappedDelta(candidate_y-target_y, f32(world_height))
+				score := (delta_x*delta_x+delta_y*delta_y)/(radius*radius)
+
+				for previous in 0..<kingdom_index {
+					previous_x := f32(layout_x[variant][previous])+half_width
+					previous_y := f32(layout_y[variant][previous])+half_height
+					spacing_x := WorldShortestWrappedDelta(candidate_x-previous_x, f32(world_width))
+					spacing_y := WorldShortestWrappedDelta(candidate_y-previous_y, f32(world_height))
+					spacing_squared := spacing_x*spacing_x+spacing_y*spacing_y
+					if spacing_squared < minimum_spacing_squared {
+						score += 1000*(1-spacing_squared/minimum_spacing_squared)
+						if spacing_squared < f32(building_width*building_width) do score += 1_000_000
 					}
 				}
-				tie_break := WorldNoiseHash(x, y, seed+u64(kingdom_index)*7919+313)
-				if candidate_distance > best_distance ||
-					(candidate_distance == best_distance && tie_break > best_tie_break) {
-					best_x = x
-					best_y = y
-					best_distance = candidate_distance
+
+				tie_break := WorldNoiseHash(
+					site_x[site],
+					site_y[site],
+					seed+u64(kingdom_index)*7919+313,
+				)
+				if score < best_score || (score == best_score && tie_break > best_tie_break) {
+					best_site = site
+					best_score = score
 					best_tie_break = tie_break
 				}
 			}
-		}
 
-		if best_x < 0 do return false
-		chosen_x[kingdom_index] = best_x
-		chosen_y[kingdom_index] = best_y
-		for x in best_x ..< (best_x + building_width) {
-			for y in best_y ..< (best_y + building_height) {
-				occupied[x*world_height+y] = true
+			if best_site < 0 {
+				variant_ok = false
+				break
+			}
+			layout_x[variant][kingdom_index] = site_x[best_site]
+			layout_y[variant][kingdom_index] = site_y[best_site]
+		}
+		if !variant_ok do continue
+
+		// Prefer the layout with the smallest spread between its shortest and
+		// longest capital-to-capital distance, with an extra push if any pair
+		// ended up closer than the minimum founding distance.
+		layout_score := f32(0)
+		if kingdom_count > 1 {
+			minimum_pair := f32(1e30)
+			maximum_pair := f32(0)
+			for a in 0..<kingdom_count {
+				for b in a+1..<kingdom_count {
+					delta_x := WorldShortestWrappedDelta(
+						f32(layout_x[variant][a])-f32(layout_x[variant][b]),
+						f32(world_width),
+					)
+					delta_y := WorldShortestWrappedDelta(
+						f32(layout_y[variant][a])-f32(layout_y[variant][b]),
+						f32(world_height),
+					)
+					distance := math.sqrt(delta_x*delta_x+delta_y*delta_y)
+					minimum_pair = min(minimum_pair, distance)
+					maximum_pair = max(maximum_pair, distance)
+				}
+			}
+			layout_score = maximum_pair-minimum_pair
+			if minimum_pair < minimum_spacing {
+				layout_score += (minimum_spacing-minimum_pair)*8
 			}
 		}
+
+		if best_layout < 0 || layout_score < best_layout_score {
+			best_layout = variant
+			best_layout_score = layout_score
+		}
+	}
+
+	if best_layout < 0 do return false
+
+	// Relaxation: greedy nearest-land snapping can leave one capital much
+	// closer to its neighbour than the rest. A few passes re-pick each capital
+	// while directly minimising the spread between the shortest and longest
+	// pair distance, anchored to its ring position so the capitals stay evenly
+	// distributed around the map.
+	best_phase := rotation+6.2831853*f32(best_layout/LAYOUT_RADII) /
+		f32(kingdom_count*LAYOUT_ROTATIONS)
+	best_radius_scale := 0.82+0.36*f32(best_layout%LAYOUT_RADII)/f32(LAYOUT_RADII-1)
+	best_radius := base_radius*best_radius_scale
+
+	if kingdom_count > 2 {
+		for _ in 0..<3 {
+			for kingdom_index in 0..<kingdom_count {
+				other_min := f32(1e30)
+				other_max := f32(0)
+				for a in 0..<kingdom_count {
+					if a == kingdom_index do continue
+					for b in a+1..<kingdom_count {
+						if b == kingdom_index do continue
+						delta_x := WorldShortestWrappedDelta(
+							f32(layout_x[best_layout][a])-f32(layout_x[best_layout][b]),
+							f32(world_width),
+						)
+						delta_y := WorldShortestWrappedDelta(
+							f32(layout_y[best_layout][a])-f32(layout_y[best_layout][b]),
+							f32(world_height),
+						)
+						distance := math.sqrt(delta_x*delta_x+delta_y*delta_y)
+						other_min = min(other_min, distance)
+						other_max = max(other_max, distance)
+					}
+				}
+
+				angle := best_phase+6.2831853*f32(kingdom_index)/f32(kingdom_count)
+				anchor_x := center_x+math.cos(angle)*best_radius
+				anchor_y := center_y+math.sin(angle)*best_radius
+
+				best_site := -1
+				best_score := f32(1e30)
+				best_tie_break := f32(-1.0)
+				for site in 0..<len(site_x) {
+					candidate_x := f32(site_x[site])+half_width
+					candidate_y := f32(site_y[site])+half_height
+
+					too_close := false
+					nearest := f32(1e30)
+					farthest := f32(0)
+					for other in 0..<kingdom_count {
+						if other == kingdom_index do continue
+						delta_x := WorldShortestWrappedDelta(
+							candidate_x-(f32(layout_x[best_layout][other])+half_width),
+							f32(world_width),
+						)
+						delta_y := WorldShortestWrappedDelta(
+							candidate_y-(f32(layout_y[best_layout][other])+half_height),
+							f32(world_height),
+						)
+						distance := math.sqrt(delta_x*delta_x+delta_y*delta_y)
+						if distance < f32(building_width) {
+							too_close = true
+							break
+						}
+						nearest = min(nearest, distance)
+						farthest = max(farthest, distance)
+					}
+					if too_close do continue
+
+					spread := max(farthest, other_max)-min(nearest, other_min)
+					delta_target_x := WorldShortestWrappedDelta(
+						candidate_x-anchor_x,
+						f32(world_width),
+					)
+					delta_target_y := WorldShortestWrappedDelta(
+						candidate_y-anchor_y,
+						f32(world_height),
+					)
+					anchor_cost :=
+						(delta_target_x*delta_target_x+delta_target_y*delta_target_y) /
+						(best_radius*best_radius)*200
+					score := spread+anchor_cost
+
+					tie_break := WorldNoiseHash(
+						site_x[site],
+						site_y[site],
+						seed+u64(kingdom_index)*7919+313,
+					)
+					if score < best_score ||
+					   (score == best_score && tie_break > best_tie_break) {
+						best_site = site
+						best_score = score
+						best_tie_break = tie_break
+					}
+				}
+
+				if best_site >= 0 {
+					layout_x[best_layout][kingdom_index] = site_x[best_site]
+					layout_y[best_layout][kingdom_index] = site_y[best_site]
+				}
+			}
+		}
+	}
+
+	for kingdom_index in 0..<kingdom_count {
+		chosen_x[kingdom_index] = layout_x[best_layout][kingdom_index]
+		chosen_y[kingdom_index] = layout_y[best_layout][kingdom_index]
 	}
 
 	for kingdom_index in 0..<kingdom_count {
 		if _, ok := KingdomSpawn(w, chosen_x[kingdom_index], chosen_y[kingdom_index]); !ok {
 			return false
 		}
-		if !TownSpawnInitialVillagers(w, kingdom_index, w.kingdoms[kingdom_index].capitalSlot) {
+		if !TownSpawnInitialPopulation(w, kingdom_index, w.kingdoms[kingdom_index].capitalSlot) {
 			return false
 		}
 	}

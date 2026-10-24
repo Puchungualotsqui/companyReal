@@ -86,6 +86,8 @@ UI_TEXT_BUTTON_H : f32 : 26
 
 UI_TOWN_TABS := [2]cstring{"TOWN", "ORDERS"}
 
+UI_EFFECT_ROW_H : f32 : 30
+
 UI_COMMAND_BUTTON_W : f32 : 84
 UI_COMMAND_BUTTON_H : f32 : 68
 UI_COMMAND_GAP : f32 : 12
@@ -96,6 +98,8 @@ UI_COLOR_BUILD := rl.Color{214, 178, 92, 220}
 UI_COLOR_FOUND := rl.Color{196, 156, 226, 220}
 UI_COLOR_ATTACK_FAINT := rl.Color{226, 96, 76, 140}
 UI_COLOR_DEFEND_FAINT := rl.Color{106, 178, 224, 140}
+UI_COLOR_GOOD := rl.Color{112, 200, 126, 255}
+UI_COLOR_BAD := rl.Color{226, 96, 76, 255}
 
 UI_CONVERSION_KINDS := [len(UnitKind)-1]UnitKind{
 	.Builder,
@@ -121,6 +125,7 @@ UI_COMBAT_BUILD_KINDS := [4]BuildingKind{
 
 UIStat :: struct {
 	label, value: cstring,
+	color:       rl.Color,
 }
 
 UI_FONT_BODY_DATA :: #load("assets/fonts/PixelifySans-Regular.ttf")
@@ -670,6 +675,15 @@ UIStatCount :: proc(w: ^World, selection: Selection) -> int {
 	return 0
 }
 
+UIUnitEffectCount :: proc(w: ^World, unit_slot: int) -> int {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return 0
+	count := 0
+	for effect in ALL_UNIT_EFFECTS {
+		if w.units[unit_slot].effects[effect] do count += 1
+	}
+	return count
+}
+
 UIPanelHeight :: proc(w: ^World, ui: ^UIState) -> f32 {
 	if ui.selection.kind == .None do return 0
 	if UISelectionTownHall(w, ui.selection) {
@@ -685,7 +699,11 @@ UIPanelHeight :: proc(w: ^World, ui: ^UIState) -> f32 {
 		}
 		return UI_GROWTH_Y+UI_GROWTH_H+UI_PAD
 	}
-	return UI_STAT_Y + f32(UIStatCount(w, ui.selection))*UI_STAT_H + UI_PAD
+	height := UI_STAT_Y + f32(UIStatCount(w, ui.selection))*UI_STAT_H + UI_PAD
+	if ui.selection.kind == .Unit && UIUnitEffectCount(w, ui.selection.slot) > 0 {
+		height += UI_EFFECT_ROW_H
+	}
+	return height
 }
 
 UIPanelRect :: proc(w: ^World, ui: ^UIState) -> rl.Rectangle {
@@ -1530,21 +1548,29 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 			column := i/4
 			row := i%4
 			y := panel.y+UI_STAT_Y+f32(row)*UI_STAT_H
+			value_color := stats[i].color
+			if value_color.a == 0 do value_color = UI_COLOR_TEXT
 			if column == 0 {
 				ui_text(stats[i].label, left_label_x, y, UI_COLOR_DIM)
-				ui_text_right(stats[i].value, left_value_x, y, UI_COLOR_TEXT)
+				ui_text_right(stats[i].value, left_value_x, y, value_color)
 			} else {
 				ui_text(stats[i].label, right_label_x, y, UI_COLOR_DIM)
-				ui_text_right(stats[i].value, right_value_x, y, UI_COLOR_TEXT)
+				ui_text_right(stats[i].value, right_value_x, y, value_color)
 			}
 		}
 		UIDrawConstructionStatus(w, panel, kingdom, town)
 	} else {
 		for i in 0..<stat_count {
 			y := panel.y+UI_STAT_Y+f32(i)*UI_STAT_H
+			value_color := stats[i].color
+			if value_color.a == 0 do value_color = UI_COLOR_TEXT
 			ui_text(stats[i].label, panel.x+UI_PAD, y, UI_COLOR_DIM)
-			ui_text(stats[i].value, panel.x+UI_PAD+104, y, UI_COLOR_TEXT)
+			ui_text(stats[i].value, panel.x+UI_PAD+104, y, value_color)
 		}
+	}
+
+	if ui.selection.kind == .Unit {
+		UIDrawUnitEffects(w, renderer, panel, ui.selection.slot)
 	}
 
 	if UISelectionTownHall(w, ui.selection) {
@@ -1621,43 +1647,49 @@ UIDrawPortrait :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, box: r
 	rl.DrawTexturePro(texture, source, dest, rl.Vector2{0, 0}, 0, rl.WHITE)
 }
 
-UIResourceStatus :: proc(potential, shortage: f32) -> cstring {
-	if shortage > 0.01 do return fmt.ctprintf("%d  -%d%%", int(potential), int(shortage*100+0.5))
-	return fmt.ctprintf("%d  ok", int(potential))
+UIResourceCoverage :: proc(potential, need: f32) -> (cstring, rl.Color) {
+	if need <= 0 do return "100%", UI_COLOR_GOOD
+	ratio := clamp(potential/need, 0, 1)
+	percent := int(math.floor(ratio*100+0.0001))
+	color := UI_COLOR_GOOD
+	if ratio < 0.999 do color = UI_COLOR_BAD
+	return fmt.ctprintf("%d%%", percent), color
 }
 
 UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[8]UIStat) -> int {
 	switch ui.selection.kind {
 	case .Unit:
 		unit := w.units[ui.selection.slot]
-		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(unit.health), int(UnitDefaultHealth(unit.type)))}
-		stats[1] = {"Task", UIUnitStateName(unit.state)}
+		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(unit.health), int(UnitDefaultHealth(unit.type))), UI_COLOR_TEXT}
+		stats[1] = {"Task", UIUnitStateName(unit.state), UI_COLOR_TEXT}
 		return 2
 
 	case .Building:
 		building := w.buildings[ui.selection.slot]
 		kind := BuildingKindOf(building.type)
-		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(building.health), int(BuildingDefaultHealth(building.type)))}
+		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(building.health), int(BuildingDefaultHealth(building.type))), UI_COLOR_TEXT}
 		if kind == .TownHall {
 			t := &w.kingdoms[building.kingdom].towns[building.town]
-			stats[1] = {"Citizens", fmt.ctprintf("%d", t.citizens)}
-			stats[2] = {"Wood", fmt.ctprintf("%d", int(t.wood))}
+			stats[1] = {"Citizens", fmt.ctprintf("%d", t.citizens), UI_COLOR_TEXT}
+			stats[2] = {"Wood", fmt.ctprintf("%d", int(t.wood)), UI_COLOR_TEXT}
 			if t.milestonesReached < TOWN_MILESTONE_COUNT {
 				stats[3] = {
 					"Milestone",
 					fmt.ctprintf("%d / %d", t.citizens, TOWN_MILESTONES[t.milestonesReached]),
+					UI_COLOR_TEXT,
 				}
 			} else {
-				stats[3] = {"Milestone", "Complete"}
+				stats[3] = {"Milestone", "Complete", UI_COLOR_TEXT}
 			}
-			stats[4] = {"Food", UIResourceStatus(t.foodPotential, t.foodShortage)}
-			stats[5] = {"Water", UIResourceStatus(t.waterPotential, t.waterShortage)}
-			free_homes := max(t.homes-t.citizens, 0)
-			stats[6] = {"Housing", fmt.ctprintf("%d free", free_homes)}
+			food_text, food_color := UIResourceCoverage(t.foodPotential, f32(t.citizens)*0.025)
+			water_text, water_color := UIResourceCoverage(t.waterPotential, f32(t.citizens)*0.025)
+			stats[4] = {"Food", food_text, food_color}
+			stats[5] = {"Water", water_text, water_color}
+			stats[6] = {"Housing", fmt.ctprintf("%d", t.homes), UI_COLOR_TEXT}
 			return 7
 		}
 		if BuildingIsTraining(kind) {
-			stats[1] = {"Trains", UIUnitName(UIUnitFromTraining(kind))}
+			stats[1] = {"Trains", UIUnitName(UIUnitFromTraining(kind)), UI_COLOR_TEXT}
 			return 2
 		}
 		return 1
@@ -1665,6 +1697,95 @@ UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[8]UIStat) -> int {
 	case .None:
 	}
 	return 0
+}
+
+UIUnitEffectName :: proc(effect: UnitEffects) -> cstring {
+	switch effect {
+	case .NoHome:
+		return "Homeless"
+	case .NoWater:
+		return "Water shortage"
+	case .NoFood:
+		return "Food shortage"
+	}
+	unreachable()
+}
+
+UIUnitEffectText :: proc(effect: UnitEffects) -> cstring {
+	switch effect {
+	case .NoHome:
+		return "No housing: health regenerates 4x slower."
+	case .NoWater:
+		return "Water shortage: movement speed -30%."
+	case .NoFood:
+		return "Food shortage: the town cannot feed everyone."
+	}
+	unreachable()
+}
+
+UIDrawUnitEffects :: proc(
+	w: ^World,
+	renderer: ^WorldRenderer,
+	panel: rl.Rectangle,
+	unit_slot: int,
+) {
+	count := UIUnitEffectCount(w, unit_slot)
+	if count <= 0 do return
+
+	y := panel.y+UI_STAT_Y+2*UI_STAT_H+3
+	ui_text("Effects", panel.x+UI_PAD, y+3, UI_COLOR_DIM)
+
+	mouse := rl.GetMousePosition()
+	x := panel.x+UI_PAD+78
+	hovered := UnitEffects.NoHome
+	any_hovered := false
+	for effect in ALL_UNIT_EFFECTS {
+		if !w.units[unit_slot].effects[effect] do continue
+		icon := rl.Rectangle{x, y, 22, 22}
+		hover := rl.CheckCollisionPointRec(mouse, icon)
+		background := UI_COLOR_BUTTON_OFF
+		border := UI_COLOR_BORDER_INNER
+		if hover {
+			background = UI_COLOR_BUTTON_HOVER
+			border = UI_COLOR_GOLD
+			hovered = effect
+			any_hovered = true
+		}
+		rl.DrawRectangleRec(icon, background)
+		rl.DrawRectangleLinesEx(icon, 1, border)
+
+		texture := renderer.sprites.effect[effect]
+		if texture.id != 0 {
+			source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+			rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
+		}
+		x += 27
+	}
+
+	if any_hovered do UIDrawUnitEffectTooltip(mouse, hovered)
+}
+
+UIDrawUnitEffectTooltip :: proc(mouse: rl.Vector2, effect: UnitEffects) {
+	title := UIUnitEffectName(effect)
+	body := UIUnitEffectText(effect)
+	title_width := rl.MeasureTextEx(ui_font(), title, UI_TEXT_SIZE, 1).x
+	body_width := rl.MeasureTextEx(ui_font(), body, UI_TEXT_SIZE, 1).x
+	padding: f32 = 8
+	line_height := UIHudLineHeight()
+	width := max(title_width, body_width)+padding*2
+	height := line_height*2+padding*2+4
+
+	x := mouse.x+16
+	y := mouse.y+16
+	screen_width := f32(rl.GetScreenWidth())
+	screen_height := f32(rl.GetScreenHeight())
+	if x+width > screen_width-8 do x = mouse.x-16-width
+	if y+height > screen_height-8 do y = mouse.y-16-height
+
+	rl.DrawRectangleRec(rl.Rectangle{x, y, width, height}, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(rl.Rectangle{x, y, width, height}, 1, UI_COLOR_GOLD)
+	ui_text(title, x+padding, y+padding, UI_COLOR_GOLD)
+	ui_text(body, x+padding, y+padding+line_height, UI_COLOR_TEXT)
 }
 
 UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {

@@ -300,11 +300,15 @@ TownSpawnCitizen :: proc(w: ^World, kingdom_slot, town_slot: int, role: UnitType
 	return -1
 }
 
-TOWN_INITIAL_VILLAGERS :: 5
+TOWN_INITIAL_VILLAGERS :: 8
+TOWN_INITIAL_BUILDERS :: 1
 
-TownSpawnInitialVillagers :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
+TownSpawnInitialPopulation :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
 	for _ in 0..<TOWN_INITIAL_VILLAGERS {
 		if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) < 0 do return false
+	}
+	for _ in 0..<TOWN_INITIAL_BUILDERS {
+		if TownSpawnCitizen(w, kingdom_slot, town_slot, Builder{}) < 0 do return false
 	}
 	return true
 }

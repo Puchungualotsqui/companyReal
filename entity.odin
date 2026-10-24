@@ -351,6 +351,12 @@ UnitEffects :: enum {
 	NoFood,
 }
 
+ALL_UNIT_EFFECTS := [3]UnitEffects {
+	.NoHome,
+	.NoWater,
+	.NoFood,
+}
+
 UnitKind :: enum {
 	Villager,
 	Builder,

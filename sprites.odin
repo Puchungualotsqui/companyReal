@@ -68,6 +68,7 @@ C_ARCANE_LIGHT := rl.Color{158, 118, 214, 255}
 C_ARCANE_GLOW := rl.Color{128, 226, 255, 255}
 
 C_WHITE := rl.Color{238, 238, 244, 255}
+C_EFFECT_BAD := rl.Color{214, 62, 52, 255}
 
 ALL_BUILDING_KINDS := [14]BuildingKind{
 	.TownHall,
@@ -1551,6 +1552,42 @@ draw_decoration_lamp :: proc(art: ^Art) {
 	art_pixel(art, 8, 1, C_IRON)
 }
 
+// Small inspection icons for unit conditions. The red slash is shared so the
+// three effects read as warnings at a glance.
+draw_effect_icon :: proc(effect: UnitEffects) -> Art {
+	art := art_init(20, 20)
+	switch effect {
+	case .NoHome:
+		art_triangle(&art, 10, 2, 2, 10, 18, 10, C_OUTLINE)
+		art_triangle(&art, 10, 4, 4, 10, 16, 10, C_ROOF)
+		art_rect(&art, 5, 10, 10, 8, C_OUTLINE)
+		art_rect(&art, 6, 11, 8, 6, C_STONE_DARK)
+		art_rect(&art, 9, 13, 2, 4, C_WOOD_DARKEST)
+		art_line(&art, 3, 17, 17, 3, C_OUTLINE)
+		art_line(&art, 4, 17, 18, 3, C_EFFECT_BAD)
+		art_line(&art, 3, 16, 17, 2, C_EFFECT_BAD)
+	case .NoWater:
+		art_triangle(&art, 10, 2, 5, 11, 15, 11, C_OUTLINE)
+		art_circle(&art, 10, 12, 6, C_OUTLINE)
+		art_triangle(&art, 10, 3, 6, 11, 14, 11, C_WATER_DARK)
+		art_circle(&art, 10, 12, 5, C_WATER)
+		art_circle(&art, 8, 11, 2, C_WATER_LIGHT)
+		art_line(&art, 3, 17, 17, 3, C_OUTLINE)
+		art_line(&art, 4, 17, 18, 3, C_EFFECT_BAD)
+		art_line(&art, 3, 16, 17, 2, C_EFFECT_BAD)
+	case .NoFood:
+		art_rect(&art, 4, 9, 12, 8, C_OUTLINE)
+		art_rect(&art, 5, 10, 10, 6, C_GOLD_DARK)
+		art_rect(&art, 5, 10, 10, 1, C_GOLD_LIGHT)
+		art_rect(&art, 6, 12, 3, 1, C_GOLD)
+		art_rect(&art, 11, 14, 3, 1, C_GOLD)
+		art_line(&art, 3, 17, 17, 3, C_OUTLINE)
+		art_line(&art, 4, 17, 18, 3, C_EFFECT_BAD)
+		art_line(&art, 3, 16, 17, 2, C_EFFECT_BAD)
+	}
+	return art
+}
+
 SpriteSet :: struct {
 	building:     [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
 	unit:         [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
@@ -1560,6 +1597,7 @@ SpriteSet :: struct {
 	bloodPool:    [BLOOD_POOL_VARIANTS]rl.Texture2D,
 	gore:         [SPRITE_FACTION_COUNT][GorePartKind]rl.Texture2D,
 	particle:     [ParticleKind]rl.Texture2D,
+	effect:       [UnitEffects]rl.Texture2D,
 	fire:         rl.Texture2D,
 	shadow:       rl.Texture2D,
 	glow:         rl.Texture2D,
@@ -1602,6 +1640,11 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 	for kind in ALL_PARTICLE_KINDS {
 		set.particle[kind] = create_particle_kind_texture(kind)
 	}
+	for effect in ALL_UNIT_EFFECTS {
+		art := draw_effect_icon(effect)
+		set.effect[effect] = art_to_texture(art)
+		rl.UnloadImage(art.image)
+	}
 	for variant in 0 ..< BLOOD_SPLAT_VARIANTS {
 		set.bloodSplat[variant] = create_blood_splat_texture(u64(variant)+1, 48, false)
 	}
@@ -1643,6 +1686,11 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 	for kind in ALL_PARTICLE_KINDS {
 		if set.particle[kind].id != 0 {
 			rl.UnloadTexture(set.particle[kind])
+		}
+	}
+	for effect in ALL_UNIT_EFFECTS {
+		if set.effect[effect].id != 0 {
+			rl.UnloadTexture(set.effect[effect])
 		}
 	}
 	for variant in 0 ..< BLOOD_SPLAT_VARIANTS {

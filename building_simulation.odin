@@ -243,7 +243,12 @@ TownConstructionPreempt :: proc(w: ^World, kingdom_slot, town_slot: int) {
 
 BuildingBuildSeconds :: proc(kind: BuildingKind) -> f32 {
 	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
-	return 4+f32(width*height)*1.5+BuildingWoodCost(kind)*0.25
+	seconds := 4+f32(width*height)*1.5+BuildingWoodCost(kind)*0.25
+	// Town halls are ordered by the player/AI; every other town building is
+	// automatic infrastructure, so it comes up faster to keep the opening from
+	// dragging.
+	if kind != .TownHall do seconds *= 0.6
+	return seconds
 }
 
 // First decoration whose base tile sits on the site footprint.
