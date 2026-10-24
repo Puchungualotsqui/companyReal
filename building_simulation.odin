@@ -164,6 +164,9 @@ BuildingFindNearestHostileUnit :: proc(w: ^World, building_slot: int, attack_ran
 TownBuilderConstruct :: proc(w: ^World, kingdom_slot, town_slot: int, can_grow: bool) -> bool {
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if town.constructionActive do return false
+	if town.farmlands < town.farmers {
+		if TownBuilderStartBuilding(w, kingdom_slot, town_slot, Farmland{}) do return true
+	}
 	if town.homes < town.citizens || (can_grow && town.homes == town.citizens) {
 		if TownBuilderStartBuilding(w, kingdom_slot, town_slot, Home{}) do return true
 	}
@@ -173,9 +176,6 @@ TownBuilderConstruct :: proc(w: ^World, kingdom_slot, town_slot: int, can_grow: 
 				return true
 			}
 		}
-	}
-	if town.farmlands < town.farmers {
-		if TownBuilderStartBuilding(w, kingdom_slot, town_slot, Farmland{}) do return true
 	}
 	if town.wood >= 15 {
 		if x, y, found := TownAutoPathSite(w, kingdom_slot, town_slot); found {

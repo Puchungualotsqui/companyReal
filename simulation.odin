@@ -232,8 +232,8 @@ TownResourceShortage :: proc(potential: f32, citizens: int) -> f32 {
 // Each collector produces a baseline even with no fresh water in reach; nearby
 // lakes and rivers add the rest. Island towns therefore keep growing, just on a
 // smaller and more expensive water supply.
-WATER_COLLECTOR_MAX_OUTPUT :: 0.10
-WATER_COLLECTOR_DRY_OUTPUT :: 0.03
+WATER_COLLECTOR_MAX_OUTPUT :: 0.20
+WATER_COLLECTOR_DRY_OUTPUT :: 0.10
 
 TownWaterCollectorOutput :: proc(water_access: f32) -> f32 {
 	access := clamp(water_access, 0, 1)
