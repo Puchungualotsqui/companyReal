@@ -223,6 +223,48 @@ CombatBuilderUpdate :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 
 	builder := &w.units[unit_slot].type.(CombatBuilder)
 	state := &w.units[unit_slot].state.(StatePacific)
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if builder.orderKingdom != kingdom_slot || builder.orderTown != town_slot ||
+		builder.orderRevision != town.orderRevision {
+		order := TownUnitOrder(w, unit_slot)
+		if !WarriorOrderEqual(builder.order, order) {
+			_, was_attack := builder.order.(WarriorAttack)
+			_, was_defend := builder.order.(WarriorDefend)
+			builder.returning = was_attack || was_defend
+			builder.onStation = false
+			builder.site = -1
+			state^ = .Roaming
+			w.units[unit_slot].pathReady = false
+		}
+		builder.order = order
+		builder.orderKingdom = kingdom_slot
+		builder.orderTown = town_slot
+		builder.orderRevision = town.orderRevision
+	}
+
+	switch order in builder.order {
+	case WarriorAttack:
+		if !builder.onStation {
+			if UnitWarriorTravel(w, unit_slot, order.kingdom, order.town, delta_time) != .Arrived do return
+			builder.onStation = true
+		}
+		CombatBuilderPatrol(w, unit_slot, order.kingdom, order.town, delta_time)
+		return
+	case WarriorDefend:
+		if !builder.onStation {
+			if UnitWarriorTravel(w, unit_slot, order.kingdom, order.town, delta_time) != .Arrived do return
+			builder.onStation = true
+		}
+		CombatBuilderPatrol(w, unit_slot, order.kingdom, order.town, delta_time)
+		return
+	case WarriorGarrison, WarriorIdle:
+		if builder.returning {
+			result := UnitWarriorTravel(w, unit_slot, kingdom_slot, town_slot, delta_time)
+			if result == .Travelling do return
+			builder.returning = false
+			w.units[unit_slot].pathReady = false
+		}
+	}
 
 	if builder.site >= 0 && (builder.site >= COMBAT_SITE_CAPACITY || !w.combatSiteUsed[builder.site]) {
 		builder.site = -1
@@ -290,6 +332,27 @@ CombatBuilderUpdate :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	case .GoingHome, .Sleeping, .Traveling, .Working, .Returning:
 		state^ = .Roaming
 	}
+}
+
+CombatBuilderPatrol :: proc(w: ^World, unit_slot, kingdom_slot, town_slot: int, delta_time: f32) {
+	unit := &w.units[unit_slot]
+	builder := &unit.type.(CombatBuilder)
+	at_target := int(WorldWrapPosition(unit.x, f32(w.maxX))) == unit.pathTargetX &&
+		int(WorldWrapPosition(unit.y, f32(w.maxY))) == unit.pathTargetY
+	if !unit.pathReady || at_target {
+		x, y, found := UnitFindPatrolTarget(w, unit_slot, kingdom_slot, town_slot,
+			WARRIOR_DEFEND_PATROL_RADIUS, builder.patrolSequence)
+		if !found do return
+		unit.pathTargetX = x
+		unit.pathTargetY = y
+		unit.pathReady = true
+		builder.patrolSequence += 1
+	}
+	speed := UnitDefaultSpeed(unit.type)
+	if unit.effects[.NoWater] do speed *= 0.7
+	reached, blocked, _ := UnitStepTowards(w, unit_slot,
+		f32(unit.pathTargetX)+0.5, f32(unit.pathTargetY)+0.5, speed*delta_time)
+	if reached || blocked do unit.pathReady = false
 }
 
 // Combat builders never chase. If an enemy happens to be in reach they may

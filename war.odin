@@ -122,26 +122,7 @@ UnitWarriorAssignOrder :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) 
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	previous := state.order
 
-	roll := WorldNoiseHash(
-		unit_slot,
-		int(town.orderRevision%1_000_000),
-		u64(kingdom_slot*TOWN_CAPACITY+town_slot)+1301,
-	)
-	new_order: WarriorOrder
-	if town.orderCount == 0 || roll < TOWN_GARRISON_RATIO {
-		new_order = WarriorGarrison{}
-	} else if town.orderCount > 0 {
-		fraction := (roll-TOWN_GARRISON_RATIO)/(1-TOWN_GARRISON_RATIO)
-		index := clamp(int(fraction*f32(town.orderCount)), 0, town.orderCount-1)
-		switch ref in town.orders[index] {
-		case TownAttackOrder:
-			new_order = WarriorAttack{kingdom = ref.kingdom, town = ref.town}
-		case TownDefendOrder:
-			new_order = WarriorDefend{kingdom = ref.kingdom, town = ref.town}
-		}
-	} else {
-		new_order = WarriorIdle{}
-	}
+	new_order := TownUnitOrder(w, unit_slot)
 
 	state.order = new_order
 	state.orderKingdom = kingdom_slot
@@ -152,6 +133,42 @@ UnitWarriorAssignOrder :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) 
 		state.escortTarget = -1
 		unit.pathReady = false
 	}
+}
+
+// Divide each unit kind independently between the home garrison and the
+// town's orders. Rotating the slot order on revisions keeps the selection
+// varied while keeping the mix balanced when there are enough units.
+TownUnitOrder :: proc(w: ^World, unit_slot: int) -> WarriorOrder {
+	unit := &w.units[unit_slot]
+	town := &w.kingdoms[unit.kingdome].towns[unit.town]
+	if town.orderCount == 0 do return WarriorGarrison{}
+
+	kind := UnitKindOf(unit.type)
+	rank, total := 0, 0
+	for slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[slot] do continue
+		other := &w.units[slot]
+		if other.kingdome != unit.kingdome || other.town != unit.town do continue
+		if UnitKindOf(other.type) != kind do continue
+		if slot < unit_slot do rank += 1
+		total += 1
+	}
+	seed := u64(unit.kingdome*TOWN_CAPACITY+unit.town)+u64(kind)*101
+	revision := int(town.orderRevision%1_000_000)
+	rotation := int(WorldNoiseHash(revision, int(kind), seed+1301)*f32(total))
+	rank = (rank+rotation)%total
+	garrison := int(f32(total)*TOWN_GARRISON_RATIO)
+	if rank < garrison do return WarriorGarrison{}
+
+	offset := int(WorldNoiseHash(revision, int(kind), seed+1703)*f32(town.orderCount))
+	index := (rank-garrison+offset)%town.orderCount
+	switch ref in town.orders[index] {
+	case TownAttackOrder:
+		return WarriorAttack{kingdom = ref.kingdom, town = ref.town}
+	case TownDefendOrder:
+		return WarriorDefend{kingdom = ref.kingdom, town = ref.town}
+	}
+	return WarriorGarrison{}
 }
 
 WarriorOrderEqual :: proc(a, b: WarriorOrder) -> bool {

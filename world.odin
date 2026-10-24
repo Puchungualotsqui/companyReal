@@ -168,6 +168,9 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.units[i].pathFound = false
 
 	w.kingdoms[kingdomSlot].towns[townSlot].citizens += 1
+	if UnitIsWarrior(type) || UnitKindOf(type) == .CombatBuilder {
+		w.kingdoms[kingdomSlot].towns[townSlot].orderRevision += 1
+	}
 
 	SpatialUnitInsert(w, i)
 
@@ -200,6 +203,10 @@ UnitDespawn :: proc(w: ^World, slot: int) -> bool {
 		w.units[slot].burning = 0
 	}
 	SpatialUnitRemove(w, slot)
+	if WorldTownExists(w, kingdom_slot, town_slot) &&
+		(UnitIsWarrior(w.units[slot].type) || UnitKindOf(w.units[slot].type) == .CombatBuilder) {
+		w.kingdoms[kingdom_slot].towns[town_slot].orderRevision += 1
+	}
 	w.unitUsed[slot] = false
 	return true
 }

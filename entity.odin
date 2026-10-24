@@ -467,6 +467,12 @@ Builder :: struct {
 	targetDecoration: int,
 }
 CombatBuilder :: struct {
+	order:           WarriorOrder,
+	orderRevision:   u64,
+	orderKingdom, orderTown: int,
+	patrolSequence:  int,
+	returning:        bool,
+	onStation:        bool,
 	site:            int,
 	siteSequence:    int,
 	failedSite:      int,
@@ -855,7 +861,7 @@ UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
 		unit.type = Builder{carriedResource = 0, taskSequence = 0, targetDecoration = -1}
 		unit.state = StatePacific.Roaming
 	case CombatBuilder:
-		unit.type = CombatBuilder{site = -1, failedSite = -1}
+		unit.type = CombatBuilder{site = -1, failedSite = -1, orderKingdom = -1}
 		unit.state = StatePacific.Roaming
 	case WaterCollector:
 		unit.type = WaterCollector{carriedResource = 0, taskSequence = 0}
@@ -895,6 +901,12 @@ UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
 
 UnitSetType :: proc(w: ^World, unit_slot: int, kind: UnitKind) {
 	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
+	unit := &w.units[unit_slot]
+	if WorldTownExists(w, unit.kingdome, unit.town) &&
+		(UnitIsWarrior(unit.type) || UnitKindOf(unit.type) == .CombatBuilder ||
+		kind == .CombatBuilder || UnitIsWarrior(UnitTypeFromKind(kind))) {
+		w.kingdoms[unit.kingdome].towns[unit.town].orderRevision += 1
+	}
 	UnitTypeInit(w, unit_slot, UnitTypeFromKind(kind))
 }
 
