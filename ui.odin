@@ -305,7 +305,7 @@ UIUnitDescription :: proc(kind: UnitKind) -> cstring {
 	case .CombatBuilder:
 		return "Raises combat buildings in the field."
 	case .WaterCollector:
-		return "Carries water to the town."
+		return "Carries water from lakes, rivers or the sea."
 	case .Farmer:
 		return "Works the fields for food."
 	case .Knight:

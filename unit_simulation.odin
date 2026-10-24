@@ -726,18 +726,24 @@ UnitFindWaterTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int, i
 	for source_x in 0..<world_width {
 		for source_y in 0..<world_height {
 			tile_type := w.ground[source_x][source_y].type
-			if tile_type != .FreshWater && tile_type != .River do continue
+			if tile_type != .FreshWater && tile_type != .River && tile_type != .Water {
+				continue
+			}
 			candidate_count := 1
-			if tile_type == .FreshWater do candidate_count = 4
+			if tile_type == .FreshWater || tile_type == .Water do candidate_count = 4
 			for direction in 0..<candidate_count {
 				candidate_x, candidate_y := source_x, source_y
-				if tile_type == .FreshWater {
+				if tile_type == .FreshWater || tile_type == .Water {
 					switch direction {
-					case 0: candidate_x += 1
-					case 1: candidate_x -= 1
-					case 2: candidate_y += 1
-				case 3: candidate_y -= 1
-				}
+					case 0:
+						candidate_x += 1
+					case 1:
+						candidate_x -= 1
+					case 2:
+						candidate_y += 1
+					case 3:
+						candidate_y -= 1
+					}
 					candidate_x = WorldWrapCoordinate(candidate_x, world_width)
 					candidate_y = WorldWrapCoordinate(candidate_y, world_height)
 				}

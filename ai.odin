@@ -142,7 +142,7 @@ AIQueueConversion :: proc(w: ^World, kingdom, town_slot: int, kind: UnitKind) ->
 
 AIWaterCollectorTarget :: proc(w: ^World, kingdom, town_slot: int) -> int {
 	town := &w.kingdoms[kingdom].towns[town_slot]
-	collector_output := town.waterAccess*0.10
+	collector_output := TownWaterCollectorOutput(TownWaterAccess(w, kingdom, town_slot))
 	if collector_output <= 0.001 do return 0
 	need := f32(town.citizens)*0.025
 	target := int(math.ceil(need/collector_output))

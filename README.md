@@ -7,7 +7,6 @@
 - Animations, special ones that come to my mind are the ones for the trees and flowers
 - Boats
 - Particles
-- A lot of blood and dismemberments with even some physics of things
 
 # Ideas
 - Ataques aereos de pociones, like in company of heroes
@@ -20,4 +19,3 @@
 
 # Things to check
 - Easy to see what kingdom is from the town defended or attacked in the townhall options and by arrows color when town selected
-- Are all automatic buildings actually being built?

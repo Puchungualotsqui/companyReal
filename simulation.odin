@@ -182,7 +182,9 @@ KingdomTownUpdate :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time: f
 	if town.farmlands > 0 {
 		town.foodPotential = town.farmlandOutput*f32(working_farmlands)/f32(town.farmlands)
 	}
-	town.waterPotential = TownWaterAccess(w, kingdom_slot, town_slot)*f32(town.waterCollectors)*0.10
+	town.waterPotential =
+		TownWaterCollectorOutput(TownWaterAccess(w, kingdom_slot, town_slot))*
+		f32(town.waterCollectors)
 	town.foodShortage = TownResourceShortage(town.foodPotential, town.citizens)
 	town.waterShortage = TownResourceShortage(town.waterPotential, town.citizens)
 
@@ -225,6 +227,18 @@ TownResourceShortage :: proc(potential: f32, citizens: int) -> f32 {
 	need := f32(citizens)*0.025
 	if need <= 0 do return 0
 	return clamp(1-potential/need, 0, 1)
+}
+
+// Each collector produces a baseline even with no fresh water in reach; nearby
+// lakes and rivers add the rest. Island towns therefore keep growing, just on a
+// smaller and more expensive water supply.
+WATER_COLLECTOR_MAX_OUTPUT :: 0.10
+WATER_COLLECTOR_DRY_OUTPUT :: 0.03
+
+TownWaterCollectorOutput :: proc(water_access: f32) -> f32 {
+	access := clamp(water_access, 0, 1)
+	return WATER_COLLECTOR_DRY_OUTPUT+
+		(WATER_COLLECTOR_MAX_OUTPUT-WATER_COLLECTOR_DRY_OUTPUT)*access
 }
 
 TownWaterAccess :: proc(w: ^World, kingdom_slot, town_slot: int) -> f32 {
