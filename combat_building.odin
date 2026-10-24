@@ -47,11 +47,14 @@ TownStartCombatConstruction :: proc(w: ^World, kingdom_slot, town_slot: int, kin
 		}
 	}
 	if slot < 0 do return false
+	building_type := BuildingTypeFromKind(kind)
+	if !BuildingClearUnits(w, x, y, building_type, false) do return false
+	BuildingClearUnits(w, x, y, building_type, true)
 
 	w.combatSites[slot] = CombatSite{kind = kind, x = x, y = y, kingdom = kingdom_slot, town = town_slot}
 	w.combatSiteUsed[slot] = true
 	// Combat builders rescan on navigation changes; a new order is one.
-	w.navigationRevision += 1
+	WorldConstructionChanged(w)
 	return true
 }
 
@@ -95,7 +98,7 @@ CombatSiteClear :: proc(w: ^World, kingdom_slot, town_slot: int) {
 		w.combatSiteUsed[slot] = false
 		changed = true
 	}
-	if changed do w.navigationRevision += 1
+	if changed do WorldConstructionChanged(w)
 }
 
 CombatSiteKingdomClear :: proc(w: ^World, kingdom_slot: int) {
@@ -105,40 +108,20 @@ CombatSiteKingdomClear :: proc(w: ^World, kingdom_slot: int) {
 		w.combatSiteUsed[slot] = false
 		changed = true
 	}
-	if changed do w.navigationRevision += 1
+	if changed do WorldConstructionChanged(w)
 }
 
 // Builders work from any walkable tile on the ring around the footprint. An
 // isolated bridge has no such tile until another bridge reaches it.
-CombatSiteAccessPoint :: proc(w: ^World, site_slot: int, unit_type: UnitType, unit_kingdom: int) -> (int, int, bool) {
+CombatSiteAccessPoint :: proc(w: ^World, site_slot, unit_slot: int) -> (int, int, bool) {
 	if site_slot < 0 || site_slot >= COMBAT_SITE_CAPACITY || !w.combatSiteUsed[site_slot] {
 		return 0, 0, false
 	}
 
 	site := &w.combatSites[site_slot]
 	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return 0, 0, false
-
-	for radius in 1..=6 {
-		inner_min_x := site.x-radius+1
-		inner_max_x := site.x+width-1+radius-1
-		inner_min_y := site.y-radius+1
-		inner_max_y := site.y+height-1+radius-1
-		for x in site.x-radius ..= site.x+width-1+radius {
-			for y in site.y-radius ..= site.y+height-1+radius {
-				if x >= inner_min_x && x <= inner_max_x && y >= inner_min_y && y <= inner_max_y {
-					continue
-				}
-				wrapped_x := WorldWrapCoordinate(x, world_width)
-				wrapped_y := WorldWrapCoordinate(y, world_height)
-				if !WorldTileWalkable(w, wrapped_x, wrapped_y, unit_type, unit_kingdom) do continue
-				return wrapped_x, wrapped_y, true
-			}
-		}
-	}
-	return 0, 0, false
+	unit := &w.units[unit_slot]
+	return BuildingFindWorkAccessPoint(w, site.x, site.y, width, height, unit.type, unit.kingdome, int(unit.x), int(unit.y))
 }
 
 // Nearest reachable-looking site of the builder's town. The previous failure is
@@ -161,7 +144,7 @@ CombatSiteFindNearest :: proc(w: ^World, unit_slot: int, sequence: int, skip_slo
 		}
 		if slot == skip_slot && skip_revision == w.navigationRevision do continue
 
-		x, y, ok := CombatSiteAccessPoint(w, slot, unit.type, unit.kingdome)
+		x, y, ok := CombatSiteAccessPoint(w, slot, unit_slot)
 		if !ok do continue
 
 		site_width, site_height := BuildingTileSize(
@@ -211,6 +194,7 @@ CombatSiteAdvance :: proc(w: ^World, site_slot: int, delta_time: f32) -> bool {
 		return false
 	}
 	w.combatSiteUsed[site_slot] = false
+	WorldConstructionChanged(w)
 	return true
 }
 

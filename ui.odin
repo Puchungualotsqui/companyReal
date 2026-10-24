@@ -1822,7 +1822,7 @@ UIDrawConstructionStatus :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: 
 	value: cstring = "None"
 	if t.constructionActive {
 		site := t.construction
-		if ConstructionPendingDecoration(w, site) >= 0 {
+		if TownConstructionPendingDecoration(w, site) >= 0 {
 			value = fmt.ctprintf("%s  clearing", UIBuildingName(site.kind))
 		} else {
 			seconds := BuildingBuildSeconds(site.kind)

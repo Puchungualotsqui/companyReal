@@ -46,6 +46,7 @@ World :: struct {
 	ground: [dynamic][dynamic]Tile,
 	spatial: SpatialIndex,
 	tileBuilding: []int,
+	tileConstructionBlocked: []bool,
 	navigationDistance: []int,
 	navigationCameFrom: []int,
 	navigationOpen: []bool,
@@ -234,6 +235,7 @@ UnitDespawn :: proc(w: ^World, slot: int) -> bool {
 
 BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, townSlot: int) -> (int, bool) {
 	if !WorldBuildingValid(w, x, y, type) do return 0, false
+	if !BuildingClearUnits(w, x, y, type, false) do return 0, false
 	i := -1
 	for slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] {
@@ -242,6 +244,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 		}
 	}
 	if i < 0 do return 0, false
+	BuildingClearUnits(w, x, y, type, true)
 
 	w.buildings.x[i] = x
 	w.buildings.y[i] = y
@@ -314,6 +317,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 			TownOrdersClear(w, kingdom_slot, town_slot)
 			TownConversionsClear(w, kingdom_slot, town_slot)
 			w.kingdoms[kingdom_slot].townUsed[town_slot] = false
+			WorldConstructionChanged(w)
 			CombatSiteClear(w, kingdom_slot, town_slot)
 			for unit_slot in 0..<UNIT_CAPACITY {
 				if !w.unitUsed[unit_slot] || w.units[unit_slot].kingdome != kingdom_slot ||
@@ -390,6 +394,7 @@ KingdomDespawn :: proc(w: ^World, slot: int) -> bool {
 	KingdomEndWar(w, slot)
 	CombatSiteKingdomClear(w, slot)
 	w.kingdomUsed[slot] = false
+	WorldConstructionChanged(w)
 	return true
 }
 
@@ -399,7 +404,8 @@ WorldTileOccupied :: proc(w: ^World, x, y: int) -> bool {
 	if world_width <= 0 || world_height <= 0 do return false
 	wrapped_x := WorldWrapCoordinate(x, world_width)
 	wrapped_y := WorldWrapCoordinate(y, world_height)
-	return w.tileBuilding[wrapped_x*world_height+wrapped_y] >= 0
+	index := wrapped_x*world_height+wrapped_y
+	return w.tileBuilding[index] >= 0 || w.tileConstructionBlocked[index]
 }
 
 WorldBuildingOverTile :: proc(w: ^World, x, y: int, bType: BuildingType) -> bool {

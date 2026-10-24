@@ -44,6 +44,7 @@ FlowField :: struct {
 WorldNavigationInit :: proc(w: ^World) -> bool {
 	node_count := int(w.maxX)*int(w.maxY)
 	if node_count <= 0 do return false
+	w.tileConstructionBlocked = make([]bool, node_count)
 	w.navigationDistance = make([]int, node_count)
 	w.navigationCameFrom = make([]int, node_count)
 	w.navigationOpen = make([]bool, node_count)
@@ -54,6 +55,7 @@ WorldNavigationInit :: proc(w: ^World) -> bool {
 }
 
 WorldNavigationDeinit :: proc(w: ^World) {
+	delete(w.tileConstructionBlocked)
 	delete(w.navigationDistance)
 	delete(w.navigationCameFrom)
 	delete(w.navigationOpen)
@@ -401,6 +403,109 @@ UnitFollowFlowField :: proc(w: ^World, unit_slot: int, field: ^FlowField, delta_
 	return .Travelling
 }
 
+// Choose a reachable work point without routing through the proposed footprint.
+// This also works before the site is reserved (for founding-order validation).
+BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unit_type: UnitType, kingdom, start_x, start_y: int) -> (int, int, bool) {
+	world_width, world_height := int(w.maxX), int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return 0, 0, false
+	work_radius := 0
+	for radius in 1..=6 {
+		for tile_x in x-radius..=x+width-1+radius {
+			for tile_y in y-radius..=y+height-1+radius {
+				wrapped_x := WorldWrapCoordinate(tile_x, world_width)
+				wrapped_y := WorldWrapCoordinate(tile_y, world_height)
+				if BuildingAccessDistance(w, x, y, width, height, wrapped_x, wrapped_y) != radius do continue
+				if WorldTileWalkable(w, wrapped_x, wrapped_y, unit_type, kingdom) do work_radius = radius
+			}
+		}
+		if work_radius > 0 do break
+	}
+	if work_radius == 0 do return 0, 0, false
+	w.navigationSearchId += 1
+	if w.navigationSearchId == 0 {
+		for &stamp in w.navigationStamp do stamp = 0
+		w.navigationSearchId = 1
+	}
+	stamp := w.navigationSearchId
+	start := WorldWrapCoordinate(start_x, world_width)*world_height+WorldWrapCoordinate(start_y, world_height)
+	w.navigationQueue[0] = start
+	w.navigationStamp[start] = stamp
+	queue_end := 1
+	for cursor := 0; cursor < queue_end; cursor += 1 {
+		index := w.navigationQueue[cursor]
+		current_x, current_y := index/world_height, index%world_height
+		if BuildingAccessDistance(w, x, y, width, height, current_x, current_y) == work_radius &&
+			WorldTileWalkable(w, current_x, current_y, unit_type, kingdom) {
+			return current_x, current_y, true
+		}
+		for direction in 0..<4 {
+			next_x, next_y := current_x, current_y
+			switch direction {
+			case 0: next_x += 1
+			case 1: next_x -= 1
+			case 2: next_y += 1
+			case 3: next_y -= 1
+			}
+			next_x = WorldWrapCoordinate(next_x, world_width)
+			next_y = WorldWrapCoordinate(next_y, world_height)
+			next_index := next_x*world_height+next_y
+			if w.navigationStamp[next_index] == stamp do continue
+			if next_x >= x && next_x < x+width && next_y >= y && next_y < y+height do continue
+			if !WorldTileWalkable(w, next_x, next_y, unit_type, kingdom) do continue
+			w.navigationStamp[next_index] = stamp
+			w.navigationQueue[queue_end] = next_index
+			queue_end += 1
+		}
+	}
+	return 0, 0, false
+}
+
+// Search through the footprint only, stopping at its first walkable exit. This
+// avoids moving an occupant across water, other buildings or neighboring sites.
+UnitFindBuildingExit :: proc(w: ^World, unit_slot, x, y, width, height: int) -> (int, int, bool) {
+	unit := &w.units[unit_slot]
+	world_width, world_height := int(w.maxX), int(w.maxY)
+	w.navigationSearchId += 1
+	if w.navigationSearchId == 0 {
+		for &stamp in w.navigationStamp do stamp = 0
+		w.navigationSearchId = 1
+	}
+	stamp := w.navigationSearchId
+	start := int(unit.x)*world_height+int(unit.y)
+	w.navigationQueue[0] = start
+	w.navigationStamp[start] = stamp
+	queue_end := 1
+	for cursor := 0; cursor < queue_end; cursor += 1 {
+		index := w.navigationQueue[cursor]
+		current_x, current_y := index/world_height, index%world_height
+		for direction in 0..<4 {
+			next_x, next_y := current_x, current_y
+			switch direction {
+			case 0: next_x += 1
+			case 1: next_x -= 1
+			case 2: next_y += 1
+			case 3: next_y -= 1
+			}
+			next_x = WorldWrapCoordinate(next_x, world_width)
+			next_y = WorldWrapCoordinate(next_y, world_height)
+			next_index := next_x*world_height+next_y
+			if w.navigationStamp[next_index] == stamp do continue
+			w.navigationStamp[next_index] = stamp
+			inside := next_x >= x && next_x < x+width && next_y >= y && next_y < y+height
+			if !inside {
+				if WorldTileWalkable(w, next_x, next_y, unit.type, unit.kingdome) {
+					return next_x, next_y, true
+				}
+				continue
+			}
+			if !WorldTileWalkableBase(w, next_x, next_y, unit.type, unit.kingdome) do continue
+			w.navigationQueue[queue_end] = next_index
+			queue_end += 1
+		}
+	}
+	return 0, 0, false
+}
+
 UnitStepTowards :: proc(w: ^World, unit_slot: int, target_x, target_y, distance: f32) -> (reached: bool, blocked: bool, remaining: f32) {
 	remaining = distance
 	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] {
@@ -451,6 +556,15 @@ UnitStepTowards :: proc(w: ^World, unit_slot: int, target_x, target_y, distance:
 }
 
 WorldTileWalkable :: proc(w: ^World, x, y: int, unit_type: UnitType, unit_kingdom: int) -> bool {
+	world_width, world_height := int(w.maxX), int(w.maxY)
+	if world_width <= 0 || world_height <= 0 do return false
+	index := WorldWrapCoordinate(x, world_width)*world_height+WorldWrapCoordinate(y, world_height)
+	if w.tileConstructionBlocked[index] do return false
+	return WorldTileWalkableBase(w, x, y, unit_type, unit_kingdom)
+}
+
+// Used only when clearing an occupied footprint before reserving or completing it.
+WorldTileWalkableBase :: proc(w: ^World, x, y: int, unit_type: UnitType, unit_kingdom: int) -> bool {
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
 	if world_width <= 0 || world_height <= 0 do return false

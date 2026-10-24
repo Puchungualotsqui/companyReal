@@ -345,9 +345,24 @@ TownFoundingAccessPoint :: proc(w: ^World, x, y: int, unit_type: UnitType, unit_
 }
 
 TownFoundingReachable :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	outgoing := town.construction
+	preempting := town.constructionActive
+	// Validate the layout after preemption, without cancelling a valid order
+	// when the proposed charter fails. Construction footprints cannot overlap.
+	if preempting {
+		BuildingReserveFootprint(w, outgoing.x, outgoing.y, BuildingTypeFromKind(outgoing.kind), false)
+	}
+	defer {
+		if preempting {
+			BuildingReserveFootprint(w, outgoing.x, outgoing.y, BuildingTypeFromKind(outgoing.kind))
+		}
+	}
+	if !BuildingClearUnits(w, x, y, TownHall{}, false) do return false
 	start_x, start_y, start_found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot)
 	if !start_found do return false
-	goal_x, goal_y, goal_found := TownFoundingAccessPoint(w, x, y, Builder{}, kingdom_slot)
+	width, height := BuildingTileSize(TownHall{})
+	goal_x, goal_y, goal_found := BuildingFindWorkAccessPoint(w, x, y, width, height, Builder{}, kingdom_slot, start_x, start_y)
 	if !goal_found do return false
 
 	path: [dynamic]int
@@ -377,6 +392,8 @@ TownStartFounding :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool
 		paid = TOWN_FOUNDING_WOOD,
 	}
 	town.constructionActive = true
+	BuildingClearUnits(w, x, y, TownHall{}, true)
+	WorldConstructionChanged(w)
 	return true
 }
 
@@ -949,5 +966,6 @@ KingdomAbsorb :: proc(w: ^World, defeated, destroyer, capital_town, capital_buil
 	}
 	w.kingdoms[defeated].capitalSlot = -1
 	w.kingdomUsed[defeated] = false
+	WorldConstructionChanged(w)
 	return true
 }

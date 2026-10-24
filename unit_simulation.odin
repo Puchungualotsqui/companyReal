@@ -311,11 +311,20 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 
 	if state^ == .Roaming {
 		if collector.carriedResource > 0 {
-			if x, y, found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot); found {
+			if w.units[unit_slot].cooldown > 0 {
+				w.units[unit_slot].cooldown = max(0, w.units[unit_slot].cooldown-delta_time)
+				return
+			}
+			if x, y, found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot, unit_slot); found {
 				w.units[unit_slot].pathTargetX = x
 				w.units[unit_slot].pathTargetY = y
 				w.units[unit_slot].pathReady = false
 				state^ = .Returning
+			} else {
+				// Keep the load, but do not search or start roaming paths every tick.
+				w.units[unit_slot].cooldown = 5
+				w.units[unit_slot].pathReady = false
+				return
 			}
 		} else if w.units[unit_slot].cooldown > 0 {
 			w.units[unit_slot].cooldown -= delta_time
@@ -345,7 +354,7 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 		w.units[unit_slot].cooldown -= delta_time
 		if w.units[unit_slot].cooldown <= 0 {
 			collector.carriedResource = 1
-			if x, y, found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot); found {
+			if x, y, found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot, unit_slot); found {
 				w.units[unit_slot].pathTargetX = x
 				w.units[unit_slot].pathTargetY = y
 				w.units[unit_slot].pathReady = false
@@ -356,15 +365,11 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			}
 		}
 	case .Returning:
-		if UnitMoveToTarget(w, unit_slot, delta_time) {
+		if UnitMoveToTarget(w, unit_slot, delta_time) || !w.units[unit_slot].pathFound {
 			collector.carriedResource = 0
 			collector.taskSequence += 1
 			state^ = .Roaming
 			w.units[unit_slot].cooldown = 0
-			w.units[unit_slot].pathReady = false
-		} else if !w.units[unit_slot].pathFound {
-			collector.carriedResource = 0
-			collector.taskSequence += 1
 			w.units[unit_slot].pathReady = false
 		}
 	case .GoingHome, .Sleeping, .ToConstruction, .Building:
@@ -447,6 +452,16 @@ UnitUpdateConverting :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 		return
 	}
 
+	if !WorldTileWalkable(w, state.accessX, state.accessY, unit.type, unit.kingdome) {
+		x, y, found := UnitFindBuildingAccessPoint(w, unit_slot, state.building, UnitTypeFromKind(state.to))
+		if !found {
+			UnitConversionCancel(w, unit_slot)
+			return
+		}
+		state.accessX, state.accessY = x, y
+		state.retryTimer = 0
+		unit.pathReady = false
+	}
 	if state.retryTimer > 0 {
 		state.retryTimer -= delta_time
 		return
@@ -712,59 +727,99 @@ UnitFindResourceTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int
 	return int(w.decorations.x[best_slot]), int(w.decorations.y[best_slot]), best_slot, true
 }
 
-UnitFindWaterTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int, int, bool) {
+// Stops at the nearest reachable candidate by cardinal step count. Unlike a
+// component flood followed by a world scan, nearby targets only visit a local
+// frontier. An absent target can still require O(world tiles) work; callers must
+// delay retries. Stamps and the queue are shared with A*, with no new allocation.
+UnitFindCollectorTarget :: proc(w: ^World, unit_slot, task_sequence: int, kingdom_slot := -1, town_slot := -1) -> (int, int, bool) {
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return 0, 0, false
-	unit_x := WorldWrapPosition(w.units[unit_slot].x, f32(world_width))
-	unit_y := WorldWrapPosition(w.units[unit_slot].y, f32(world_height))
-	best_x, best_y := 0, 0
-	best_distance_squared: f32 = 0
-	best_score: f32 = -1
-	found_target := false
-	seed := u64(unit_slot+task_sequence*1013)
-	for source_x in 0..<world_width {
-		for source_y in 0..<world_height {
-			tile_type := w.ground[source_x][source_y].type
-			if tile_type != .FreshWater && tile_type != .River && tile_type != .Water {
-				continue
+	node_count := world_width*world_height
+	if world_width <= 0 || world_height <= 0 ||
+		node_count > len(w.navigationStamp) || node_count > len(w.navigationQueue) {
+		return 0, 0, false
+	}
+
+	unit := &w.units[unit_slot]
+	if kingdom_slot >= 0 {
+		// At most 20x20 tiles: a fully reserved hall area needs no path search.
+		town := &w.kingdoms[kingdom_slot].towns[town_slot]
+		any_approach := false
+		for x in max(0, town.x-8)..=min(world_width-1, town.x+11) {
+			for y in max(0, town.y-8)..=min(world_height-1, town.y+11) {
+				if x >= town.x && x < town.x+4 && y >= town.y && y < town.y+4 do continue
+				if WorldTileOccupied(w, x, y) || !WorldTileWalkable(w, x, y, unit.type, unit.kingdome) do continue
+				any_approach = true
+				break
 			}
-			candidate_count := 1
-			if tile_type == .FreshWater || tile_type == .Water do candidate_count = 4
-			for direction in 0..<candidate_count {
-				candidate_x, candidate_y := source_x, source_y
-				if tile_type == .FreshWater || tile_type == .Water {
+			if any_approach do break
+		}
+		if !any_approach do return 0, 0, false
+	}
+
+	w.navigationSearchId += 1
+	if w.navigationSearchId == 0 {
+		for &stamp in w.navigationStamp do stamp = 0
+		w.navigationSearchId = 1
+	}
+	search_id := w.navigationSearchId
+	start_x := int(WorldWrapPosition(unit.x, f32(world_width)))
+	start_y := int(WorldWrapPosition(unit.y, f32(world_height)))
+	start := start_x*world_height+start_y
+	w.navigationStamp[start] = search_id
+	w.navigationQueue[0] = start
+	head, tail := 0, 1
+	direction_offset := WorldWrapCoordinate(unit_slot+task_sequence, 4)
+	for head < tail {
+		index := w.navigationQueue[head]
+		head += 1
+		x, y := index/world_height, index%world_height
+		if UnitValidTileType(unit.type, w.ground[x][y].type) &&
+			WorldTileWalkable(w, x, y, unit.type, unit.kingdome) && !WorldTileOccupied(w, x, y) {
+			if kingdom_slot >= 0 {
+				town := &w.kingdoms[kingdom_slot].towns[town_slot]
+				radius := max(max(town.x-x, x-(town.x+3)), max(town.y-y, y-(town.y+3)))
+				if radius >= 1 && radius <= 8 do return x, y, true
+			} else {
+				if w.ground[x][y].type == .River do return x, y, true
+				for direction in 0..<4 {
+					source_x, source_y := x, y
 					switch direction {
-					case 0:
-						candidate_x += 1
-					case 1:
-						candidate_x -= 1
-					case 2:
-						candidate_y += 1
-					case 3:
-						candidate_y -= 1
+					case 0: source_x += 1
+					case 1: source_x -= 1
+					case 2: source_y += 1
+					case 3: source_y -= 1
 					}
-					candidate_x = WorldWrapCoordinate(candidate_x, world_width)
-					candidate_y = WorldWrapCoordinate(candidate_y, world_height)
+					source_x = WorldWrapCoordinate(source_x, world_width)
+					source_y = WorldWrapCoordinate(source_y, world_height)
+					tile_type := w.ground[source_x][source_y].type
+					if tile_type == .FreshWater || tile_type == .Water do return x, y, true
 				}
-				if !UnitValidTileType(w.units[unit_slot].type, w.ground[candidate_x][candidate_y].type) do continue
-				delta_x := WorldShortestWrappedDelta(f32(candidate_x)-unit_x, f32(world_width))
-				delta_y := WorldShortestWrappedDelta(f32(candidate_y)-unit_y, f32(world_height))
-				distance_squared := delta_x*delta_x + delta_y*delta_y
-				score := WorldNoiseHash(candidate_x, candidate_y, seed)
-				if found_target && (distance_squared > best_distance_squared ||
-					(distance_squared == best_distance_squared && score <= best_score)) {
-					continue
-				}
-				if WorldTileOccupied(w, candidate_x, candidate_y) do continue
-				best_x, best_y = candidate_x, candidate_y
-				best_distance_squared = distance_squared
-				best_score = score
-				found_target = true
 			}
 		}
+		for direction in 0..<4 {
+			x, y := index/world_height, index%world_height
+			switch (direction+direction_offset)%4 {
+			case 0: x += 1
+			case 1: x -= 1
+			case 2: y += 1
+			case 3: y -= 1
+			}
+			x = WorldWrapCoordinate(x, world_width)
+			y = WorldWrapCoordinate(y, world_height)
+			next := x*world_height+y
+			if w.navigationStamp[next] == search_id do continue
+			if !WorldTileWalkable(w, x, y, unit.type, unit.kingdome) do continue
+			w.navigationStamp[next] = search_id
+			w.navigationQueue[tail] = next
+			tail += 1
+		}
 	}
-	return best_x, best_y, found_target
+	return 0, 0, false
+}
+
+UnitFindWaterTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int, int, bool) {
+	return UnitFindCollectorTarget(w, unit_slot, task_sequence)
 }
 
 UnitFindFarmlandTarget :: proc(w: ^World, unit_slot, sequence: int) -> (int, int, bool) {
@@ -852,9 +907,14 @@ UnitFindHomeTarget :: proc(w: ^World, unit_slot: int) -> (int, int, bool) {
 	return best_x, best_y, found_target
 }
 
-UnitFindTownReturnPoint :: proc(w: ^World, kingdom_slot, town_slot: int) -> (int, int, bool) {
+UnitFindTownReturnPoint :: proc(w: ^World, kingdom_slot, town_slot: int, unit_slot := -1) -> (int, int, bool) {
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
+	// Collectors choose the nearest reachable approach; other callers retain
+	// the original town-centered ring search.
+	if unit_slot >= 0 {
+		return UnitFindCollectorTarget(w, unit_slot, 0, kingdom_slot, town_slot)
+	}
 	town_x := w.kingdoms[kingdom_slot].towns[town_slot].x
 	town_y := w.kingdoms[kingdom_slot].towns[town_slot].y
 	for radius in 1..=8 {

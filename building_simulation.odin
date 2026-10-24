@@ -62,6 +62,37 @@ WorldBuildingUpdate :: proc(w: ^World, delta_time: f32) {
 	}
 }
 
+// Keep pathfinding queries O(1); rebuild only when orders are added or removed.
+WorldConstructionChanged :: proc(w: ^World) {
+	for &blocked in w.tileConstructionBlocked do blocked = false
+	for kingdom in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdom] do continue
+		for town_slot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdom].townUsed[town_slot] do continue
+			town := &w.kingdoms[kingdom].towns[town_slot]
+			if !town.constructionActive do continue
+			site := town.construction
+			BuildingReserveFootprint(w, site.x, site.y, BuildingTypeFromKind(site.kind))
+		}
+	}
+	for slot in 0..<COMBAT_SITE_CAPACITY {
+		if !w.combatSiteUsed[slot] do continue
+		site := w.combatSites[slot]
+		BuildingReserveFootprint(w, site.x, site.y, BuildingTypeFromKind(site.kind))
+	}
+	w.navigationRevision += 1
+}
+
+BuildingReserveFootprint :: proc(w: ^World, x, y: int, building_type: BuildingType, blocked := true) {
+	if BuildingWalkable(building_type) do return
+	width, height := BuildingTileSize(building_type)
+	for tile_x in x..<x+width {
+		for tile_y in y..<y+height {
+			w.tileConstructionBlocked[tile_x*int(w.maxY)+tile_y] = blocked
+		}
+	}
+}
+
 BuildingUpdateHome :: proc(w: ^World, building_slot: int, delta_time: f32) {
 	kingdom_slot := w.buildings.kingdom[building_slot]
 	town_slot := w.buildings.town[building_slot]
@@ -161,6 +192,44 @@ BuildingFindNearestHostileUnit :: proc(w: ^World, building_slot: int, attack_ran
 	return nearest_slot
 }
 
+BuildingAccessDistance :: proc(w: ^World, x, y, width, height, tile_x, tile_y: int) -> int {
+	distance_x, distance_y := 0, 0
+	if tile_x < x || tile_x >= x+width {
+		distance_x = min(WorldWrapCoordinate(x-tile_x, int(w.maxX)), WorldWrapCoordinate(tile_x-(x+width-1), int(w.maxX)))
+	}
+	if tile_y < y || tile_y >= y+height {
+		distance_y = min(WorldWrapCoordinate(y-tile_y, int(w.maxY)), WorldWrapCoordinate(tile_y-(y+height-1), int(w.maxY)))
+	}
+	return max(distance_x, distance_y)
+}
+
+// Preflight before paying for an order, then move existing occupants to the
+// closest reachable edge. Completion repeats this as a safety net for spawns or
+// other position changes during construction. If no exit exists, do not build.
+BuildingClearUnits :: proc(w: ^World, x, y: int, building_type: BuildingType, relocate: bool) -> bool {
+	if BuildingWalkable(building_type) do return true
+	width, height := BuildingTileSize(building_type)
+	for slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[slot] do continue
+		unit := &w.units[slot]
+		if int(unit.x) < x || int(unit.x) >= x+width || int(unit.y) < y || int(unit.y) >= y+height do continue
+		exit_x, exit_y, found := UnitFindBuildingExit(w, slot, x, y, width, height)
+		if !found do return false
+		if !relocate do continue
+		// A displaced trainee must release its old entrance and job assignment.
+		if _, converting := unit.state.(StateConverting); converting do UnitConversionCancel(w, slot)
+		unit.x, unit.y = f32(exit_x)+0.5, f32(exit_y)+0.5
+		unit.previousX, unit.previousY = unit.x, unit.y
+		unit.pathReady = false
+		if _, pacific := unit.state.(StatePacific); pacific {
+			unit.state = StatePacific.Roaming
+			unit.cooldown = 0
+		}
+		SpatialUnitMove(w, slot)
+	}
+	return true
+}
+
 TownBuilderConstruct :: proc(w: ^World, kingdom_slot, town_slot: int, can_grow: bool) -> bool {
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	if town.constructionActive do return false
@@ -205,15 +274,19 @@ TownStartConstruction :: proc(w: ^World, kingdom_slot, town_slot: int, kind: Bui
 	if !(kind in town.unlockedBuildings) do return false
 	if BuildingIsCombat(kind) do return false
 	if CombatSiteOverlaps(w, x, y, kind) do return false
+	if TownConstructionSiteOverlaps(w, x, y, kind) do return false
 
 	building_type := BuildingTypeFromKind(kind)
 	if !WorldBuildingValid(w, x, y, building_type) do return false
 	cost := BuildingWoodCost(kind)
 	if town.wood < cost do return false
+	if !BuildingClearUnits(w, x, y, building_type, false) do return false
+	BuildingClearUnits(w, x, y, building_type, true)
 
 	town.wood -= cost
 	town.construction = ConstructionSite{kind = kind, x = x, y = y, paid = cost}
 	town.constructionActive = true
+	WorldConstructionChanged(w)
 	return true
 }
 
@@ -227,6 +300,7 @@ TownConstructionPreempt :: proc(w: ^World, kingdom_slot, town_slot: int) {
 	town.wood += town.construction.paid
 	town.constructionActive = false
 	town.construction = {}
+	WorldConstructionChanged(w)
 
 	for unit_slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unit_slot] do continue
@@ -252,7 +326,7 @@ BuildingBuildSeconds :: proc(kind: BuildingKind) -> f32 {
 }
 
 // First decoration whose base tile sits on the site footprint.
-ConstructionPendingDecoration :: proc(w: ^World, site: ConstructionSite) -> int {
+TownConstructionPendingDecoration :: proc(w: ^World, site: ConstructionSite) -> int {
 	chunk_size := w.spatial.chunkSize
 	if chunk_size <= 0 do return -1
 	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
@@ -287,28 +361,8 @@ TownConstructionAccessPoint :: proc(w: ^World, unit_slot, kingdom_slot, town_slo
 
 	site := town.construction
 	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return 0, 0, false
-
-	for radius in 1 ..= 6 {
-		inner_min_x := site.x-radius+1
-		inner_max_x := site.x+width-1+radius-1
-		inner_min_y := site.y-radius+1
-		inner_max_y := site.y+height-1+radius-1
-		for x in site.x-radius ..= site.x+width-1+radius {
-			for y in site.y-radius ..= site.y+height-1+radius {
-				if x >= inner_min_x && x <= inner_max_x && y >= inner_min_y && y <= inner_max_y {
-					continue
-				}
-				wrapped_x := WorldWrapCoordinate(x, world_width)
-				wrapped_y := WorldWrapCoordinate(y, world_height)
-				if !WorldTileWalkable(w, wrapped_x, wrapped_y, w.units[unit_slot].type, w.units[unit_slot].kingdome) do continue
-				return wrapped_x, wrapped_y, true
-			}
-		}
-	}
-	return 0, 0, false
+	unit := &w.units[unit_slot]
+	return BuildingFindWorkAccessPoint(w, site.x, site.y, width, height, unit.type, unit.kingdome, int(unit.x), int(unit.y))
 }
 
 ConstructionProgress :: enum {
@@ -323,7 +377,7 @@ TownConstructionWork :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time
 	if !town.constructionActive do return .Completed
 
 	site := &town.construction
-	slot := ConstructionPendingDecoration(w, site^)
+	slot := TownConstructionPendingDecoration(w, site^)
 	if slot >= 0 {
 		kind := w.decorations.kind[slot]
 		site.clearWork += delta_time
@@ -337,6 +391,7 @@ TownConstructionWork :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time
 
 	site.buildWork += delta_time
 	if site.buildWork < BuildingBuildSeconds(site.kind) do return .Working
+	if !BuildingClearUnits(w, site.x, site.y, BuildingTypeFromKind(site.kind), false) do return .Working
 
 	if site.kind == .TownHall {
 		if !TownFound(w, kingdom_slot, site.x, site.y) {
@@ -354,6 +409,7 @@ TownConstructionWork :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time
 	}
 	town.constructionActive = false
 	town.construction = {}
+	WorldConstructionChanged(w)
 	return .Completed
 }
 
@@ -487,30 +543,126 @@ TownFindBuildingSite :: proc(w: ^World, kingdom_slot, town_slot: int, building_t
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	town_x := town.x
-	town_y := town.y
 	building_width, building_height := BuildingTileSize(building_type)
 	if building_width <= 0 || building_height <= 0 do return 0, 0, false
+	field, reachable := FlowFieldGet(w, kingdom_slot, town_slot, Builder{}, kingdom_slot)
+	if !reachable do return 0, 0, false
+
+	kind := BuildingKindOf(building_type)
+	// Stable per town and building kind, without consuming the effects RNG.
+	seed := w.seed ~ (u64(kingdom_slot*TOWN_CAPACITY+town_slot+1)*0x9E3779B97F4A7C15) ~
+		(u64(kind)+1)*0xBF58476D1CE4E5B9
 	max_radius := max(town.areaRadius, 2)
-	for radius in 2..=max_radius {
-		min_x := max(0, town_x-radius)
-		max_x := min(world_width-building_width, town_x+3+radius)
-		min_y := max(0, town_y-radius)
-		max_y := min(world_height-building_height, town_y+3+radius)
-		for x in min_x..=max_x {
-			for y in min_y..=max_y {
-				distance_x := max(max(town_x-x, 0), x-(town_x+3))
-				distance_y := max(max(town_y-y, 0), y-(town_y+3))
-				if max(distance_x, distance_y) != radius do continue
-				if !TownBuildingInArea(w, kingdom_slot, town_slot, x, y, building_type) {
-					continue
-				}
-				if CombatSiteOverlaps(w, x, y, BuildingKindOf(building_type)) do continue
-				if WorldBuildingValid(w, x, y, building_type) do return x, y, true
+	min_x := max(0, town.x-max_radius)
+	max_x := min(world_width-building_width, town.x+3+max_radius)
+	min_y := max(0, town.y-max_radius)
+	max_y := min(world_height-building_height, town.y+3+max_radius)
+	best_x, best_y := 0, 0
+	best_score: f32 = -1e30
+	found := false
+	for x in min_x..=max_x {
+		for y in min_y..=max_y {
+			distance_x := max(max(town.x-x, 0), x-(town.x+3))
+			distance_y := max(max(town.y-y, 0), y-(town.y+3))
+			if max(distance_x, distance_y) < 2 do continue
+			if !TownBuildingInArea(w, kingdom_slot, town_slot, x, y, building_type) do continue
+			if CombatSiteOverlaps(w, x, y, kind) do continue
+			if TownConstructionSiteOverlaps(w, x, y, kind) do continue
+			if !WorldBuildingValid(w, x, y, building_type) do continue
+			access, accessible := TownPlacementAccess(w, field, kingdom_slot, x, y, building_width, building_height)
+			if !accessible do continue
+			score := TownPlacementScore(w, x, y, building_width, building_height, town.x, town.y, kind, seed)
+			score += f32(min(access, 12))*0.12
+			if !found || score > best_score {
+				best_x, best_y, best_score, found = x, y, score, true
 			}
 		}
 	}
-	return 0, 0, false
+	return best_x, best_y, found
+}
+
+// Reject isolated sites, but allow any reachable work point around the footprint.
+TownPlacementAccess :: proc(w: ^World, field: ^FlowField, kingdom, x, y, width, height: int) -> (int, bool) {
+	world_width, world_height := int(w.maxX), int(w.maxY)
+	for radius in 1..=6 {
+		access, walkable := 0, 0
+		for tile_x in x-radius ..= x+width-1+radius {
+			for tile_y in y-radius ..= y+height-1+radius {
+				if tile_x >= x-radius+1 && tile_x <= x+width+radius-2 &&
+					tile_y >= y-radius+1 && tile_y <= y+height+radius-2 {
+					continue
+				}
+				wrapped_x := WorldWrapCoordinate(tile_x, world_width)
+				wrapped_y := WorldWrapCoordinate(tile_y, world_height)
+				if !WorldTileWalkable(w, wrapped_x, wrapped_y, Builder{}, kingdom) do continue
+				walkable += 1
+				reachable := field.direction[wrapped_x*world_height+wrapped_y] != .Blocked
+				if reachable do access += 1
+			}
+		}
+		if walkable > 0 do return access, access > 0
+	}
+	return 0, false
+}
+
+TownPlacementScore :: proc(w: ^World, x, y, width, height, hall_x, hall_y: int, kind: BuildingKind, seed: u64) -> f32 {
+	center_x, center_y := f32(x)+f32(width)*0.5, f32(y)+f32(height)*0.5
+	delta_x, delta_y := center_x-f32(hall_x+2), center_y-f32(hall_y+2)
+	// Jitter can outweigh a few tiles of distance, but not pull buildings to
+	// random outskirts. Nearby buildings then shape small, loosely spaced groups.
+	score := WorldNoiseHash(x, y, seed)*3.5-math.sqrt(delta_x*delta_x+delta_y*delta_y)*0.7
+	min_x, max_x := max(0, x-3), min(int(w.maxX)-1, x+width+2)
+	min_y, max_y := max(0, y-3), min(int(w.maxY)-1, y+height+2)
+	touching, aligned := 0, 0
+	nearest_gap_squared := 18
+	road_bonus: f32 = 0
+	for tile_x in min_x..=max_x {
+		for tile_y in min_y..=max_y {
+			slot := w.tileBuilding[tile_x*int(w.maxY)+tile_y]
+			if slot < 0 do continue
+			other_x, other_y := w.buildings.x[slot], w.buildings.y[slot]
+			// Count each neighboring footprint once, even if its anchor is
+			// outside this small tile-index query.
+			if tile_x != max(min_x, other_x) || tile_y != max(min_y, other_y) do continue
+			other_width, other_height := BuildingTileSize(w.buildings[slot].type)
+			gap_x := max(0, max(other_x-x-width, x-other_x-other_width))
+			gap_y := max(0, max(other_y-y-height, y-other_y-other_height))
+			gap_squared := gap_x*gap_x+gap_y*gap_y
+			other_kind := BuildingKindOf(w.buildings[slot].type)
+			if other_kind == .Path || other_kind == .Bridge {
+				if gap_squared == 0 do road_bonus = 1.5
+				if gap_squared <= 4 do road_bonus = max(road_bonus, 0.5)
+				continue
+			}
+			nearest_gap_squared = min(nearest_gap_squared, gap_squared)
+			if gap_squared == 0 do touching += 1
+			if other_kind == kind && (x*2+width == other_x*2+other_width ||
+				y*2+height == other_y*2+other_height) {
+				aligned += 1
+			}
+		}
+	}
+	score += road_bonus+max(0, 3-math.sqrt(f32(nearest_gap_squared)))*0.5
+	if kind == .Farmland {
+		// Fields may adjoin; retain legal soil rules and favor the existing
+		// two-fertile-tile yield threshold rather than decorative spacing.
+		score -= f32(min(touching, 4))*0.4
+	} else {
+		// Soft penalties allow dense/constrained towns to keep building.
+		score -= f32(min(touching, 4))*2.5+f32(min(aligned, 3))*1.3
+	}
+	fertile_tiles := 0
+	for tile_x in x..<x+width {
+		for tile_y in y..<y+height {
+			if w.ground[tile_x][tile_y].type == .FertileGround do fertile_tiles += 1
+		}
+	}
+	if kind == .Farmland {
+		if fertile_tiles >= 2 do score += 3
+	} else {
+		score -= f32(fertile_tiles)*0.2
+	}
+	return score
 }
 
 BuildingFarmlandOutput :: proc(w: ^World, building_slot: int) -> f32 {
