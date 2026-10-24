@@ -371,8 +371,7 @@ CombatBuilderDefend :: proc(w: ^World, unit_slot: int, delta_time: f32) -> bool 
 	if target < 0 do return false
 
 	unit.cooldown = UnitDefaultCooldown(unit.type)
-	w.units[target].health -= UnitDefaultDamage(unit.type)
-	if w.units[target].health <= 0 do UnitDespawn(w, target)
+	UnitApplyDamage(w, target, UnitDefaultDamage(unit.type), unit.x, unit.y, .Melee)
 	return true
 }
 

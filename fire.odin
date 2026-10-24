@@ -128,6 +128,7 @@ WorldFireIgnite :: proc(w: ^World, x, y, intensity: f32, spread: f32 = 1) -> (in
 	w.fireCursor = (slot+1)%FIRE_CAPACITY
 	w.fireCount += 1
 	SpatialFireInsert(w, slot)
+	FireIgniteBurst(w, f32(tile_x)+0.5, f32(tile_y)+0.5, w.fires.intensity[slot])
 	return slot, true
 }
 
@@ -159,6 +160,7 @@ WorldFireUpdate :: proc(w: ^World, delta_time: f32) {
 		FireDamageTile(w, slot, delta_time)
 		FireSpread(w, slot, delta_time)
 		FireIgniteUnits(w, slot, delta_time)
+		FireParticleTick(w, slot, delta_time)
 	}
 }
 
@@ -174,6 +176,7 @@ FireDamageTile :: proc(w: ^World, fire_slot: int, delta_time: f32) {
 		if !BuildingImmuneToFire(BuildingKindOf(w.buildings[building_slot].type)) {
 			w.buildings[building_slot].health -= FIRE_BUILDING_DAMAGE*intensity*delta_time
 			if w.buildings[building_slot].health <= 0 {
+				BuildingDestroyedBurst(w, building_slot)
 				BuildingDespawn(w, building_slot, -1)
 			}
 		}
@@ -304,9 +307,14 @@ FireDamageBurningUnits :: proc(w: ^World, delta_time: f32) {
 		if !w.unitUsed[unit_slot] do continue
 		if w.units.burning[unit_slot] <= 0 do continue
 		w.units.burning[unit_slot] -= delta_time
-		w.units.health[unit_slot] -= FIRE_UNIT_DAMAGE*delta_time
-		if w.units.health[unit_slot] <= 0 {
-			UnitDespawn(w, unit_slot)
+		if UnitApplyDamage(
+			w,
+			unit_slot,
+			FIRE_UNIT_DAMAGE*delta_time,
+			w.units.x[unit_slot],
+			w.units.y[unit_slot],
+			.Fire,
+		) {
 			continue
 		}
 		if w.units.burning[unit_slot] <= 0 do w.unitsBurning -= 1

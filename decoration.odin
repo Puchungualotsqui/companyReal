@@ -186,7 +186,9 @@ WorldDecorationDespawn :: proc(w: ^World, slot: int) -> bool {
 
 // Fells a harvested decoration: trunks keep a stump so the forest can regrow.
 DecorationFell :: proc(w: ^World, slot: int) {
-	switch w.decorations.kind[slot] {
+	kind := w.decorations.kind[slot]
+	DecorationDebris(w, w.decorations.x[slot], w.decorations.y[slot], kind)
+	switch kind {
 	case .Tree, .Pine:
 		w.decorations.kind[slot] = .Stump
 		w.decorations.variant[slot] = 0

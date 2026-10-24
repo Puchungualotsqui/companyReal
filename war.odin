@@ -434,8 +434,7 @@ WarriorSwing :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
 		if area_radius > 0 {
 			WarriorAreaUnitDamage(w, unit_slot, impact_x, impact_y, area_radius, damage)
 		} else {
-			w.units[target.slot].health -= damage
-			if w.units[target.slot].health <= 0 do UnitDespawn(w, target.slot)
+			UnitApplyDamage(w, target.slot, damage, unit.x, unit.y, .Melee)
 		}
 	case TargetBuilding:
 		if target.slot < 0 || target.slot >= BUILDING_CAPACITY || !w.buildingUsed[target.slot] {
@@ -455,6 +454,7 @@ WarriorSwing :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
 			)
 		}
 		impact_x, impact_y, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
+		BuildingHitBurst(w, target.slot, impact_x, impact_y)
 		w.buildings[target.slot].health -= damage
 		if w.buildings[target.slot].health <= 0 {
 			kind := BuildingKindOf(w.buildings[target.slot].type)
@@ -463,6 +463,7 @@ WarriorSwing :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
 				WorldNoiseHash(target.slot, int(w.simulationTime*4), 0xF12E) < 0.35 {
 				WorldFireIgnite(w, impact_x, impact_y, 1)
 			}
+			BuildingDestroyedBurst(w, target.slot)
 			BuildingDespawn(w, target.slot, unit.kingdome)
 			state.target = TargetNone{}
 		}
@@ -498,8 +499,7 @@ WarriorAreaUnitDamage :: proc(w: ^World, attacker_slot: int, x, y, radius, damag
 					delta_x := WorldShortestWrappedDelta(w.units.x[slot]-center_x, world_width)
 					delta_y := WorldShortestWrappedDelta(w.units.y[slot]-center_y, world_height)
 					if delta_x*delta_x+delta_y*delta_y <= radius*radius {
-						w.units[slot].health -= damage
-						if w.units[slot].health <= 0 do UnitDespawn(w, slot)
+						UnitApplyDamage(w, slot, damage, center_x, center_y, .Area)
 					}
 				}
 				slot = next

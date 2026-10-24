@@ -1523,6 +1523,10 @@ SpriteSet :: struct {
 	unit:         [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
 	decoration:   [DecorationKind]rl.Texture2D,
 	construction: [SPRITE_FACTION_COUNT]rl.Texture2D,
+	bloodSplat:   [BLOOD_SPLAT_VARIANTS]rl.Texture2D,
+	bloodPool:    [BLOOD_POOL_VARIANTS]rl.Texture2D,
+	gore:         [SPRITE_FACTION_COUNT][GorePartKind]rl.Texture2D,
+	particle:     [ParticleKind]rl.Texture2D,
 	fire:         rl.Texture2D,
 	shadow:       rl.Texture2D,
 	glow:         rl.Texture2D,
@@ -1549,12 +1553,27 @@ SpriteSetInit :: proc() -> SpriteSet {
 		art_grain(&art, u64(faction)+701)
 		set.construction[faction] = art_to_texture(art)
 		rl.UnloadImage(art.image)
+
+		for part in ALL_GORE_PARTS {
+			gore_art := draw_gore_part(part, accent)
+			set.gore[faction][part] = art_to_texture(gore_art)
+			rl.UnloadImage(gore_art.image)
+		}
 	}
 	for kind in ALL_DECORATION_KINDS {
 		art := draw_decoration_sprite(kind)
 		art_grain(&art, u64(kind)+301)
 		set.decoration[kind] = art_to_texture(art)
 		rl.UnloadImage(art.image)
+	}
+	for kind in ALL_PARTICLE_KINDS {
+		set.particle[kind] = create_particle_kind_texture(kind)
+	}
+	for variant in 0 ..< BLOOD_SPLAT_VARIANTS {
+		set.bloodSplat[variant] = create_blood_splat_texture(u64(variant)+1, 48, false)
+	}
+	for variant in 0 ..< BLOOD_POOL_VARIANTS {
+		set.bloodPool[variant] = create_blood_splat_texture(u64(variant)+101, 96, true)
 	}
 	set.fire = art_to_texture(draw_fire_sprite())
 	return set
@@ -1577,10 +1596,30 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 		if set.construction[faction].id != 0 {
 			rl.UnloadTexture(set.construction[faction])
 		}
+		for part in ALL_GORE_PARTS {
+			if set.gore[faction][part].id != 0 {
+				rl.UnloadTexture(set.gore[faction][part])
+			}
+		}
 	}
 	for kind in ALL_DECORATION_KINDS {
 		if set.decoration[kind].id != 0 {
 			rl.UnloadTexture(set.decoration[kind])
+		}
+	}
+	for kind in ALL_PARTICLE_KINDS {
+		if set.particle[kind].id != 0 {
+			rl.UnloadTexture(set.particle[kind])
+		}
+	}
+	for variant in 0 ..< BLOOD_SPLAT_VARIANTS {
+		if set.bloodSplat[variant].id != 0 {
+			rl.UnloadTexture(set.bloodSplat[variant])
+		}
+	}
+	for variant in 0 ..< BLOOD_POOL_VARIANTS {
+		if set.bloodPool[variant].id != 0 {
+			rl.UnloadTexture(set.bloodPool[variant])
 		}
 	}
 	if set.fire.id != 0 do rl.UnloadTexture(set.fire)

@@ -13,6 +13,9 @@ GROWTH_VILLAGER_PER_SECOND :: 1.0/300
 
 WorldUpdate :: proc(w: ^World, delta_time: f32) {
 	if delta_time <= 0 do return
+	// Particles and gore run on the render clock so they stay smooth between
+	// the coarse town simulation ticks.
+	WorldParticleUpdate(w, delta_time)
 	w.simulationAccumulator += delta_time
 	for w.simulationAccumulator >= TOWN_SIMULATION_STEP {
 		w.simulationTime += TOWN_SIMULATION_STEP
@@ -25,6 +28,7 @@ WorldUpdate :: proc(w: ^World, delta_time: f32) {
 		WorldBuildingUpdate(w, TOWN_SIMULATION_STEP)
 		WorldFireUpdate(w, TOWN_SIMULATION_STEP)
 		WorldDecorationUpdate(w, TOWN_SIMULATION_STEP)
+		BloodUpdate(w, TOWN_SIMULATION_STEP)
 		WorldKingdomUpdate(w, TOWN_SIMULATION_STEP)
 		FogUpdate(w)
 		w.simulationAccumulator -= TOWN_SIMULATION_STEP
@@ -90,6 +94,7 @@ WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
 		case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
 			UnitUpdateWarrior(w, unit_slot, delta_time)
 		}
+		if w.unitUsed[unit_slot] do BloodBleedTick(w, unit_slot, delta_time)
 	}
 }
 

@@ -19,5 +19,4 @@
 
 # Things to check
 - Easy to see what kingdom is from the town defended or attacked in the townhall options and by arrows color when town selected
-- The units that go to defend/attack some town are randomly selected? Are randomly selected, but taking in count the unit type to avoid sending by randomness all giants and none combat builder?
 - Are all automatic buildings actually being built?

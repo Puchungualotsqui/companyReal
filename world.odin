@@ -18,6 +18,12 @@ World :: struct {
 	fireCursor: int,
 	fireCount: int,
 	unitsBurning: int,
+	blood: BloodField,
+	particles: #soa [PARTICLE_CAPACITY]Particle,
+	particleUsed: [PARTICLE_CAPACITY]bool,
+	particleCursor: int,
+	particleCount: int,
+	particleRandom: u64,
 	kingdoms: #soa [KINGDOMS_CAPACITY]Kingdom,
 	kingdomUsed: [KINGDOMS_CAPACITY]bool,
 	usedTownName: [len(TownCulture)][TOWN_NAME_POOL_MAX]bool,
@@ -61,6 +67,8 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	for &x in w.ground {
 		x = make([dynamic]Tile, maxY)
 	}
+	if !BloodInit(w) do return false
+	w.particleRandom = settings.seed*0x9E3779B97F4A7C15+0x9E37
 	if !SpatialIndexInit(w) do return false
 	if !WorldNavigationInit(w) do return false
 	node_count := int(maxX)*int(maxY)
@@ -98,6 +106,7 @@ WorldDeinit :: proc(w: ^World) {
 	}
 	delete(w.ground)
 	FogDeinit(w)
+	BloodDeinit(w)
 }
 
 Tile :: struct {

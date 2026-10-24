@@ -31,6 +31,8 @@ WorldRenderer :: struct {
 	fogTexture: rl.Texture2D,
 	fogPixels:  []u8,
 	fogRevision: u64,
+	bloodTexture: rl.Texture2D,
+	bloodPixels: [dynamic]u8,
 }
 
 WorldView :: struct {
@@ -64,6 +66,7 @@ WorldViewInit :: proc(w: ^World) -> WorldView {
 		},
 	}
 	FogRenderInit(w, &view.renderer)
+	BloodRenderInit(w, &view.renderer)
 	return view
 }
 
@@ -92,6 +95,7 @@ WorldViewUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32) {
 
 WorldRendererUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
 	TerrainRendererUpdate(w, &renderer.terrain)
+	BloodRenderUpdate(w, renderer)
 	FogRenderUpdate(w, renderer)
 }
 
@@ -102,6 +106,7 @@ WorldRendererDeinit :: proc(renderer: ^WorldRenderer) {
 	delete(renderer.shadows)
 	delete(renderer.lights)
 	delete(renderer.memoryFires)
+	BloodRenderDeinit(renderer)
 	FogRenderDeinit(renderer)
 }
 
@@ -198,6 +203,15 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 			last_copy_y,
 		)
 	}
+	BloodRenderGround(
+		w,
+		renderer,
+		camera,
+		first_copy_x,
+		last_copy_x,
+		first_copy_y,
+		last_copy_y,
+	)
 	WorldRenderSprites(
 		w,
 		renderer,
@@ -459,6 +473,10 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 			clear(&renderer.items)
 			clear(&renderer.shadows)
 			clear(&renderer.memoryFires)
+
+			if camera.zoom >= PARTICLE_MIN_ZOOM {
+				ParticleDraw(w, renderer, offset_x, offset_y, min_x, max_x, min_y, max_y, true)
+			}
 
 			for building_slot in 0 ..< BUILDING_CAPACITY {
 				if !w.buildingUsed[building_slot] do continue
@@ -813,6 +831,10 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 						)
 					}
 				}
+			}
+
+			if camera.zoom >= PARTICLE_MIN_ZOOM {
+				ParticleDraw(w, renderer, offset_x, offset_y, min_x, max_x, min_y, max_y, false)
 			}
 		}
 	}

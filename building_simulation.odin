@@ -88,8 +88,15 @@ BuildingUpdateCannon :: proc(w: ^World, building_slot: int, delta_time: f32) {
 
 	nearest_slot := BuildingFindNearestHostileUnit(w, building_slot, CANNON_RANGE)
 	if nearest_slot < 0 do return
-	w.units[nearest_slot].health -= CANNON_DAMAGE
-	if w.units[nearest_slot].health <= 0 do UnitDespawn(w, nearest_slot)
+	width, height := BuildingTileSize(w.buildings[building_slot].type)
+	UnitApplyDamage(
+		w,
+		nearest_slot,
+		CANNON_DAMAGE,
+		f32(w.buildings.x[building_slot])+f32(width)*0.5,
+		f32(w.buildings.y[building_slot])+f32(height)*0.5,
+		.Projectile,
+	)
 	w.buildings.cooldown[building_slot] = CANNON_COOLDOWN
 }
 
@@ -101,8 +108,15 @@ BuildingUpdateWatchtower :: proc(w: ^World, building_slot: int, delta_time: f32)
 
 	nearest_slot := BuildingFindNearestHostileUnit(w, building_slot, WATCHTOWER_RANGE)
 	if nearest_slot < 0 do return
-	w.units[nearest_slot].health -= WATCHTOWER_DAMAGE
-	if w.units[nearest_slot].health <= 0 do UnitDespawn(w, nearest_slot)
+	width, height := BuildingTileSize(w.buildings[building_slot].type)
+	UnitApplyDamage(
+		w,
+		nearest_slot,
+		WATCHTOWER_DAMAGE,
+		f32(w.buildings.x[building_slot])+f32(width)*0.5,
+		f32(w.buildings.y[building_slot])+f32(height)*0.5,
+		.Projectile,
+	)
 	w.buildings.cooldown[building_slot] = WATCHTOWER_COOLDOWN
 }
 
