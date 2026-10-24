@@ -483,7 +483,9 @@ UnitConvert :: proc(w: ^World, unit_slot: int) {
 			job.assigned = max(0, job.assigned-1)
 			job.remaining = max(0, job.remaining-1)
 			if job.remaining <= 0 {
-				town.conversions[job_index] = town.conversions[town.conversionCount-1]
+				for i in job_index..<town.conversionCount-1 {
+					town.conversions[i] = town.conversions[i+1]
+				}
 				town.conversionCount -= 1
 			}
 			break

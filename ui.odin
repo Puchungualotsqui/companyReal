@@ -631,7 +631,9 @@ UIConversionRows :: proc(w: ^World, selection: Selection, kinds: ^[len(UnitKind)
 	kingdom, town := UISelectionTown(w, selection)
 	count := 0
 	for kind in UI_CONVERSION_KINDS {
-		if TownUnitAvailable(w, kingdom, town, kind) || TownUnitCount(w, kingdom, town, kind) > 0 {
+		if TownUnitAvailable(w, kingdom, town, kind) || TownUnitCount(w, kingdom, town, kind) > 0 ||
+			UIConversionCount(w, kingdom, town, .Villager, kind) > 0 ||
+			UIConversionCount(w, kingdom, town, kind, .Villager) > 0 {
 			kinds[count] = kind
 			count += 1
 		}
@@ -861,7 +863,18 @@ UIConversionPending :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> in
 	return pending
 }
 
+UIConversionCount :: proc(w: ^World, kingdom, town: int, from, to: UnitKind) -> int {
+	if !WorldTownExists(w, kingdom, town) do return 0
+	t := &w.kingdoms[kingdom].towns[town]
+	for i in 0..<t.conversionCount {
+		job := t.conversions[i]
+		if job.from == from && job.to == to do return job.remaining
+	}
+	return 0
+}
+
 UICanConvertTo :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> bool {
+	if UIConversionCount(w, kingdom, town, kind, .Villager) > 0 do return true
 	if !TownUnitAvailable(w, kingdom, town, kind) do return false
 	villagers := TownUnitCount(w, kingdom, town, .Villager)
 	committed := 0
@@ -873,6 +886,7 @@ UICanConvertTo :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> bool {
 }
 
 UICanConvertFrom :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> bool {
+	if UIConversionCount(w, kingdom, town, .Villager, kind) > 0 do return true
 	if !WorldTownExists(w, kingdom, town) do return false
 	count := TownUnitCount(w, kingdom, town, kind)
 	committed := 0
@@ -1231,13 +1245,21 @@ UIConversionClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: r
 		minus, plus := UIButtonRects(panel, i)
 		if rl.CheckCollisionPointRec(mouse, plus) {
 			if UICanConvertTo(w, kingdom, town, kind) {
-				TownAddConversion(w, kingdom, town, .Villager, kind, 1)
+				if UIConversionCount(w, kingdom, town, kind, .Villager) > 0 {
+					TownRemoveConversion(w, kingdom, town, kind, .Villager, 1)
+				} else {
+					TownAddConversion(w, kingdom, town, .Villager, kind, 1)
+				}
 			}
 			return
 		}
 		if rl.CheckCollisionPointRec(mouse, minus) {
 			if UICanConvertFrom(w, kingdom, town, kind) {
-				TownAddConversion(w, kingdom, town, kind, .Villager, 1)
+				if UIConversionCount(w, kingdom, town, .Villager, kind) > 0 {
+					TownRemoveConversion(w, kingdom, town, .Villager, kind, 1)
+				} else {
+					TownAddConversion(w, kingdom, town, kind, .Villager, 1)
+				}
 			}
 			return
 		}

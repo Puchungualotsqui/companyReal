@@ -455,20 +455,34 @@ TownAddConversion :: proc(w: ^World, kingdom_slot, town_slot: int, from, to: Uni
 	return true
 }
 
-// Reduces queued conversions but lets in-flight units finish their trip.
+// Cancels queued work first, then recalls units already travelling or training.
 TownRemoveConversion :: proc(w: ^World, kingdom_slot, town_slot: int, from, to: UnitKind, count: int) -> bool {
 	if count <= 0 || !WorldTownExists(w, kingdom_slot, town_slot) do return false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	for job_index in 0..<town.conversionCount {
 		job := &town.conversions[job_index]
 		if job.from != from || job.to != to do continue
-		removable := max(0, job.remaining-job.assigned)
-		job.remaining -= min(count, removable)
+		removed := min(count, max(0, job.remaining-job.assigned))
+		job.remaining -= removed
+		for unit_slot in 0..<UNIT_CAPACITY {
+			if removed >= count do break
+			if !w.unitUsed[unit_slot] do continue
+			unit := &w.units[unit_slot]
+			if unit.kingdome != kingdom_slot || unit.town != town_slot do continue
+			if UnitKindOf(unit.type) != from do continue
+			state, converting := unit.state.(StateConverting)
+			if !converting || state.to != to do continue
+			UnitConversionCancel(w, unit_slot)
+			job.remaining -= 1
+			removed += 1
+		}
 		if job.remaining <= 0 {
-			town.conversions[job_index] = town.conversions[town.conversionCount-1]
+			for i in job_index..<town.conversionCount-1 {
+				town.conversions[i] = town.conversions[i+1]
+			}
 			town.conversionCount -= 1
 		}
-		return true
+		return removed > 0
 	}
 	return false
 }
