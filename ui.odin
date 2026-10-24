@@ -400,6 +400,10 @@ UIUnitStateName :: proc(state: UnitState) -> cstring {
 			return "Going home"
 		case .Sleeping:
 			return "Resting"
+		case .Hiding:
+			return "Sheltering"
+		case .Fleeing:
+			return "Fleeing enemies"
 		}
 	case StateWarrior:
 		switch s.activity {
@@ -645,7 +649,7 @@ UIConversionRows :: proc(w: ^World, selection: Selection, kinds: ^[len(UnitKind)
 	kingdom, town := UISelectionTown(w, selection)
 	count := 0
 	for kind in UI_CONVERSION_KINDS {
-		if TownUnitAvailable(w, kingdom, town, kind) || TownUnitCount(w, kingdom, town, kind) > 0 ||
+		if TownUnitUnlocked(w, kingdom, town, kind) || TownUnitCount(w, kingdom, town, kind) > 0 ||
 			UIConversionCount(w, kingdom, town, .Villager, kind) > 0 ||
 			UIConversionCount(w, kingdom, town, kind, .Villager) > 0 {
 			kinds[count] = kind
@@ -702,6 +706,9 @@ UIPanelHeight :: proc(w: ^World, ui: ^UIState) -> f32 {
 	height := UI_STAT_Y + f32(UIStatCount(w, ui.selection))*UI_STAT_H + UI_PAD
 	if ui.selection.kind == .Unit && UIUnitEffectCount(w, ui.selection.slot) > 0 {
 		height += UI_EFFECT_ROW_H
+	}
+	if ui.selection.kind == .Building && BuildingKindOf(w.buildings[ui.selection.slot].type) == .Home {
+		height += 72
 	}
 	return height
 }
@@ -1572,6 +1579,9 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 	if ui.selection.kind == .Unit {
 		UIDrawUnitEffects(w, renderer, panel, ui.selection.slot)
 	}
+	if ui.selection.kind == .Building && BuildingKindOf(w.buildings[ui.selection.slot].type) == .Home {
+		UIDrawHomeOccupant(w, renderer, panel, ui.selection.slot)
+	}
 
 	if UISelectionTownHall(w, ui.selection) {
 		UIDrawGrowthBar(w, panel, kingdom, town)
@@ -1585,6 +1595,36 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 			}
 		}
 	}
+}
+
+UIHomeOccupant :: proc(w: ^World, home_slot: int) -> int {
+	if home_slot < 0 || home_slot >= BUILDING_CAPACITY || !w.buildingUsed[home_slot] do return -1
+	if BuildingKindOf(w.buildings[home_slot].type) != .Home do return -1
+	resident := w.buildings[home_slot].homeResident-1
+	if UnitInsideHome(w, resident) == home_slot do return resident
+	return -1
+}
+
+UIDrawHomeOccupant :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, home_slot: int) {
+	y := panel.y+UI_STAT_Y+UI_STAT_H+10
+	resident := UIHomeOccupant(w, home_slot)
+	if resident < 0 {
+		ui_text("INDOOR OCCUPANT", panel.x+UI_PAD, y, UI_COLOR_DIM)
+		ui_text("No one inside.", panel.x+UI_PAD, y+28, UI_COLOR_DIM)
+		return
+	}
+	label: cstring = "SLEEPING INSIDE"
+	if w.units[resident].state.(StatePacific) == .Hiding do label = "SHELTERING INSIDE"
+	ui_text(label, panel.x+UI_PAD, y, UI_COLOR_DIM)
+	kind := UnitKindOf(w.units[resident].type)
+	faction := FactionSpriteIndex(w.units[resident].kingdome)
+	texture := renderer.sprites.unit[faction][kind]
+	icon := rl.Rectangle{panel.x+UI_PAD, y+26, 32, 32}
+	if texture.id != 0 {
+		source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+		rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
+	}
+	ui_text(fmt.ctprintf("%s #%d", UIUnitName(kind), resident+1), icon.x+42, icon.y+6, UI_COLOR_TEXT)
 }
 
 UIDrawTownTabs :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle) {
@@ -1878,25 +1918,39 @@ UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, p
 		rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
 	}
 
-	ui_text(UIUnitName(kind), panel.x+UI_PAD+38, row_y+8, UI_COLOR_TEXT)
+	available := TownUnitAvailable(w, kingdom, town, kind)
+	missing_building := TownUnitUnlocked(w, kingdom, town, kind) && !available
+	label_y := missing_building ? row_y+1 : row_y+8
+	ui_text(UIUnitName(kind), panel.x+UI_PAD+38, label_y, available ? UI_COLOR_TEXT : UI_COLOR_DIM)
+	if missing_building {
+		building_kind := UnitTrainingBuildingKind(kind)
+		hint := fmt.ctprintf("Needs %s", UIBuildingName(building_kind))
+		t := &w.kingdoms[kingdom].towns[town]
+		if t.constructionActive && t.construction.kind == building_kind {
+			hint = fmt.ctprintf("Building %s", UIBuildingName(building_kind))
+		}
+		rl.DrawTextEx(ui_font(), hint, rl.Vector2{panel.x+UI_PAD+38, row_y+22}, 12, 1, UI_COLOR_DIM)
+	}
 
 	minus, plus := UIButtonRects(panel, index)
 	_, remaining, training, progress, has_job := UIConversionProgress(w, kingdom, town, kind)
 	if has_job && remaining > 0 {
 		ui_text(fmt.ctprintf("%d/%d", training, remaining), minus.x-112, row_y+8, UI_COLOR_DIM)
 
-		bar := rl.Rectangle{
-			panel.x+UI_PAD+38,
-			row_y+31,
-			max(minus.x-130-(panel.x+UI_PAD+38), 20),
-			3,
-		}
-		rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
-		if progress > 0 {
-			rl.DrawRectangleRec(
-				rl.Rectangle{bar.x, bar.y, bar.width*progress, bar.height},
-				UI_COLOR_GOLD,
-			)
+		if !missing_building {
+			bar := rl.Rectangle{
+				panel.x+UI_PAD+38,
+				row_y+31,
+				max(minus.x-130-(panel.x+UI_PAD+38), 20),
+				3,
+			}
+			rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
+			if progress > 0 {
+				rl.DrawRectangleRec(
+					rl.Rectangle{bar.x, bar.y, bar.width*progress, bar.height},
+					UI_COLOR_GOLD,
+				)
+			}
 		}
 	}
 

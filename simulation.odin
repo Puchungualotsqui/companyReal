@@ -3,6 +3,7 @@ package main
 import "core:math"
 
 TOWN_SIMULATION_STEP :: 0.25
+TOWN_ALARM_AREA_FACTOR :: 1.25
 WORLD_DAY_LENGTH_SECONDS :: 7*60.0
 
 // Population growth always ticks. Food/water supply and unconverted villagers
@@ -55,7 +56,52 @@ WorldTownExists :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
 		w.kingdomUsed[kingdom_slot] && w.kingdoms[kingdom_slot].townUsed[town_slot]
 }
 
+// Scan each town once, rather than repeating the proximity query per sleeper.
+WorldTownAlarmUpdate :: proc(w: ^World) {
+	for kingdom in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdom] do continue
+		for town_slot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdom].townUsed[town_slot] do continue
+			town := &w.kingdoms[kingdom].towns[town_slot]
+			town.alarmActive = TownHasNearbyEnemy(w, kingdom, town_slot)
+		}
+	}
+}
+
+TownHasNearbyEnemy :: proc(w: ^World, kingdom, town_slot: int) -> bool {
+	if !WorldTownExists(w, kingdom, town_slot) do return false
+	chunk_size := w.spatial.chunkSize
+	if chunk_size <= 0 || w.spatial.chunksX <= 0 || w.spatial.chunksY <= 0 do return false
+	town := &w.kingdoms[kingdom].towns[town_slot]
+	width, height := BuildingTileSize(TownHall{})
+	center_x, center_y := f32(town.x)+f32(width-1)*0.5, f32(town.y)+f32(height-1)*0.5
+	radius := f32(town.areaRadius)*TOWN_ALARM_AREA_FACTOR
+	chunk_radius := int((radius+f32(max(width, height)))/f32(chunk_size))+1
+	center_chunk_x, center_chunk_y := int(center_x)/chunk_size, int(center_y)/chunk_size
+	for offset_x in 0..<min(chunk_radius*2+1, w.spatial.chunksX) {
+		chunk_x := WorldWrapCoordinate(center_chunk_x-chunk_radius+offset_x, w.spatial.chunksX)
+		for offset_y in 0..<min(chunk_radius*2+1, w.spatial.chunksY) {
+			chunk_y := WorldWrapCoordinate(center_chunk_y-chunk_radius+offset_y, w.spatial.chunksY)
+			chunk := chunk_x*w.spatial.chunksY+chunk_y
+			for unit := w.spatial.unitHead[chunk]; unit >= 0; unit = w.spatial.unitNext[unit] {
+				if !w.unitUsed[unit] || UnitHiddenInside(w, unit) do continue
+				if !KingdomAtWar(w, kingdom, w.units[unit].kingdome) do continue
+				// Match the town area's distance from the hall footprint, including
+				// the wrapped map edges used by unit movement and proximity queries.
+				dx := math.abs(WorldShortestWrappedDelta(f32(int(w.units.x[unit]))-center_x, f32(w.maxX)))
+				dy := math.abs(WorldShortestWrappedDelta(f32(int(w.units.y[unit]))-center_y, f32(w.maxY)))
+				dx = max(0, dx-f32(width-1)*0.5)
+				dy = max(0, dy-f32(height-1)*0.5)
+				if dx*dx+dy*dy <= radius*radius do return true
+			}
+		}
+	}
+	return false
+}
+
 WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
+	WorldHousingUpdate(w)
+	WorldTownAlarmUpdate(w)
 	for unit_slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unit_slot] do continue
 		w.units.previousX[unit_slot] = w.units.x[unit_slot]
@@ -76,7 +122,9 @@ WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
 
 	for unit_slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unit_slot] do continue
+		UnitUpdateMilitaryAlarm(w, unit_slot)
 		if _, converting := w.units[unit_slot].state.(StateConverting); converting {
+			if UnitUpdatePacificSafety(w, unit_slot, delta_time) do continue
 			UnitUpdateConverting(w, unit_slot, delta_time)
 			continue
 		}
@@ -101,16 +149,15 @@ WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
 }
 
 WorldKingdomUpdate :: proc(w: ^World, delta_time: f32) {
-	housing_remaining: [KINGDOMS_CAPACITY][TOWN_CAPACITY]int
 	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom_slot] do continue
 		for town_slot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
 			KingdomTownUpdate(w, kingdom_slot, town_slot, delta_time)
-			housing_remaining[kingdom_slot][town_slot] = w.kingdoms[kingdom_slot].towns[town_slot].homes
 		}
 	}
 
+	WorldHousingUpdate(w)
 	shortage_epoch := int(w.simulationTime / 5)
 	for unit_slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unit_slot] do continue
@@ -121,12 +168,83 @@ WorldKingdomUpdate :: proc(w: ^World, delta_time: f32) {
 			continue
 		}
 
-		is_housed := housing_remaining[kingdom_slot][town_slot] > 0
-		if is_housed do housing_remaining[kingdom_slot][town_slot] -= 1
+		is_housed := UnitHome(w, unit_slot) >= 0
 		UnitApplyTownEffects(w, unit_slot, is_housed, shortage_epoch, delta_time)
 	}
 
 	WorldConversionAssign(w)
+}
+
+// Keep the existing slot-order housing entitlement, but give each housed citizen
+// a persistent Home identity. Awake citizens (including soldiers) reserve capacity
+// too, so sleep and the NoHome/regeneration effects cannot disagree.
+WorldHousingUpdate :: proc(w: ^World) {
+	remaining: [KINGDOMS_CAPACITY][TOWN_CAPACITY]int
+	for home in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[home] do continue
+		building := &w.buildings[home]
+		if BuildingKindOf(building.type) != .Home || building.health <= 0 ||
+			!WorldTownExists(w, building.kingdom, building.town) {
+			continue
+		}
+		remaining[building.kingdom][building.town] += 1
+	}
+
+	for slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[slot] do continue
+		unit := &w.units[slot]
+		eligible := false
+		if WorldTownExists(w, unit.kingdome, unit.town) {
+			eligible = remaining[unit.kingdome][unit.town] > 0
+			if eligible do remaining[unit.kingdome][unit.town] -= 1
+		}
+		if !eligible || UnitHome(w, slot) < 0 do UnitReleaseHome(w, slot)
+		if unit.sleepInside && UnitInsideHome(w, slot) < 0 do UnitSleepWake(w, slot)
+	}
+
+	free_home: [KINGDOMS_CAPACITY][TOWN_CAPACITY]int
+	for &kingdom in free_home do for &town in kingdom do town = -1
+	next_home: [BUILDING_CAPACITY]int
+	for home in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[home] do continue
+		building := &w.buildings[home]
+		resident := building.homeResident-1
+		if resident >= 0 && resident < UNIT_CAPACITY && UnitHome(w, resident) == home do continue
+		building.homeResident = 0
+		if BuildingKindOf(building.type) != .Home || building.health <= 0 ||
+			!WorldTownExists(w, building.kingdom, building.town) {
+			continue
+		}
+		next_home[home] = free_home[building.kingdom][building.town]
+		free_home[building.kingdom][building.town] = home
+	}
+	for slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[slot] || UnitHome(w, slot) >= 0 do continue
+		unit := &w.units[slot]
+		if !WorldTownExists(w, unit.kingdome, unit.town) do continue
+		head := &free_home[unit.kingdome][unit.town]
+		// Only newly assigned citizens search; existing reservations never shuffle.
+		best, previous, best_previous := -1, -1, -1
+		best_distance: f32 = 0
+		for home := head^; home >= 0; home = next_home[home] {
+			dx := WorldShortestWrappedDelta(f32(w.buildings.x[home])+0.5-unit.x, f32(w.maxX))
+			dy := WorldShortestWrappedDelta(f32(w.buildings.y[home])+0.5-unit.y, f32(w.maxY))
+			distance := dx*dx+dy*dy
+			if best < 0 || distance < best_distance {
+				best, best_previous, best_distance = home, previous, distance
+			}
+			previous = home
+		}
+		if best < 0 do continue
+		if best_previous < 0 {
+			head^ = next_home[best]
+		} else {
+			next_home[best_previous] = next_home[best]
+		}
+		UnitSleepWake(w, slot)
+		unit.homeSlot = best
+		w.buildings.homeResident[best] = slot+1
+	}
 }
 
 // Assigns idle units to queued conversions. Runs once per simulation step over
@@ -140,6 +258,10 @@ WorldConversionAssign :: proc(w: ^World) {
 
 		town := &w.kingdoms[unit.kingdome].towns[unit.town]
 		if town.conversionCount == 0 do continue
+		if !UnitIsWarrior(unit.type) && UnitKindOf(unit.type) != .CombatBuilder {
+			if town.alarmActive || UnitFindNearbyEnemy(w, unit_slot, FLEE_THREAT_RADIUS) >= 0 do continue
+			if state, pacific := unit.state.(StatePacific); pacific && (state == .Hiding || state == .Fleeing) do continue
+		}
 
 		from := UnitKindOf(unit.type)
 		for job_index in 0..<town.conversionCount {
@@ -162,6 +284,7 @@ WorldConversionAssign :: proc(w: ^World) {
 			if !found do continue
 
 			job.assigned += 1
+			UnitSleepWake(w, unit_slot)
 			unit.state = StateConverting{
 				to = job.to,
 				building = building,

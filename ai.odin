@@ -448,8 +448,7 @@ AIPickWarTarget :: proc(
 	best := -1
 	best_score: f32 = -1e9
 	for other in 0 ..< KINGDOMS_CAPACITY {
-		if other == kingdom || !w.kingdomUsed[other] do continue
-		if KingdomAtWar(w, kingdom, other) do continue
+		if !KingdomCanDeclareWar(w, kingdom, other) do continue
 		if other == brain.truceKingdom && w.simulationTime < brain.truceUntil do continue
 		target_town := AINearestTownOf(w, other, kingdom)
 		if target_town < 0 do continue
@@ -536,16 +535,19 @@ AIDiplomacy :: proc(w: ^World, kingdom: int) {
 
 	target_town := AINearestTownOf(w, target, kingdom)
 	if target_town < 0 do return
+	attacked := false
 	for town_slot in 0 ..< TOWN_CAPACITY {
 		if !w.kingdoms[kingdom].townUsed[town_slot] do continue
 		if w.kingdoms[kingdom].towns[town_slot].orderCount >= 1 do continue
-		KingdomIssueCommand(
+		if KingdomIssueCommand(
 			w,
 			kingdom,
 			CommandAttackTown{town = town_slot, target_kingdom = target, target_town = target_town},
-		)
+		) {
+			attacked = true
+		}
 	}
-	brain.warCommitUntil = w.simulationTime+AI_WAR_COMMIT_SECONDS
+	if attacked do brain.warCommitUntil = w.simulationTime+AI_WAR_COMMIT_SECONDS
 }
 
 AIExpand :: proc(w: ^World, kingdom: int) {

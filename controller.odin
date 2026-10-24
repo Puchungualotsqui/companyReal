@@ -108,9 +108,7 @@ KingdomIssueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) ->
 	case CommandBuildCombat:
 		return TownStartCombatConstruction(w, kingdom, cmd.town, cmd.kind, cmd.x, cmd.y)
 	case CommandAttackTown:
-		if !WorldTownExists(w, kingdom, cmd.town) do return false
-		TownStartAttack(w, kingdom, cmd.town, cmd.target_kingdom, cmd.target_town)
-		return true
+		return TownStartAttack(w, kingdom, cmd.town, cmd.target_kingdom, cmd.target_town)
 	case CommandDefendTown:
 		if !WorldTownExists(w, kingdom, cmd.town) do return false
 		TownStartDefending(w, kingdom, cmd.town, cmd.target_kingdom, cmd.target_town)
@@ -124,9 +122,7 @@ KingdomIssueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) ->
 		TownStopDefending(w, kingdom, cmd.town, cmd.target_kingdom, cmd.target_town)
 		return true
 	case CommandDeclareWar:
-		if KingdomAtWar(w, kingdom, cmd.other) do return false
-		KingdomDeclareWar(w, kingdom, cmd.other)
-		return true
+		return KingdomDeclareWar(w, kingdom, cmd.other)
 	case CommandMakePeace:
 		if !KingdomAtWar(w, kingdom, cmd.other) do return false
 		KingdomMakePeace(w, kingdom, cmd.other)

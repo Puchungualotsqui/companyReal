@@ -7,6 +7,9 @@ WARRIOR_CASCADE_UNIT_CHANCE :: 0.85
 WARRIOR_CASCADE_BUILDING_CHANCE :: 0.75
 WARRIOR_HOME_PATROL_RADIUS :: 8
 WARRIOR_DEFEND_PATROL_RADIUS :: 12
+WARRIOR_PATROL_STEP_RADIUS :: 3
+WARRIOR_PATROL_SPEED_RATIO :: 0.55
+WARRIOR_PATROL_MIN_PAUSE :: 2.0
 WARRIOR_ESCORT_CHANCE :: 0.35
 WARRIOR_GARRISON_ESCORT_RATIO :: 0.15
 WARRIOR_ESCORT_RADIUS :: 30
@@ -68,6 +71,7 @@ UnitUpdateWarrior :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 
 	if _, is_none := state.target.(TargetNone); !is_none {
 		state.activity = .Attacking
+		unit.pathReady = false
 		if UnitWarriorEngage(w, unit_slot, state, delta_time) do return
 		state.target = TargetNone{}
 	}
@@ -107,11 +111,16 @@ UnitUpdateWarrior :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			}
 		}
 	case WarriorDefend:
-		state.activity = .Moving
-		if UnitWarriorTravel(w, unit_slot, order.kingdom, order.town, delta_time) == .Arrived {
+		// A new order still travels to the hall; once stationed, keep the patrol
+		// destination instead of pulling the defender back to the hall each tick.
+		if state.patrolSequence == 0 || UnitWarriorFarFromTown(w, unit_slot,
+			order.kingdom, order.town, WARRIOR_DEFEND_PATROL_RADIUS*2) {
+			state.activity = .Moving
+			if UnitWarriorTravel(w, unit_slot, order.kingdom, order.town, delta_time) != .Arrived do return
 			unit.pathReady = false
-			UnitWarriorPatrol(w, unit_slot, order.kingdom, order.town, WARRIOR_DEFEND_PATROL_RADIUS, delta_time, state)
+			state.patrolSequence = max(1, state.patrolSequence)
 		}
+		UnitWarriorPatrol(w, unit_slot, order.kingdom, order.town, WARRIOR_DEFEND_PATROL_RADIUS, delta_time, state)
 	}
 }
 
@@ -131,6 +140,7 @@ UnitWarriorAssignOrder :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) 
 	if !WarriorOrderEqual(previous, new_order) {
 		state.target = TargetNone{}
 		state.escortTarget = -1
+		state.patrolSequence = 0
 		unit.pathReady = false
 	}
 }
@@ -198,6 +208,7 @@ WarriorFocusValid :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) -> bo
 		if target.slot < 0 || target.slot >= UNIT_CAPACITY || !w.unitUsed[target.slot] {
 			return false
 		}
+		if UnitHiddenInside(w, target.slot) do return false
 		if !KingdomAtWar(w, unit.kingdome, w.units[target.slot].kingdome) do return false
 		delta_x := WorldShortestWrappedDelta(w.units.x[target.slot]-unit.x, f32(w.maxX))
 		delta_y := WorldShortestWrappedDelta(w.units.y[target.slot]-unit.y, f32(w.maxY))
@@ -271,6 +282,7 @@ WarriorFindNearbyHostiles :: proc(w: ^World, unit_slot: int, radius: f32) -> (ne
 			for other_slot := w.spatial.unitHead[chunk]; other_slot >= 0;
 				other_slot = w.spatial.unitNext[other_slot] {
 				if other_slot == unit_slot || !w.unitUsed[other_slot] do continue
+				if UnitHiddenInside(w, other_slot) do continue
 				if !KingdomAtWar(w, unit.kingdome, w.units[other_slot].kingdome) do continue
 				delta_x := WorldShortestWrappedDelta(w.units.x[other_slot]-unit_x, world_width)
 				delta_y := WorldShortestWrappedDelta(w.units.y[other_slot]-unit_y, world_height)
@@ -393,6 +405,7 @@ UnitWarriorEngage :: proc(w: ^World, unit_slot: int, state: ^StateWarrior, delta
 		if target.slot < 0 || target.slot >= UNIT_CAPACITY || !w.unitUsed[target.slot] {
 			return false
 		}
+		if UnitHiddenInside(w, target.slot) do return false
 		target_x = w.units.x[target.slot]
 		target_y = w.units.y[target.slot]
 		delta_x := WorldShortestWrappedDelta(target_x-unit.x, f32(w.maxX))
@@ -429,6 +442,7 @@ WarriorSwing :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
 	case TargetNone:
 	case TargetUnit:
 		if target.slot < 0 || target.slot >= UNIT_CAPACITY || !w.unitUsed[target.slot] do return
+		if UnitHiddenInside(w, target.slot) do return
 		impact_x := w.units.x[target.slot]
 		impact_y := w.units.y[target.slot]
 		if area_radius > 0 {
@@ -494,7 +508,7 @@ WarriorAreaUnitDamage :: proc(w: ^World, attacker_slot: int, x, y, radius, damag
 			slot := w.spatial.unitHead[chunk]
 			for slot >= 0 {
 				next := w.spatial.unitNext[slot]
-				if slot != attacker_slot && w.unitUsed[slot] &&
+				if slot != attacker_slot && w.unitUsed[slot] && !UnitHiddenInside(w, slot) &&
 					KingdomAtWar(w, attacker.kingdome, w.units[slot].kingdome) {
 					delta_x := WorldShortestWrappedDelta(w.units.x[slot]-center_x, world_width)
 					delta_y := WorldShortestWrappedDelta(w.units.y[slot]-center_y, world_height)
@@ -520,21 +534,36 @@ UnitWarriorTravel :: proc(w: ^World, unit_slot, kingdom_slot, town_slot: int, de
 	return UnitFollowFlowField(w, unit_slot, field, delta_time)
 }
 
-UnitWarriorFarFromTown :: proc(w: ^World, unit_slot, kingdom_slot, town_slot: int) -> bool {
+UnitWarriorFarFromTown :: proc(w: ^World, unit_slot, kingdom_slot, town_slot: int, radius: int = WARRIOR_HOME_PATROL_RADIUS*2) -> bool {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	unit := &w.units[unit_slot]
 	delta_x := WorldShortestWrappedDelta(unit.x-(f32(town.x)+2), f32(w.maxX))
 	delta_y := WorldShortestWrappedDelta(unit.y-(f32(town.y)+2), f32(w.maxY))
-	max_distance := f32(WARRIOR_HOME_PATROL_RADIUS*2)
+	max_distance := f32(radius)
 	return delta_x*delta_x+delta_y*delta_y > max_distance*max_distance
+}
+
+// Each warrior has a staggered 6-9 second patrol cycle. patrolSequence records
+// the next eligible cycle, leaving scanTimer and the combat cooldown independent.
+// Reserving the first two seconds of every cycle guarantees a pause after arrival,
+// blockage or a failed target search, even when a walk crosses a cycle boundary.
+WarriorPatrolCycle :: proc(w: ^World, unit_slot: int) -> (cycle: int, may_start: bool) {
+	period := 6+WorldNoiseHash(unit_slot, 0, 0x1D1E)*3
+	phase := WorldNoiseHash(unit_slot, 1, 0x1D1E)*period
+	clock := w.simulationTime+phase
+	cycle = int(clock/period)
+	may_start = clock-f32(cycle)*period >= WARRIOR_PATROL_MIN_PAUSE
+	return
 }
 
 UnitWarriorPatrol :: proc(w: ^World, unit_slot, kingdom_slot, town_slot, radius: int, delta_time: f32, state: ^StateWarrior) {
 	unit := &w.units[unit_slot]
-	at_target := int(WorldWrapPosition(unit.x, f32(w.maxX))) == unit.pathTargetX &&
-		int(WorldWrapPosition(unit.y, f32(w.maxY))) == unit.pathTargetY
-	if !unit.pathReady || at_target {
+	cycle, may_start := WarriorPatrolCycle(w, unit_slot)
+	state.activity = .Idle
+	if !unit.pathReady {
+		if !may_start || state.patrolSequence > cycle do return
+		state.patrolSequence = cycle+1
 		x, y, found := UnitFindPatrolTarget(
 			w,
 			unit_slot,
@@ -542,15 +571,16 @@ UnitWarriorPatrol :: proc(w: ^World, unit_slot, kingdom_slot, town_slot, radius:
 			town_slot,
 			radius,
 			state.patrolSequence,
+			WARRIOR_PATROL_STEP_RADIUS,
 		)
 		if !found do return
 		unit.pathTargetX = x
 		unit.pathTargetY = y
 		unit.pathReady = true
-		state.patrolSequence += 1
 	}
 
-	speed := UnitDefaultSpeed(unit.type)
+	state.activity = .Moving
+	speed := UnitDefaultSpeed(unit.type)*WARRIOR_PATROL_SPEED_RATIO
 	if unit.effects[.NoWater] do speed *= 0.7
 	reached, blocked, _ := UnitStepTowards(
 		w,
@@ -559,23 +589,46 @@ UnitWarriorPatrol :: proc(w: ^World, unit_slot, kingdom_slot, town_slot, radius:
 		f32(unit.pathTargetY)+0.5,
 		speed*delta_time,
 	)
-	if reached || blocked do unit.pathReady = false
+	if reached || blocked {
+		unit.pathReady = false
+		state.patrolSequence = cycle+1
+		state.activity = .Idle
+	}
 }
 
-UnitFindPatrolTarget :: proc(w: ^World, unit_slot, kingdom_slot, town_slot, radius, sequence: int) -> (int, int, bool) {
+UnitFindPatrolTarget :: proc(w: ^World, unit_slot, kingdom_slot, town_slot, radius, sequence: int, step_radius: int = 0) -> (int, int, bool) {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return 0, 0, false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
 	center_x := town.x+2
 	center_y := town.y+2
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
+	unit := &w.units[unit_slot]
+	sample_radius := radius
+	town_delta_x := WorldShortestWrappedDelta(unit.x-f32(center_x), f32(world_width))
+	town_delta_y := WorldShortestWrappedDelta(unit.y-f32(center_y), f32(world_height))
+	town_distance := town_delta_x*town_delta_x+town_delta_y*town_delta_y
+	if step_radius > 0 {
+		center_x = int(WorldWrapPosition(unit.x, f32(world_width)))
+		center_y = int(WorldWrapPosition(unit.y, f32(world_height)))
+		sample_radius = min(radius, step_radius)
+	}
 	seed := u64(unit_slot)+u64(sequence)*1031+1709
 	for attempt in 0..<16 {
-		delta_x := int(WorldNoiseHash(unit_slot, sequence*37+attempt*2, seed+11)*f32(radius*2+1))-radius
-		delta_y := int(WorldNoiseHash(unit_slot, sequence*37+attempt*2+1, seed+23)*f32(radius*2+1))-radius
+		delta_x := int(WorldNoiseHash(unit_slot, sequence*37+attempt*2, seed+11)*f32(sample_radius*2+1))-sample_radius
+		delta_y := int(WorldNoiseHash(unit_slot, sequence*37+attempt*2+1, seed+23)*f32(sample_radius*2+1))-sample_radius
 		if delta_x == 0 && delta_y == 0 do continue
 		x := WorldWrapCoordinate(center_x+delta_x, world_width)
 		y := WorldWrapCoordinate(center_y+delta_y, world_height)
+		if step_radius > 0 {
+			if delta_x*delta_x+delta_y*delta_y > sample_radius*sample_radius do continue
+			dx := WorldShortestWrappedDelta(f32(x)+0.5-(f32(town.x)+2), f32(world_width))
+			dy := WorldShortestWrappedDelta(f32(y)+0.5-(f32(town.y)+2), f32(world_height))
+			distance := dx*dx+dy*dy
+			// Displaced warriors can take short steps home rather than getting stuck
+			// outside the patrol area after a chase or an escort.
+			if distance > f32(radius*radius) && distance >= town_distance do continue
+		}
 		if !UnitValidTileType(w.units[unit_slot].type, w.ground[x][y].type) do continue
 		if WorldTileOccupied(w, x, y) do continue
 		return x, y, true
@@ -618,12 +671,13 @@ UnitWarriorEscort :: proc(w: ^World, unit_slot: int, state: ^StateWarrior, delta
 	if target < 0 do return false
 
 	state.activity = .Escorting
-	x, y, found := UnitFindEscortPosition(w, unit_slot, target, state.patrolSequence)
+	unit.pathReady = false
+	x, y, found := UnitFindEscortPosition(w, unit_slot, target, unit.roamSequence)
 	if !found do return true
 	speed := UnitDefaultSpeed(unit.type)
 	if unit.effects[.NoWater] do speed *= 0.7
 	_, blocked, _ := UnitStepTowards(w, unit_slot, f32(x)+0.5, f32(y)+0.5, speed*delta_time)
-	if blocked do state.patrolSequence += 1
+	if blocked do unit.roamSequence += 1
 	return true
 }
 
@@ -631,6 +685,7 @@ WarriorEscortValid :: proc(w: ^World, warrior_slot, target_slot: int) -> bool {
 	if target_slot < 0 || target_slot >= UNIT_CAPACITY || !w.unitUsed[target_slot] {
 		return false
 	}
+	if UnitHiddenInside(w, target_slot) do return false
 	if w.units[target_slot].kingdome != w.units[warrior_slot].kingdome do return false
 	return !UnitIsWarrior(w.units[target_slot].type)
 }
@@ -659,6 +714,7 @@ UnitFindEscortTarget :: proc(w: ^World, warrior_slot, sequence: int) -> int {
 			for candidate_slot := w.spatial.unitHead[chunk]; candidate_slot >= 0;
 				candidate_slot = w.spatial.unitNext[candidate_slot] {
 				if candidate_slot == warrior_slot || !w.unitUsed[candidate_slot] do continue
+				if UnitHiddenInside(w, candidate_slot) do continue
 				if w.units[candidate_slot].kingdome != kingdom_slot do continue
 				if UnitIsWarrior(w.units[candidate_slot].type) do continue
 				delta_x := WorldShortestWrappedDelta(w.units.x[candidate_slot]-unit_x, world_width)

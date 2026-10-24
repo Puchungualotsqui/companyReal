@@ -7,6 +7,7 @@ Building :: struct {
 	type: BuildingType,
 	kingdom: int,
 	town: int,
+	homeResident: int, 	// Zero means vacant; otherwise the assigned citizen slot plus one
 }
 
 BuildingKind :: enum {
@@ -334,6 +335,9 @@ Unit :: struct {
 	town: int,
 	state: UnitState,
 	sleepOffsetHours: f32,
+	homeSlot: int,
+	sleepInside: bool,
+	sleepNavigationRevision: u64,
 	roamSequence: int,
 	effects: [UnitEffects]bool,
 	//
@@ -404,6 +408,8 @@ StatePacific :: enum {
 	Building,
 	GoingHome,
 	Sleeping,
+	Hiding,
+	Fleeing,
 }
 
 StateWarrior :: struct {
@@ -851,7 +857,11 @@ UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
 // Shared initialization for spawning and for in-place conversions.
 UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
 	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
+	UnitSleepWake(w, unit_slot)
 	unit := &w.units[unit_slot]
+	if state, converting := unit.state.(StateConverting); converting && state.inside {
+		SpatialUnitMove(w, unit_slot)
+	}
 	if unit.burning > 0 {
 		unit.burning = 0
 		w.unitsBurning -= 1

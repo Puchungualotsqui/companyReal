@@ -212,6 +212,228 @@ AStar :: proc(w: ^World, unit_type: UnitType, unit_kingdom: int, start_x, start_
 	return found
 }
 
+FLEE_SEARCH_STEPS :: 6
+FLEE_SEARCH_CAPACITY :: 1+2*FLEE_SEARCH_STEPS*(FLEE_SEARCH_STEPS+1)
+FLEE_THREAT_RADIUS :: 16
+FLEE_THREAT_CAPACITY :: 16
+
+UnitNearbyEnemy :: struct {
+	slot: int,
+	distanceSquared: f32,
+}
+
+UnitEnemyDistanceSquared :: proc(w: ^World, x, y: f32, enemy_slot: int) -> f32 {
+	dx := WorldShortestWrappedDelta(w.units.x[enemy_slot]-x, f32(w.maxX))
+	dy := WorldShortestWrappedDelta(w.units.y[enemy_slot]-y, f32(w.maxY))
+	return dx*dx+dy*dy
+}
+
+// A wrapped coordinate interval may cross the short final spatial bucket.
+UnitNearbyChunkRange :: proc(position, radius, size: f32, chunk_size, chunk_count: int) -> (int, int) {
+	if radius >= size*0.5 do return 0, chunk_count
+	low, high := position-radius, position+radius
+	first := int(WorldWrapPosition(low, size))/chunk_size
+	last := int(WorldWrapPosition(high, size))/chunk_size
+	count := last-first+1
+	if low < 0 || high >= size do count += chunk_count
+	return first, min(count, chunk_count)
+}
+
+// Keep only the closest threats, visiting each intersecting wrapped chunk once.
+UnitCollectNearbyEnemies :: proc(w: ^World, unit_slot: int, radius: f32, enemies: []UnitNearbyEnemy) -> int {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] ||
+		w.units[unit_slot].health <= 0 || !(radius >= 0) || len(enemies) == 0 {
+				return 0
+			}
+	if w.maxX <= 0 || w.maxY <= 0 || w.spatial.chunkSize <= 0 ||
+		w.spatial.chunksX <= 0 || w.spatial.chunksY <= 0 {
+				return 0
+			}
+	unit := &w.units[unit_slot]
+	x := WorldWrapPosition(unit.x, f32(w.maxX))
+	y := WorldWrapPosition(unit.y, f32(w.maxY))
+	first_x, count_x := UnitNearbyChunkRange(x, radius, f32(w.maxX), w.spatial.chunkSize, w.spatial.chunksX)
+	first_y, count_y := UnitNearbyChunkRange(y, radius, f32(w.maxY), w.spatial.chunkSize, w.spatial.chunksY)
+	count := 0
+	for ox in 0..<count_x {
+		cx := WorldWrapCoordinate(first_x+ox, w.spatial.chunksX)
+		for oy in 0..<count_y {
+			cy := WorldWrapCoordinate(first_y+oy, w.spatial.chunksY)
+			chunk := cx*w.spatial.chunksY+cy
+			for other := w.spatial.unitHead[chunk]; other >= 0; other = w.spatial.unitNext[other] {
+				if other == unit_slot || !w.unitUsed[other] || w.units[other].health <= 0 do continue
+				if !KingdomAtWar(w, unit.kingdome, w.units[other].kingdome) || UnitHiddenInside(w, other) do continue
+				distance := UnitEnemyDistanceSquared(w, x, y, other)
+				if distance > radius*radius do continue
+				position := 0
+				for position < count {
+					entry := enemies[position]
+					if distance < entry.distanceSquared || (distance == entry.distanceSquared && other < entry.slot) do break
+					position += 1
+				}
+				if position >= len(enemies) do continue
+				count = min(count+1, len(enemies))
+				for i := count-1; i > position; i -= 1 do enemies[i] = enemies[i-1]
+				enemies[position] = UnitNearbyEnemy{other, distance}
+			}
+		}
+	}
+	return count
+}
+
+// Visible means outdoors, not player fog-of-war or line of sight.
+UnitFindNearbyEnemy :: proc(w: ^World, unit_slot: int, radius: f32) -> int {
+	enemies: [1]UnitNearbyEnemy
+	if UnitCollectNearbyEnemies(w, unit_slot, radius, enemies[:]) == 0 do return -1
+	return enemies[0].slot
+}
+
+UnitFleeClearance :: proc(w: ^World, x, y: f32, enemies: []UnitNearbyEnemy) -> f32 {
+	distance_squared: f32 = 1e30
+	for enemy in enemies {
+		distance_squared = min(distance_squared, UnitEnemyDistanceSquared(w, x, y, enemy.slot))
+	}
+	return math.sqrt(distance_squared)
+}
+
+// Builds at most 85 reachable nodes, with no full-map A*. Shared navigation
+// scratch is stamped, while the resulting short route belongs to the unit.
+UnitFindEscapePath :: proc(w: ^World, unit_slot: int, enemies: []UnitNearbyEnemy) -> bool {
+	unit := &w.units[unit_slot]
+	width, height := int(w.maxX), int(w.maxY)
+	start_x := int(WorldWrapPosition(unit.x, f32(width)))
+	start_y := int(WorldWrapPosition(unit.y, f32(height)))
+	start := start_x*height+start_y
+	clear(&unit.path)
+	unit.pathFound = false
+	unit.pathReady = true
+	unit.pathRevision = w.navigationRevision
+	unit.pathIndex = 0
+	// Cache failure until the primary threat changes tile or navigation changes.
+	unit.pathTargetX = int(WorldWrapPosition(w.units.x[enemies[0].slot], f32(width)))
+	unit.pathTargetY = int(WorldWrapPosition(w.units.y[enemies[0].slot], f32(height)))
+	if len(w.navigationStamp) < width*height || len(w.navigationQueue) < width*height ||
+		len(w.navigationCameFrom) < width*height {
+				return false
+			}
+	w.navigationSearchId += 1
+	if w.navigationSearchId == 0 {
+		for &stamp in w.navigationStamp do stamp = 0
+		w.navigationSearchId = 1
+	}
+	stamp := w.navigationSearchId
+	depth: [FLEE_SEARCH_CAPACITY]int
+	route_clearance: [FLEE_SEARCH_CAPACITY]f32
+	start_clearance := UnitFleeClearance(w, unit.x, unit.y, enemies)
+	route_clearance[0] = start_clearance
+	w.navigationQueue[0] = start
+	w.navigationStamp[start] = stamp
+	w.navigationCameFrom[start] = -1
+	queue_end := 1
+	best, best_score := start, start_clearance
+	for cursor := 0; cursor < queue_end; cursor += 1 {
+		index := w.navigationQueue[cursor]
+		if depth[cursor] >= FLEE_SEARCH_STEPS do continue
+		for direction in 0..<4 {
+			nx, ny := index/height, index%height
+			switch direction {
+			case 0: nx += 1
+			case 1: nx -= 1
+			case 2: ny += 1
+			case 3: ny -= 1
+			}
+			nx, ny = WorldWrapCoordinate(nx, width), WorldWrapCoordinate(ny, height)
+			next := nx*height+ny
+			if w.navigationStamp[next] == stamp do continue
+			if !WorldTileWalkable(w, nx, ny, unit.type, unit.kingdome) do continue
+			clearance := UnitFleeClearance(w, f32(nx)+0.5, f32(ny)+0.5, enemies)
+			// Do not escape through an enemy's immediate melee space, unless
+			// already that close; small temporary detours remain possible.
+			if clearance < min(start_clearance, 1.25) do continue
+			if queue_end >= FLEE_SEARCH_CAPACITY do continue
+			w.navigationStamp[next] = stamp
+			w.navigationCameFrom[next] = index
+			depth[queue_end] = depth[cursor]+1
+			route_clearance[queue_end] = min(route_clearance[cursor], clearance)
+			score := clearance-0.15*f32(depth[queue_end])-
+				2*max(0, start_clearance-route_clearance[queue_end])
+			if score > best_score+0.001 do best, best_score = next, score
+			w.navigationQueue[queue_end] = next
+			queue_end += 1
+		}
+	}
+	if best == start do return false
+	unit.pathTargetX, unit.pathTargetY = best/height, best%height
+	for cursor := best; cursor >= 0; cursor = w.navigationCameFrom[cursor] do append(&unit.path, cursor)
+	for i in 0..<len(unit.path)/2 {
+		opposite := len(unit.path)-i-1
+		unit.path[i], unit.path[opposite] = unit.path[opposite], unit.path[i]
+	}
+	unit.pathIndex = 1
+	unit.pathFound = true
+	return true
+}
+
+// The caller owns fleeing state and clears pathReady on entry/resume. Returns
+// whether a usable escape route exists (also true for a zero-time tick).
+UnitFleeEnemy :: proc(w: ^World, unit_slot, enemy_slot: int, delta_time: f32) -> bool {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] ||
+		w.units[unit_slot].health <= 0 || delta_time < 0 || w.maxX <= 0 || w.maxY <= 0 {
+				return false
+			}
+	unit := &w.units[unit_slot]
+	if enemy_slot < 0 || enemy_slot >= UNIT_CAPACITY || !w.unitUsed[enemy_slot] ||
+		w.units[enemy_slot].health <= 0 || UnitHiddenInside(w, enemy_slot) ||
+		!KingdomAtWar(w, unit.kingdome, w.units[enemy_slot].kingdome) || UnitHiddenInside(w, unit_slot) {
+		unit.pathReady, unit.pathFound = false, false
+		return false
+	}
+	// Include the explicit threat even if outside the local radius or crowded out.
+	threats: [FLEE_THREAT_CAPACITY+1]UnitNearbyEnemy
+	threats[0] = UnitNearbyEnemy{enemy_slot, 0}
+	count := 1+UnitCollectNearbyEnemies(w, unit_slot, FLEE_THREAT_RADIUS, threats[1:])
+	enemies := threats[:count]
+	clearance := UnitFleeClearance(w, unit.x, unit.y, enemies)
+	replan := !unit.pathReady || unit.pathRevision != w.navigationRevision
+	if !replan && !unit.pathFound {
+		replan = unit.pathTargetX != int(WorldWrapPosition(w.units.x[enemy_slot], f32(w.maxX))) ||
+			unit.pathTargetY != int(WorldWrapPosition(w.units.y[enemy_slot], f32(w.maxY)))
+	}
+	if !replan && unit.pathFound {
+		replan = unit.pathIndex >= len(unit.path) || UnitFleeClearance(w,
+			f32(unit.pathTargetX)+0.5, f32(unit.pathTargetY)+0.5, enemies)+0.5 < clearance
+		if !replan {
+			next := unit.path[unit.pathIndex]
+			nx, ny := next/int(w.maxY), next%int(w.maxY)
+			replan = !WorldTileWalkable(w, nx, ny, unit.type, unit.kingdome) ||
+				UnitFleeClearance(w, f32(nx)+0.5, f32(ny)+0.5, enemies)+0.001 < min(clearance, 1.25)
+		}
+	}
+	if replan && !UnitFindEscapePath(w, unit_slot, enemies) do return false
+	if !unit.pathFound do return false
+	remaining := UnitMoveSpeed(w, unit_slot, UnitDefaultSpeed(unit.type))*delta_time
+	for _ in 0..<FLEE_SEARCH_STEPS {
+		if remaining <= 0 || unit.pathIndex >= len(unit.path) do break
+		next := unit.path[unit.pathIndex]
+		nx, ny := next/int(w.maxY), next%int(w.maxY)
+		// Check each waypoint, including when a long tick consumes several.
+		if UnitFleeClearance(w, f32(nx)+0.5, f32(ny)+0.5, enemies)+0.001 < min(clearance, 1.25) {
+			unit.pathReady = false
+			return false
+		}
+		reached, blocked, left := UnitStepTowards(w, unit_slot, f32(nx)+0.5, f32(ny)+0.5, remaining)
+		if blocked {
+			unit.pathReady, unit.pathFound = false, false
+			return false
+		}
+		remaining = left
+		if !reached do break
+		unit.pathIndex += 1
+	}
+	if unit.pathIndex >= len(unit.path) do unit.pathReady = false
+	return true
+}
+
 // One breadth-first pass per target town builds a shared direction field.
 // Every warrior heading to that town follows the same field instead of
 // running its own A* search, so pathing cost is independent of unit count.

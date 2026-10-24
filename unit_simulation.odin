@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 
+
 // Pacific units drop their work to fight a fire burning inside their town.
 UnitTryExtinguish :: proc(w: ^World, unit_slot: int, delta_time: f32) -> bool {
 	unit := &w.units[unit_slot]
@@ -131,7 +132,7 @@ UnitUpdateExplorer :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			state^ = .Roaming
 			unit.pathReady = false
 		}
-	case .ToConstruction, .Building, .GoingHome, .Sleeping:
+	case .ToConstruction, .Building, .GoingHome, .Sleeping, .Hiding, .Fleeing:
 		state^ = .Roaming
 		unit.pathReady = false
 	}
@@ -296,11 +297,11 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			w.units[unit_slot].pathReady = false
 			builder.taskSequence += 1
 		}
-	case .GoingHome, .Sleeping:
+	case .GoingHome, .Sleeping, .Hiding, .Fleeing:
+		}
 	}
-}
 
-// Temporary diagnostics: the palette's first color is blue, but its kingdom
+	// Temporary diagnostics: the palette's first color is blue, but its kingdom
 // slot depends on the player's color choice. Keep all collector logs filtered here.
 UnitLogWaterCollector :: proc(w: ^World, unit_slot: int, event: string, previous_state: StatePacific, previous_x, previous_y: f32) {
 	unit := &w.units[unit_slot]
@@ -365,7 +366,7 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	}
 	w.kingdoms[kingdom_slot].towns[town_slot].waterCollectors += 1
 	if UnitUpdatePacificSleep(w, unit_slot, delta_time) {
-		event = "sleep-or-going-home"
+		event = "sleep-shelter-or-escape"
 		return
 	}
 	if UnitTryExtinguish(w, unit_slot, delta_time) {
@@ -457,11 +458,11 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			w.units[unit_slot].cooldown = 0
 			w.units[unit_slot].pathReady = false
 		}
-	case .GoingHome, .Sleeping, .ToConstruction, .Building:
+	case .GoingHome, .Sleeping, .ToConstruction, .Building, .Hiding, .Fleeing:
+		}
 	}
-}
 
-UnitUpdateFarmer :: proc(w: ^World, unit_slot: int, delta_time: f32) {
+	UnitUpdateFarmer :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	kingdom_slot := w.units[unit_slot].kingdome
 	town_slot := w.units[unit_slot].town
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return
@@ -510,11 +511,11 @@ UnitUpdateFarmer :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 		}
 	case .Returning:
 		state^ = .Roaming
-	case .GoingHome, .Sleeping, .ToConstruction, .Building:
+	case .GoingHome, .Sleeping, .ToConstruction, .Building, .Hiding, .Fleeing:
+		}
 	}
-}
 
-UnitUpdateConverting :: proc(w: ^World, unit_slot: int, delta_time: f32) {
+	UnitUpdateConverting :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
 	if _, converting := w.units[unit_slot].state.(StateConverting); !converting do return
 	state := &w.units[unit_slot].state.(StateConverting)
@@ -532,6 +533,7 @@ UnitUpdateConverting :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	}
 
 	if state.inside {
+		SpatialUnitRemove(w, unit_slot)
 		state.timer -= delta_time
 		if state.timer <= 0 do UnitConvert(w, unit_slot)
 		return
@@ -559,6 +561,7 @@ UnitUpdateConverting :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	}
 	if UnitMoveToTarget(w, unit_slot, delta_time) {
 		state.inside = true
+		SpatialUnitRemove(w, unit_slot)
 		state.timer = UnitDefaultTrainingTime(state.to)
 		unit.pathReady = false
 	} else if !unit.pathFound {
@@ -612,6 +615,7 @@ UnitConversionCancel :: proc(w: ^World, unit_slot: int) {
 		}
 	}
 
+	if state.inside do SpatialUnitMove(w, unit_slot)
 	if UnitIsWarrior(unit.type) {
 		unit.state = StateWarriorInit(unit_slot, unit.kingdome, unit.town)
 	} else {
@@ -622,6 +626,7 @@ UnitConversionCancel :: proc(w: ^World, unit_slot: int) {
 
 UnitResetState :: proc(w: ^World, unit_slot: int) {
 	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
+	UnitSleepWake(w, unit_slot)
 	switch _ in w.units[unit_slot].state {
 	case StateConverting:
 		UnitConversionCancel(w, unit_slot)
@@ -631,45 +636,222 @@ UnitResetState :: proc(w: ^World, unit_slot: int) {
 	}
 }
 
-UnitUpdatePacificSleep :: proc(w: ^World, unit_slot: int, delta_time: f32) -> bool {
-	state := &w.units[unit_slot].state.(StatePacific)
-	hour := WorldTimeOfDay(w)
-	bedtime := 22+w.units[unit_slot].sleepOffsetHours
-	wake_time: f32 = 6
-	should_sleep := hour >= bedtime || hour < wake_time
+// The assignment reserves capacity even while its citizen is awake or travelling.
+UnitHome :: proc(w: ^World, unit_slot: int) -> int {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return -1
+	unit := &w.units[unit_slot]
+	home := unit.homeSlot
+	if home < 0 || home >= BUILDING_CAPACITY || !w.buildingUsed[home] do return -1
+	building := &w.buildings[home]
+	if BuildingKindOf(building.type) != .Home || building.health <= 0 ||
+		building.homeResident != unit_slot+1 || building.kingdom != unit.kingdome ||
+		building.town != unit.town || !WorldTownExists(w, unit.kingdome, unit.town) {
+		return -1
+	}
+	return home
+}
 
-	if should_sleep {
-		if state^ == .Sleeping do return true
-		if state^ != .GoingHome {
-			if x, y, found := UnitFindHomeTarget(w, unit_slot); found {
-				w.units[unit_slot].pathTargetX = x
-				w.units[unit_slot].pathTargetY = y
-				w.units[unit_slot].pathReady = false
-				state^ = .GoingHome
-			} else {
-				state^ = .Sleeping
-				w.units[unit_slot].pathReady = false
-				return true
+// Indoor residents keep safe exterior coordinates, not positions inside walls.
+UnitInsideHome :: proc(w: ^World, unit_slot: int) -> int {
+	home := UnitHome(w, unit_slot)
+	if home < 0 do return -1
+	unit := &w.units[unit_slot]
+	state, pacific := unit.state.(StatePacific)
+	if !pacific || (state != .Sleeping && state != .Hiding) || !unit.sleepInside ||
+		UnitIsWarrior(unit.type) || UnitKindOf(unit.type) == .CombatBuilder {
+		return -1
+	}
+	x := int(WorldWrapPosition(unit.x, f32(w.maxX)))
+	y := int(WorldWrapPosition(unit.y, f32(w.maxY)))
+	width, height := BuildingTileSize(w.buildings[home].type)
+	if BuildingAccessDistance(w, w.buildings.x[home], w.buildings.y[home], width, height, x, y) != 1 ||
+		!WorldTileWalkable(w, x, y, unit.type, unit.kingdome) {
+		return -1
+	}
+	return home
+}
+
+UnitSleepingHome :: proc(w: ^World, unit_slot: int) -> int {
+	home := UnitInsideHome(w, unit_slot)
+	if home < 0 do return -1
+	if w.units[unit_slot].state.(StatePacific) != .Sleeping do return -1
+	return home
+}
+
+// Shared rendering, targeting, selection, and fog eligibility check.
+UnitHiddenInside :: proc(w: ^World, unit_slot: int) -> bool {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return false
+	if state, converting := w.units[unit_slot].state.(StateConverting); converting && state.inside do return true
+	return UnitInsideHome(w, unit_slot) >= 0
+}
+
+UnitSleepWake :: proc(w: ^World, unit_slot: int) {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
+	unit := &w.units[unit_slot]
+	if unit.sleepInside {
+		unit.sleepInside = false
+		// Move also relinks an absent unit, without duplicating an existing link.
+		SpatialUnitMove(w, unit_slot)
+	}
+	if state, pacific := unit.state.(StatePacific); pacific &&
+		(state == .Sleeping || state == .GoingHome || state == .Hiding || state == .Fleeing) {
+		unit.state = StatePacific.Roaming
+		unit.pathReady = false
+	}
+}
+
+UnitReleaseHome :: proc(w: ^World, unit_slot: int) {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
+	home := w.units.homeSlot[unit_slot]
+	if home < 0 do return
+	UnitSleepWake(w, unit_slot)
+	if home < BUILDING_CAPACITY && w.buildings.homeResident[home] == unit_slot+1 {
+		w.buildings.homeResident[home] = 0
+	}
+	w.units.homeSlot[unit_slot] = -1
+}
+
+UnitUpdateMilitaryAlarm :: proc(w: ^World, unit_slot: int) {
+	unit := &w.units[unit_slot]
+	if !WorldTownExists(w, unit.kingdome, unit.town) do return
+	if !w.kingdoms[unit.kingdome].towns[unit.town].alarmActive do return
+	state, pacific := unit.state.(StatePacific)
+	if !pacific do return
+	if UnitIsWarrior(unit.type) {
+		UnitSleepWake(w, unit_slot)
+		UnitWarriorReset(w, unit_slot)
+	} else if UnitKindOf(unit.type) == .CombatBuilder &&
+		(state == .Sleeping || state == .GoingHome || state == .Hiding) {
+		UnitSleepWake(w, unit_slot)
+	}
+}
+
+// Emergency shelter/fleeing takes precedence over work, fire-fighting and sleep.
+UnitUpdatePacificSafety :: proc(w: ^World, unit_slot: int, delta_time: f32) -> bool {
+	unit := &w.units[unit_slot]
+	if UnitIsWarrior(unit.type) || UnitKindOf(unit.type) == .CombatBuilder do return false
+	if state, converting := unit.state.(StateConverting); converting && state.inside do return false
+	if UnitHome(w, unit_slot) < 0 do UnitReleaseHome(w, unit_slot)
+	if unit.sleepInside && UnitInsideHome(w, unit_slot) < 0 do UnitSleepWake(w, unit_slot)
+	alarm := WorldTownExists(w, unit.kingdome, unit.town) &&
+		w.kingdoms[unit.kingdome].towns[unit.town].alarmActive
+	enemy := UnitFindNearbyEnemy(w, unit_slot, FLEE_THREAT_RADIUS)
+	if !alarm && enemy < 0 {
+		if state, pacific := unit.state.(StatePacific); pacific {
+			if state == .Hiding {
+				hour := WorldTimeOfDay(w)
+				if hour < 6 || hour >= 22+unit.sleepOffsetHours {
+					unit.state = StatePacific.Sleeping
+				} else {
+					UnitSleepWake(w, unit_slot)
+				}
+			} else if state == .Fleeing {
+				UnitSleepWake(w, unit_slot)
 			}
 		}
-
-		if state^ == .GoingHome {
-			if UnitMoveToTarget(w, unit_slot, delta_time) {
-				state^ = .Sleeping
-				w.units[unit_slot].pathReady = false
-			} else if !w.units[unit_slot].pathFound {
-				state^ = .Sleeping
-				w.units[unit_slot].pathReady = false
-			}
-		}
+		return false
+	}
+	if _, converting := unit.state.(StateConverting); converting do UnitConversionCancel(w, unit_slot)
+	state := &unit.state.(StatePacific)
+	if UnitInsideHome(w, unit_slot) >= 0 {
+		state^ = .Hiding
 		return true
 	}
-
-	if state^ == .GoingHome || state^ == .Sleeping {
-		state^ = .Roaming
-		w.units[unit_slot].pathReady = false
+	home := UnitHome(w, unit_slot)
+	failed_home := (state^ == .Fleeing || state^ == .Sleeping) &&
+		unit.sleepNavigationRevision == w.navigationRevision
+	if home >= 0 && !failed_home {
+		if state^ != .GoingHome {
+			unit.pathReady = false
+			if x, y, found := UnitFindHomeTarget(w, unit_slot); found {
+				unit.pathTargetX, unit.pathTargetY = x, y
+				state^ = .GoingHome
+			} else {
+				unit.sleepNavigationRevision = w.navigationRevision
+			}
+		}
+		if state^ == .GoingHome {
+			if UnitMove(w, unit_slot, unit.pathTargetX, unit.pathTargetY, delta_time) {
+				state^ = .Hiding
+				unit.pathReady = false
+				unit.sleepInside = true
+				if UnitInsideHome(w, unit_slot) >= 0 {
+					SpatialUnitRemove(w, unit_slot)
+					return true
+				}
+				UnitSleepWake(w, unit_slot)
+			} else if unit.pathFound {
+				return true
+			}
+			// Losing one entrance does not make the entire home unreachable.
+			unit.pathReady = false
+			if x, y, found := UnitFindHomeTarget(w, unit_slot); found {
+				unit.pathTargetX, unit.pathTargetY = x, y
+				state^ = .GoingHome
+				return true
+			}
+			unit.sleepNavigationRevision = w.navigationRevision
+		}
 	}
-	return false
+	if state^ != .Fleeing {
+		UnitSleepWake(w, unit_slot)
+		state^ = .Fleeing
+		unit.pathReady = false
+	}
+	if enemy >= 0 do UnitFleeEnemy(w, unit_slot, enemy, delta_time)
+	return true
+}
+
+UnitUpdatePacificSleep :: proc(w: ^World, unit_slot: int, delta_time: f32) -> bool {
+	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return false
+	unit := &w.units[unit_slot]
+	_, pacific := unit.state.(StatePacific)
+	if !pacific || UnitIsWarrior(unit.type) || UnitKindOf(unit.type) == .CombatBuilder do return false
+	if UnitHome(w, unit_slot) < 0 do UnitReleaseHome(w, unit_slot)
+	if unit.sleepInside && UnitInsideHome(w, unit_slot) < 0 do UnitSleepWake(w, unit_slot)
+	if UnitUpdatePacificSafety(w, unit_slot, delta_time) do return true
+	hour := WorldTimeOfDay(w)
+	if hour >= 6 && hour < 22+unit.sleepOffsetHours {
+		UnitSleepWake(w, unit_slot)
+		return false
+	}
+
+	state := &unit.state.(StatePacific)
+	if state^ == .Sleeping {
+		if unit.sleepInside || UnitHome(w, unit_slot) < 0 ||
+			unit.sleepNavigationRevision == w.navigationRevision {
+			return true
+		}
+		// An outdoor sleeper retries an inaccessible Home only after the map changes.
+		state^ = .Roaming
+	}
+	if state^ != .GoingHome {
+		if x, y, found := UnitFindHomeTarget(w, unit_slot); found {
+			unit.pathTargetX, unit.pathTargetY = x, y
+			unit.pathReady = false
+			state^ = .GoingHome
+		} else {
+			state^ = .Sleeping
+			unit.pathReady = false
+			unit.sleepNavigationRevision = w.navigationRevision
+			return true
+		}
+	}
+	if UnitMoveToTarget(w, unit_slot, delta_time) {
+		state^ = .Sleeping
+		unit.pathReady = false
+		unit.sleepInside = true
+		if UnitSleepingHome(w, unit_slot) >= 0 {
+			SpatialUnitRemove(w, unit_slot)
+		} else {
+			unit.sleepInside = false
+		}
+	} else if !unit.pathFound {
+		state^ = .Sleeping
+		unit.pathReady = false
+		unit.sleepNavigationRevision = w.navigationRevision
+	}
+	return true
 }
 
 UnitUpdateRoaming :: proc(w: ^World, unit_slot: int, delta_time: f32) {
@@ -964,42 +1146,41 @@ UnitFindFarmlandTarget :: proc(w: ^World, unit_slot, sequence: int) -> (int, int
 }
 
 UnitFindHomeTarget :: proc(w: ^World, unit_slot: int) -> (int, int, bool) {
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	unit_x := WorldWrapPosition(w.units[unit_slot].x, f32(world_width))
-	unit_y := WorldWrapPosition(w.units[unit_slot].y, f32(world_height))
-	best_x, best_y := 0, 0
-	best_distance_squared: f32 = 0
-	found_target := false
-	for building_slot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[building_slot] ||
-			w.buildings[building_slot].kingdom != w.units[unit_slot].kingdome ||
-			w.buildings[building_slot].town != w.units[unit_slot].town {
-			continue
-		}
-		if BuildingKindOf(w.buildings[building_slot].type) != .Home do continue
-
-		home_x := w.buildings.x[building_slot]
-		home_y := w.buildings.y[building_slot]
-		for offset_x in -1..=1 {
-			for offset_y in -1..=1 {
-				if offset_x == 0 && offset_y == 0 do continue
-				x := WorldWrapCoordinate(home_x+offset_x, world_width)
-				y := WorldWrapCoordinate(home_y+offset_y, world_height)
-				if !UnitValidTileType(w.units[unit_slot].type, w.ground[x][y].type) do continue
-				if WorldTileOccupied(w, x, y) do continue
-				delta_x := WorldShortestWrappedDelta(f32(x)-unit_x, f32(world_width))
-				delta_y := WorldShortestWrappedDelta(f32(y)-unit_y, f32(world_height))
-				distance_squared := delta_x*delta_x + delta_y*delta_y
-				if !found_target || distance_squared < best_distance_squared {
-					best_x, best_y = x, y
-					best_distance_squared = distance_squared
-					found_target = true
+	home := UnitHome(w, unit_slot)
+	if home < 0 do return 0, 0, false
+	unit := &w.units[unit_slot]
+	world_width, world_height := int(w.maxX), int(w.maxY)
+	unit_x := WorldWrapPosition(unit.x, f32(world_width))
+	unit_y := WorldWrapPosition(unit.y, f32(world_height))
+	tried: [3][3]bool
+	// Prefer the nearest ring tile, but try the other entrances if it belongs
+	// to a disconnected pocket. Never hide a citizen after a failed path.
+	for _ in 0..<8 {
+		best_x, best_y, best_ox, best_oy := 0, 0, 0, 0
+		best_distance: f32 = 0
+		found := false
+		for ox in -1..=1 {
+			for oy in -1..=1 {
+				if (ox == 0 && oy == 0) || tried[ox+1][oy+1] do continue
+				x := WorldWrapCoordinate(w.buildings.x[home]+ox, world_width)
+				y := WorldWrapCoordinate(w.buildings.y[home]+oy, world_height)
+				if WorldTileOccupied(w, x, y) || !WorldTileWalkable(w, x, y, unit.type, unit.kingdome) do continue
+				dx := WorldShortestWrappedDelta(f32(x)+0.5-unit_x, f32(world_width))
+				dy := WorldShortestWrappedDelta(f32(y)+0.5-unit_y, f32(world_height))
+				distance := dx*dx+dy*dy
+				if !found || distance < best_distance {
+					best_x, best_y, best_ox, best_oy = x, y, ox, oy
+					best_distance, found = distance, true
 				}
 			}
 		}
+		if !found do break
+		tried[best_ox+1][best_oy+1] = true
+		if AStar(w, unit.type, unit.kingdome, int(unit_x), int(unit_y), best_x, best_y, &unit.path) {
+			return best_x, best_y, true
+		}
 	}
-	return best_x, best_y, found_target
+	return 0, 0, false
 }
 
 UnitFindTownReturnPoint :: proc(w: ^World, kingdom_slot, town_slot: int, unit_slot := -1) -> (int, int, bool) {

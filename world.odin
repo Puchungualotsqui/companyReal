@@ -170,6 +170,8 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.units.previousY[i] = y
 	w.units.kingdome[i] = kingdomSlot
 	w.units.town[i] = townSlot
+	w.units.homeSlot[i] = -1
+	w.units.sleepInside[i] = false
 	// UnitTypeInit requires the slot to be marked used.
 	w.unitUsed[i] = true
 	UnitTypeInit(w, i, type)
@@ -213,6 +215,7 @@ UnitDespawn :: proc(w: ^World, slot: int) -> bool {
 	kingdom_slot := w.units[slot].kingdome
 	town_slot := w.units[slot].town
 	UnitConversionCancel(w, slot)
+	UnitReleaseHome(w, slot)
 	if kingdom_slot >= 0 && kingdom_slot < KINGDOMS_CAPACITY &&
 		town_slot >= 0 && town_slot < TOWN_CAPACITY &&
 		w.kingdoms[kingdom_slot].townUsed[town_slot] &&
@@ -253,6 +256,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 	w.buildings.type[i] = type
 	w.buildings.kingdom[i] = kingdomSlot
 	w.buildings.town[i] = townSlot
+	w.buildings.homeResident[i] = 0
 
 	width, height := BuildingTileSize(type)
 	cleared_wood := WorldDecorationClearRect(w, x, y, width, height)
@@ -343,6 +347,13 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 		}
 	case Bridge, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Wall, Home, Farmland, Path:
 	}
+
+	resident := w.buildings.homeResident[slot]-1
+	if resident >= 0 && resident < UNIT_CAPACITY && w.unitUsed[resident] &&
+		w.units.homeSlot[resident] == slot {
+		UnitReleaseHome(w, resident)
+	}
+	w.buildings.homeResident[slot] = 0
 
 	width, height := BuildingTileSize(w.buildings[slot].type)
 	world_height := int(w.maxY)

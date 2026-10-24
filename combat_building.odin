@@ -313,7 +313,7 @@ CombatBuilderUpdate :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			state^ = .Roaming
 			w.units[unit_slot].pathReady = false
 		}
-	case .GoingHome, .Sleeping, .Traveling, .Working, .Returning:
+	case .GoingHome, .Sleeping, .Traveling, .Working, .Returning, .Hiding, .Fleeing:
 		state^ = .Roaming
 	}
 }
@@ -379,6 +379,7 @@ CombatBuilderFindEnemy :: proc(w: ^World, unit_slot: int, radius: f32) -> int {
 			for other_slot := w.spatial.unitHead[chunk]; other_slot >= 0;
 				other_slot = w.spatial.unitNext[other_slot] {
 				if other_slot == unit_slot || !w.unitUsed[other_slot] do continue
+				if UnitHiddenInside(w, other_slot) do continue
 				if !KingdomAtWar(w, unit.kingdome, w.units[other_slot].kingdome) do continue
 				delta_x := WorldShortestWrappedDelta(w.units.x[other_slot]-unit.x, world_width)
 				delta_y := WorldShortestWrappedDelta(w.units.y[other_slot]-unit.y, world_height)

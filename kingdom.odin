@@ -143,6 +143,7 @@ Town :: struct {
 	waterAccessCached: bool,
 	foodShortage, waterShortage: f32,
 	areaRadius: int,
+	alarmActive: bool,
 	unlockedBuildings: bit_set[BuildingKind],
 	unlockedUnits: bit_set[UnitKind],
 	buildingCounts: [BuildingKind]int,
@@ -557,17 +558,21 @@ TownMilestoneOption :: proc(w: ^World, kingdom_slot, town_slot, option: int) -> 
 
 // Player order: attacker town -> attack -> any town of another kingdom.
 // Declaring the order is also the declaration of war.
-TownStartAttack :: proc(w: ^World, kingdomSlotA, townSlotA, kingdomSlotB, townSlotB: int) {
-	if kingdomSlotA == kingdomSlotB do return
+TownStartAttack :: proc(w: ^World, kingdomSlotA, townSlotA, kingdomSlotB, townSlotB: int) -> bool {
+	if !KingdomsMet(w, kingdomSlotA, kingdomSlotB) do return false
 	if !WorldTownExists(w, kingdomSlotA, townSlotA) || !WorldTownExists(w, kingdomSlotB, townSlotB) {
-		return
+		return false
 	}
-	if w.kingdoms[kingdomSlotA].towns[townSlotA].attackOrders[kingdomSlotB][townSlotB] do return
+	if w.kingdoms[kingdomSlotA].towns[townSlotA].attackOrders[kingdomSlotB][townSlotB] do return false
 
-	KingdomDeclareWar(w, kingdomSlotA, kingdomSlotB)
+	if !KingdomAtWar(w, kingdomSlotA, kingdomSlotB) &&
+		!KingdomDeclareWar(w, kingdomSlotA, kingdomSlotB) {
+		return false
+	}
 	w.kingdoms[kingdomSlotA].towns[townSlotA].attackOrders[kingdomSlotB][townSlotB] = true
 	w.kingdoms[kingdomSlotB].towns[townSlotB].attackedBy[kingdomSlotA][townSlotA] = true
 	TownOrdersRebuild(w, kingdomSlotA, townSlotA)
+	return true
 }
 
 // Player order: defender town -> defend -> any non-enemy town. The defending
@@ -643,22 +648,42 @@ KingdomBreakDefenses :: proc(w: ^World, kingdom_a, kingdom_b: int) {
 	}
 }
 
-KingdomDeclareWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) {
-	if kingdomSlotA < 0 || kingdomSlotA >= KINGDOMS_CAPACITY ||
-		kingdomSlotB < 0 || kingdomSlotB >= KINGDOMS_CAPACITY || kingdomSlotA == kingdomSlotB {
+// Contact is mutual and persistent, unlike the observer's terrain memory.
+// Neither declaring war nor spectator visibility may manufacture contact.
+KingdomsMet :: proc(w: ^World, kingdom_a, kingdom_b: int) -> bool {
+	if kingdom_a < 0 || kingdom_a >= KINGDOMS_CAPACITY ||
+		kingdom_b < 0 || kingdom_b >= KINGDOMS_CAPACITY || kingdom_a == kingdom_b {
+		return false
+	}
+	return w.kingdomUsed[kingdom_a] && w.kingdomUsed[kingdom_b] &&
+		w.fog.contacts[kingdom_a][kingdom_b] && w.fog.contacts[kingdom_b][kingdom_a]
+}
+
+KingdomMeet :: proc(w: ^World, kingdom_a, kingdom_b: int) {
+	if kingdom_a < 0 || kingdom_a >= KINGDOMS_CAPACITY ||
+		kingdom_b < 0 || kingdom_b >= KINGDOMS_CAPACITY || kingdom_a == kingdom_b {
 		return
 	}
-	was_at_war := KingdomAtWar(w, kingdomSlotA, kingdomSlotB)
+	if !w.kingdomUsed[kingdom_a] || !w.kingdomUsed[kingdom_b] do return
+	w.fog.contacts[kingdom_a][kingdom_b] = true
+	w.fog.contacts[kingdom_b][kingdom_a] = true
+}
+
+KingdomCanDeclareWar :: proc(w: ^World, kingdom_a, kingdom_b: int) -> bool {
+	return KingdomsMet(w, kingdom_a, kingdom_b) && !KingdomAtWar(w, kingdom_a, kingdom_b)
+}
+
+KingdomDeclareWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) -> bool {
+	if !KingdomCanDeclareWar(w, kingdomSlotA, kingdomSlotB) do return false
 	w.kingdoms[kingdomSlotA].kingdomWar[kingdomSlotB] = true
 	w.kingdoms[kingdomSlotB].kingdomWar[kingdomSlotA] = true
 	KingdomBreakDefenses(w, kingdomSlotA, kingdomSlotB)
-	if !was_at_war {
-		if kingdomSlotA == w.observerKingdom {
-			WorldAlertAdd(w, .WarDeclared, kingdomSlotA, -1, kingdomSlotB, 0, 0)
-		} else if kingdomSlotB == w.observerKingdom {
-			WorldAlertAdd(w, .WarDeclared, kingdomSlotB, -1, kingdomSlotA, 0, 0)
-		}
+	if kingdomSlotA == w.observerKingdom {
+		WorldAlertAdd(w, .WarDeclared, kingdomSlotA, -1, kingdomSlotB, 0, 0)
+	} else if kingdomSlotB == w.observerKingdom {
+		WorldAlertAdd(w, .WarDeclared, kingdomSlotB, -1, kingdomSlotA, 0, 0)
 	}
+	return true
 }
 
 // Ends only the war between two kingdoms and removes their standing attack

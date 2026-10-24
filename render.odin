@@ -708,9 +708,7 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 			for unit_slot in 0 ..< UNIT_CAPACITY {
 				if !w.unitUsed[unit_slot] do continue
 				if w.units[unit_slot].type == nil do continue
-				if state, ok := w.units[unit_slot].state.(StateConverting); ok && state.inside {
-					continue
-				}
+				if UnitHiddenInside(w, unit_slot) do continue
 
 				kind := UnitKindOf(w.units[unit_slot].type)
 				scale := UnitSpriteScale(kind)

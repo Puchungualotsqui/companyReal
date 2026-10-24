@@ -3,8 +3,8 @@ package main
 import rl "vendor:raylib"
 import "core:math"
 
-// Fog is a player-perspective view model. The simulation keeps running for
-// every kingdom; only the observer's vision is stamped here.
+// Terrain memory is observer-only. Contact uses every kingdom's actual
+// vision, independently of who is observing or controlling the game.
 FOG_NONE :: u8(255)
 
 FOG_FLAG_CONSTRUCTION :: u8(1 << 0)
@@ -23,6 +23,11 @@ FogOfWar :: struct {
 	visible:  []bool,
 	explored: []bool,
 	revision: u64,
+
+	// Persistent mutual contact and scratch per-tile vision bits. Contact does
+	// not reveal the other kingdom's towns or share its map exploration.
+	contacts: [KINGDOMS_CAPACITY][KINGDOMS_CAPACITY]bool,
+	contactVision: []u8,
 
 	// Per-tile memory of what was last seen. Building data lives at the
 	// building's top-left anchor tile; every footprint tile points at it, so a
@@ -47,6 +52,9 @@ FogInit :: proc(w: ^World) -> bool {
 	count := int(w.maxX)*int(w.maxY)
 	if count <= 0 do return false
 
+	#assert(KINGDOMS_CAPACITY <= 8)
+	w.fog.contacts = {}
+	w.fog.contactVision = make([]u8, count)
 	w.fog.visible = make([]bool, count)
 	w.fog.explored = make([]bool, count)
 	w.fog.buildingKind = make([]u8, count)
@@ -75,6 +83,7 @@ FogInit :: proc(w: ^World) -> bool {
 }
 
 FogDeinit :: proc(w: ^World) {
+	delete(w.fog.contactVision)
 	delete(w.fog.visible)
 	delete(w.fog.explored)
 	delete(w.fog.buildingKind)
@@ -137,6 +146,7 @@ FogRectExplored :: proc(w: ^World, x, y, width, height: int) -> bool {
 
 FogUnitVisible :: proc(w: ^World, unit_slot: int) -> bool {
 	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return false
+	if UnitHiddenInside(w, unit_slot) do return false
 	if w.observerKingdom < 0 do return true
 	if w.units[unit_slot].kingdome == w.observerKingdom do return true
 	world_width := int(w.maxX)
@@ -183,11 +193,7 @@ KingdomDiscovered :: proc(w: ^World, kingdom_slot: int) -> bool {
 	}
 	if w.observerKingdom < 0 do return true
 	if kingdom_slot == w.observerKingdom do return true
-	for town_slot in 0..<TOWN_CAPACITY {
-		if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-		if FogTownDiscovered(w, kingdom_slot, town_slot) do return true
-	}
-	return false
+	return KingdomsMet(w, w.observerKingdom, kingdom_slot)
 }
 
 FogFirstDiscoveredTown :: proc(w: ^World, kingdom_slot: int) -> (int, bool) {
@@ -230,8 +236,23 @@ FogMarkVisible :: proc(w: ^World, x, y: int) {
 	w.fog.explored[index] = true
 }
 
-FogRevealCircle :: proc(w: ^World, center_x, center_y: int, radius: f32) {
+// A kingdom source stamps contact vision and, only for the observer, fog.
+// The default remains useful for observer-only footprint revelation.
+FogRevealCircle :: proc(w: ^World, center_x, center_y: int, radius: f32, kingdom: int = -1) {
 	if radius <= 0 do return
+	if kingdom >= 0 && (kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom]) do return
+	needs_contact := false
+	if kingdom >= 0 {
+		for other in 0..<KINGDOMS_CAPACITY {
+			if other != kingdom && w.kingdomUsed[other] && !KingdomsMet(w, kingdom, other) {
+				needs_contact = true
+				break
+			}
+		}
+		// Once introduced to every living kingdom, only observer fog needs
+		// updating. Large AI armies need not stamp redundant contact circles.
+		if !needs_contact && kingdom != w.observerKingdom do return
+	}
 	radius_squared := radius*radius
 	extent := int(radius)+1
 	for offset_y in -extent..=extent {
@@ -239,7 +260,14 @@ FogRevealCircle :: proc(w: ^World, center_x, center_y: int, radius: f32) {
 		if distance_squared > radius_squared do continue
 		half_width := int(math.sqrt(radius_squared-distance_squared))
 		for offset_x in -half_width..=half_width {
-			FogMarkVisible(w, center_x+offset_x, center_y+offset_y)
+			x, y := center_x+offset_x, center_y+offset_y
+			if needs_contact {
+				index := FogTileIndex(w, x, y)
+				if index >= 0 && index < len(w.fog.contactVision) {
+					w.fog.contactVision[index] |= u8(1) << u8(kingdom)
+				}
+			}
+			if kingdom < 0 || kingdom == w.observerKingdom do FogMarkVisible(w, x, y)
 		}
 	}
 }
@@ -403,47 +431,54 @@ FogSnapshotDecoration :: proc(w: ^World, decoration_slot: int) {
 	w.fog.decorationOffsetY[index] = u8(fraction_y*255)
 }
 
+// Any visible footprint tile is enough to meet a building's owner; neither
+// a town hall nor the building anchor has to be visible.
+FogContactRect :: proc(w: ^World, kingdom, x, y, width, height: int) {
+	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do return
+	viewers: u8
+	for tile_x in x..<x+width {
+		for tile_y in y..<y+height {
+			index := FogTileIndex(w, tile_x, tile_y)
+			if index >= 0 && index < len(w.fog.contactVision) do viewers |= w.fog.contactVision[index]
+		}
+	}
+	for other in 0..<KINGDOMS_CAPACITY {
+		if viewers & (u8(1) << u8(other)) != 0 do KingdomMeet(w, kingdom, other)
+	}
+}
+
 FogUpdate :: proc(w: ^World) {
 	count := int(w.maxX)*int(w.maxY)
 	if count <= 0 || len(w.fog.visible) != count do return
 
 	observer := w.observerKingdom
-	if observer < 0 {
-		// Spectators see the whole board; memory snapshots are unnecessary.
-		for i in 0 ..< count {
-			w.fog.visible[i] = true
-			w.fog.explored[i] = true
-		}
-		clear(&w.fog.visibleTiles)
-		clear(&w.fog.ghosts)
-		for i in 0 ..< KINGDOMS_CAPACITY do w.fog.enemyAlerted[i] = false
-		w.fog.revision += 1
-		return
+	for i in 0..<count {
+		w.fog.visible[i] = false
+		w.fog.contactVision[i] = 0
 	}
-
-	for i in 0..<count do w.fog.visible[i] = false
 	clear(&w.fog.visibleTiles)
 
 	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil do continue
-		if w.units[unit_slot].kingdome != observer do continue
+		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil || UnitHiddenInside(w, unit_slot) do continue
+		kingdom := w.units[unit_slot].kingdome
+		if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do continue
 		vision := UnitDefaultVision(w.units[unit_slot].type)
 		x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
 		y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
-		FogRevealCircle(w, x, y, vision)
+		FogRevealCircle(w, x, y, vision, kingdom)
 	}
 
 	for building_slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[building_slot] do continue
-		if w.buildings[building_slot].kingdom != observer do continue
 		building := &w.buildings[building_slot]
+		if building.kingdom < 0 || building.kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[building.kingdom] do continue
 		width, height := BuildingTileSize(building.type)
 		vision := BuildingVision(BuildingKindOf(building.type))
-		FogRevealCircle(w, building.x+width/2, building.y+height/2, vision)
+		FogRevealCircle(w, building.x+width/2, building.y+height/2, vision, building.kingdom)
 	}
 
 	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] || kingdom_slot != observer do continue
+		if !w.kingdomUsed[kingdom_slot] do continue
 		for town_slot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
 			site := &w.kingdoms[kingdom_slot].towns[town_slot]
@@ -454,12 +489,13 @@ FogUpdate :: proc(w: ^World) {
 				site.construction.x+width/2,
 				site.construction.y+height/2,
 				BuildingVision(site.construction.kind),
+				kingdom_slot,
 			)
 		}
 	}
 
 	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] || kingdom_slot != observer do continue
+		if !w.kingdomUsed[kingdom_slot] do continue
 		width, height := BuildingTileSize(TownHall{})
 		for town_slot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
@@ -469,8 +505,45 @@ FogUpdate :: proc(w: ^World) {
 				town.x+width/2,
 				town.y+height/2,
 				f32(town.areaRadius)*FOG_TOWN_AREA_VISION_FACTOR,
+				kingdom_slot,
 			)
 		}
+	}
+
+	for unit_slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil || UnitHiddenInside(w, unit_slot) do continue
+		x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
+		y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
+		FogContactRect(w, w.units[unit_slot].kingdome, x, y, 1, 1)
+	}
+	for building_slot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[building_slot] do continue
+		building := &w.buildings[building_slot]
+		width, height := BuildingTileSize(building.type)
+		FogContactRect(w, building.kingdom, building.x, building.y, width, height)
+	}
+	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdom_slot] do continue
+		for town_slot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
+			town := &w.kingdoms[kingdom_slot].towns[town_slot]
+			if !town.constructionActive do continue
+			width, height := BuildingTileSize(BuildingTypeFromKind(town.construction.kind))
+			FogContactRect(w, kingdom_slot, town.construction.x, town.construction.y, width, height)
+		}
+	}
+
+	if observer < 0 {
+		// Spectator omniscience is not diplomatic contact.
+		for i in 0..<count {
+			w.fog.visible[i] = true
+			w.fog.explored[i] = true
+		}
+		clear(&w.fog.visibleTiles)
+		clear(&w.fog.ghosts)
+		for i in 0..<KINGDOMS_CAPACITY do w.fog.enemyAlerted[i] = false
+		w.fog.revision += 1
+		return
 	}
 
 	// A building seen at all reveals its whole footprint. This keeps sprites
@@ -505,6 +578,7 @@ FogUpdate :: proc(w: ^World) {
 		building := &w.buildings[building_slot]
 		width, height := BuildingTileSize(building.type)
 		if FogRectVisible(w, building.x, building.y, width, height) {
+			KingdomMeet(w, observer, building.kingdom)
 			FogSnapshotBuilding(w, building_slot)
 		}
 	}
@@ -516,6 +590,7 @@ FogUpdate :: proc(w: ^World) {
 			if !town.constructionActive do continue
 			width, height := BuildingTileSize(BuildingTypeFromKind(town.construction.kind))
 			if !FogRectVisible(w, town.construction.x, town.construction.y, width, height) do continue
+			KingdomMeet(w, observer, kingdom_slot)
 			FogSnapshotConstruction(w, kingdom_slot, town_slot)
 		}
 	}
@@ -527,7 +602,7 @@ FogUpdate :: proc(w: ^World) {
 
 	visible_enemy: [KINGDOMS_CAPACITY]bool
 	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil do continue
+		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil || UnitHiddenInside(w, unit_slot) do continue
 		kingdom_slot := w.units[unit_slot].kingdome
 		if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || kingdom_slot == observer {
 			continue
@@ -535,6 +610,7 @@ FogUpdate :: proc(w: ^World) {
 		x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
 		y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
 		if !FogTileVisible(w, x, y) do continue
+		KingdomMeet(w, observer, kingdom_slot)
 		visible_enemy[kingdom_slot] = true
 		if !w.fog.enemyAlerted[kingdom_slot] {
 			w.fog.enemyAlerted[kingdom_slot] = true
