@@ -732,7 +732,7 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				bob: f32 = 0
 				switch state in w.units[unit_slot].state {
 				case StatePacific:
-					if state != .Sleeping {
+					if state != .Sleeping && !(kind == .WaterCollector && state == .Working) {
 						bob = math.sin(f32(unit_slot)*1.7+bob_time*2.4)*0.03
 					}
 				case StateWarrior, StateConverting:

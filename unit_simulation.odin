@@ -1,5 +1,7 @@
 package main
 
+import "core:fmt"
+
 // Pacific units drop their work to fight a fire burning inside their town.
 UnitTryExtinguish :: proc(w: ^World, unit_slot: int, delta_time: f32) -> bool {
 	unit := &w.units[unit_slot]
@@ -298,16 +300,78 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	}
 }
 
-UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
-	kingdom_slot := w.units[unit_slot].kingdome
-	town_slot := w.units[unit_slot].town
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return
-	w.kingdoms[kingdom_slot].towns[town_slot].waterCollectors += 1
-	if UnitUpdatePacificSleep(w, unit_slot, delta_time) do return
-	if UnitTryExtinguish(w, unit_slot, delta_time) do return
+// Temporary diagnostics: the palette's first color is blue, but its kingdom
+// slot depends on the player's color choice. Keep all collector logs filtered here.
+UnitLogWaterCollector :: proc(w: ^World, unit_slot: int, event: string, previous_state: StatePacific, previous_x, previous_y: f32) {
+	unit := &w.units[unit_slot]
+	if UnitKindOf(unit.type) != .WaterCollector do return
+	if unit.kingdome < 0 || unit.kingdome >= KINGDOMS_CAPACITY do return
+	if !SameColor(w.kingdomColors[unit.kingdome], KINGDOM_COLOR_PALETTE[0]) do return
+	collector := unit.type.(WaterCollector)
+	world_width, world_height := int(w.maxX), int(w.maxY)
+	x := WorldWrapCoordinate(int(unit.x), world_width)
+	y := WorldWrapCoordinate(int(unit.y), world_height)
+	target_x := WorldWrapCoordinate(unit.pathTargetX, world_width)
+	target_y := WorldWrapCoordinate(unit.pathTargetY, world_height)
+	next_x, next_y := -1, -1
+	next_walkable := false
+	if unit.pathIndex >= 0 && unit.pathIndex < len(unit.path) {
+		next_x, next_y = unit.path[unit.pathIndex]/world_height, unit.path[unit.pathIndex]%world_height
+		next_walkable = WorldTileWalkable(w, next_x, next_y, unit.type, unit.kingdome)
+	}
+	fmt.printf(
+		"[water-collector/blue] t=%.2f day=%d hour=%.2f unit=%d kingdom=%d town=%d event=%s state=%v->%v pos=(%.2f,%.2f) moved=(%.3f,%.3f) target=(%d,%d) cargo=%.1f cooldown=%.2f sequence=%d\n",
+		w.simulationTime, w.dayNumber, WorldTimeOfDay(w), unit_slot, unit.kingdome, unit.town, event,
+		previous_state, unit.state.(StatePacific), unit.x, unit.y,
+		WorldShortestWrappedDelta(unit.x-previous_x, f32(world_width)),
+		WorldShortestWrappedDelta(unit.y-previous_y, f32(world_height)),
+		unit.pathTargetX, unit.pathTargetY, collector.carriedResource, unit.cooldown, collector.taskSequence,
+	)
+	fmt.printf(
+		"[water-collector/blue] unit=%d path=(ready=%v found=%v index=%d length=%d revision=%d world-revision=%d next=(%d,%d) next-walkable=%v) current=(terrain=%v building=%d construction=%v walkable=%v) target=(terrain=%v building=%d construction=%v walkable=%v) fires=%d no-home=%v\n",
+		unit_slot, unit.pathReady, unit.pathFound, unit.pathIndex, len(unit.path), unit.pathRevision, w.navigationRevision,
+		next_x, next_y, next_walkable,
+		w.ground[x][y].type, w.tileBuilding[x*world_height+y], w.tileConstructionBlocked[x*world_height+y],
+		WorldTileWalkable(w, x, y, unit.type, unit.kingdome),
+		w.ground[target_x][target_y].type, w.tileBuilding[target_x*world_height+target_y],
+		w.tileConstructionBlocked[target_x*world_height+target_y],
+		WorldTileWalkable(w, target_x, target_y, unit.type, unit.kingdome), w.fireCount, unit.effects[.NoHome],
+	)
+}
 
-	collector := &w.units[unit_slot].type.(WaterCollector)
-	state := &w.units[unit_slot].state.(StatePacific)
+UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
+	unit := &w.units[unit_slot]
+	kingdom_slot := unit.kingdome
+	town_slot := unit.town
+	collector := &unit.type.(WaterCollector)
+	state := &unit.state.(StatePacific)
+	trace := kingdom_slot >= 0 && kingdom_slot < KINGDOMS_CAPACITY &&
+		SameColor(w.kingdomColors[kingdom_slot], KINGDOM_COLOR_PALETTE[0])
+	previous_state := state^
+	previous_x, previous_y := unit.x, unit.y
+	previous_target_x, previous_target_y := unit.pathTargetX, unit.pathTargetY
+	previous_path_found := unit.pathFound
+	event := "status"
+	log_now := int(w.simulationTime/2) != int((w.simulationTime-delta_time)/2)
+	defer {
+		if trace && (log_now || state^ != previous_state || unit.pathFound != previous_path_found ||
+			unit.pathTargetX != previous_target_x || unit.pathTargetY != previous_target_y) {
+			UnitLogWaterCollector(w, unit_slot, event, previous_state, previous_x, previous_y)
+		}
+	}
+	if !WorldTownExists(w, kingdom_slot, town_slot) {
+		event = "missing-town"
+		return
+	}
+	w.kingdoms[kingdom_slot].towns[town_slot].waterCollectors += 1
+	if UnitUpdatePacificSleep(w, unit_slot, delta_time) {
+		event = "sleep-or-going-home"
+		return
+	}
+	if UnitTryExtinguish(w, unit_slot, delta_time) {
+		event = "extinguishing-fire"
+		return
+	}
 
 	if state^ == .Roaming {
 		if collector.carriedResource > 0 {
@@ -315,12 +379,16 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 				w.units[unit_slot].cooldown = max(0, w.units[unit_slot].cooldown-delta_time)
 				return
 			}
+			if trace do UnitLogWaterCollector(w, unit_slot, "search-return-loaded", previous_state, previous_x, previous_y)
+			log_now = true
 			if x, y, found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot, unit_slot); found {
+				event = "return-target-found"
 				w.units[unit_slot].pathTargetX = x
 				w.units[unit_slot].pathTargetY = y
 				w.units[unit_slot].pathReady = false
 				state^ = .Returning
 			} else {
+				event = "no-return-target-retry-in-5s"
 				// Keep the load, but do not search or start roaming paths every tick.
 				w.units[unit_slot].cooldown = 5
 				w.units[unit_slot].pathReady = false
@@ -328,13 +396,19 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			}
 		} else if w.units[unit_slot].cooldown > 0 {
 			w.units[unit_slot].cooldown -= delta_time
-		} else if x, y, found := UnitFindWaterTarget(w, unit_slot, collector.taskSequence); found {
-			w.units[unit_slot].pathTargetX = x
-			w.units[unit_slot].pathTargetY = y
-			w.units[unit_slot].pathReady = false
-			state^ = .Traveling
 		} else {
-			w.units[unit_slot].cooldown = 5
+			if trace do UnitLogWaterCollector(w, unit_slot, "search-water", previous_state, previous_x, previous_y)
+			log_now = true
+			if x, y, found := UnitFindWaterTarget(w, unit_slot, collector.taskSequence); found {
+				event = "water-target-found"
+				w.units[unit_slot].pathTargetX = x
+				w.units[unit_slot].pathTargetY = y
+				w.units[unit_slot].pathReady = false
+				state^ = .Traveling
+			} else {
+				event = "no-water-target-retry-in-5s"
+				w.units[unit_slot].cooldown = 5
+			}
 		}
 	}
 
@@ -342,10 +416,14 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	case .Roaming:
 		UnitUpdateRoaming(w, unit_slot, delta_time)
 	case .Traveling:
-		if UnitMoveToTarget(w, unit_slot, delta_time) {
+		if UnitMove(w, unit_slot, unit.pathTargetX, unit.pathTargetY, delta_time) {
+			event = "water-reached-start-working"
 			state^ = .Working
+			unit.pathReady = false
 			w.units[unit_slot].cooldown = f32(WORLD_DAY_LENGTH_SECONDS)/48
 		} else if !w.units[unit_slot].pathFound {
+			event = "water-path-failed"
+			log_now = true
 			state^ = .Roaming
 			w.units[unit_slot].pathReady = false
 			collector.taskSequence += 1
@@ -354,18 +432,25 @@ UnitUpdateWaterCollector :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 		w.units[unit_slot].cooldown -= delta_time
 		if w.units[unit_slot].cooldown <= 0 {
 			collector.carriedResource = 1
+			if trace do UnitLogWaterCollector(w, unit_slot, "water-collected-search-return", previous_state, previous_x, previous_y)
+			log_now = true
 			if x, y, found := UnitFindTownReturnPoint(w, kingdom_slot, town_slot, unit_slot); found {
+				event = "return-target-found"
 				w.units[unit_slot].pathTargetX = x
 				w.units[unit_slot].pathTargetY = y
 				w.units[unit_slot].pathReady = false
 				state^ = .Returning
 			} else {
+				event = "no-return-target-discard-load"
 				collector.carriedResource = 0
 				state^ = .Roaming
 			}
 		}
 	case .Returning:
-		if UnitMoveToTarget(w, unit_slot, delta_time) || !w.units[unit_slot].pathFound {
+		reached := UnitMove(w, unit_slot, unit.pathTargetX, unit.pathTargetY, delta_time)
+		if reached || !w.units[unit_slot].pathFound {
+			event = reached ? "return-arrived" : "return-path-failed-discard-load"
+			log_now = true
 			collector.carriedResource = 0
 			collector.taskSequence += 1
 			state^ = .Roaming
@@ -727,10 +812,11 @@ UnitFindResourceTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int
 	return int(w.decorations.x[best_slot]), int(w.decorations.y[best_slot]), best_slot, true
 }
 
-// Stops at the nearest reachable candidate by cardinal step count. Unlike a
-// component flood followed by a world scan, nearby targets only visit a local
-// frontier. An absent target can still require O(world tiles) work; callers must
-// delay retries. Stamps and the queue are shared with A*, with no new allocation.
+// Stops at the nearest reachable water tile or hall entrance. If the entrance
+// is unavailable, use the closest available hall ring. The return search area
+// is not itself a delivery zone: accepting it lets collectors stay at the shore.
+// An absent target can require O(world tiles) work; callers must delay retries.
+// Stamps and the queue are shared with A*, with no new allocation.
 UnitFindCollectorTarget :: proc(w: ^World, unit_slot, task_sequence: int, kingdom_slot := -1, town_slot := -1) -> (int, int, bool) {
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
@@ -741,20 +827,22 @@ UnitFindCollectorTarget :: proc(w: ^World, unit_slot, task_sequence: int, kingdo
 	}
 
 	unit := &w.units[unit_slot]
+	return_radius := 9
+	prefer_entrance := false
+	fallback_x, fallback_y, fallback_found := 0, 0, false
 	if kingdom_slot >= 0 {
-		// At most 20x20 tiles: a fully reserved hall area needs no path search.
+		// At most 20x20 tiles: choose the innermost usable ring before routing.
 		town := &w.kingdoms[kingdom_slot].towns[town_slot]
-		any_approach := false
 		for x in max(0, town.x-8)..=min(world_width-1, town.x+11) {
 			for y in max(0, town.y-8)..=min(world_height-1, town.y+11) {
 				if x >= town.x && x < town.x+4 && y >= town.y && y < town.y+4 do continue
 				if WorldTileOccupied(w, x, y) || !WorldTileWalkable(w, x, y, unit.type, unit.kingdome) do continue
-				any_approach = true
-				break
+				radius := max(max(town.x-x, x-(town.x+3)), max(town.y-y, y-(town.y+3)))
+				return_radius = min(return_radius, radius)
+				if y == town.y+4 && (x == town.x+1 || x == town.x+2) do prefer_entrance = true
 			}
-			if any_approach do break
 		}
-		if !any_approach do return 0, 0, false
+		if return_radius > 8 do return 0, 0, false
 	}
 
 	w.navigationSearchId += 1
@@ -779,7 +867,12 @@ UnitFindCollectorTarget :: proc(w: ^World, unit_slot, task_sequence: int, kingdo
 			if kingdom_slot >= 0 {
 				town := &w.kingdoms[kingdom_slot].towns[town_slot]
 				radius := max(max(town.x-x, x-(town.x+3)), max(town.y-y, y-(town.y+3)))
-				if radius >= 1 && radius <= 8 do return x, y, true
+				if radius == return_radius {
+					if !prefer_entrance || (y == town.y+4 && (x == town.x+1 || x == town.x+2)) {
+						return x, y, true
+					}
+					if !fallback_found do fallback_x, fallback_y, fallback_found = x, y, true
+				}
 			} else {
 				if w.ground[x][y].type == .River do return x, y, true
 				for direction in 0..<4 {
@@ -815,7 +908,9 @@ UnitFindCollectorTarget :: proc(w: ^World, unit_slot, task_sequence: int, kingdo
 			tail += 1
 		}
 	}
-	return 0, 0, false
+	// Walkable entrances may belong to a disconnected pocket. In that case,
+	// retain a reachable perimeter point instead of stranding the return trip.
+	return fallback_x, fallback_y, fallback_found
 }
 
 UnitFindWaterTarget :: proc(w: ^World, unit_slot, task_sequence: int) -> (int, int, bool) {
@@ -910,8 +1005,8 @@ UnitFindHomeTarget :: proc(w: ^World, unit_slot: int) -> (int, int, bool) {
 UnitFindTownReturnPoint :: proc(w: ^World, kingdom_slot, town_slot: int, unit_slot := -1) -> (int, int, bool) {
 	world_width := int(w.maxX)
 	world_height := int(w.maxY)
-	// Collectors choose the nearest reachable approach; other callers retain
-	// the original town-centered ring search.
+	// Collectors prefer the hall entrance, with a reachable perimeter fallback;
+	// other callers retain the original town-centered ring search.
 	if unit_slot >= 0 {
 		return UnitFindCollectorTarget(w, unit_slot, 0, kingdom_slot, town_slot)
 	}
