@@ -455,6 +455,49 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdom_count: int, seed: u64) -> b
 	half_width := f32(building_width)*0.5
 	half_height := f32(building_height)*0.5
 
+	// Capitals need a landmass large enough to support more than a single town;
+	// otherwise a kingdom is stranded on a tiny island and can never expand or
+	// fight. Label connected land once, then keep the landmass area on each
+	// candidate site.
+	component := make([]i32, node_count)
+	defer delete(component)
+	for &value in component do value = -1
+	component_area := make([dynamic]int, 0, 64)
+	defer delete(component_area)
+	stack := make([dynamic]int, 0, 1024)
+	defer delete(stack)
+	neighbour_offsets := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
+	for start in 0..<node_count {
+		if component[start] >= 0 do continue
+		start_x := start/world_height
+		start_y := start%world_height
+		if !WorldTileWalkable(w, start_x, start_y, Builder{}, -1) do continue
+
+		id := i32(len(component_area))
+		area := 0
+		clear(&stack)
+		append(&stack, start)
+		component[start] = id
+		for len(stack) > 0 {
+			index := pop(&stack)
+			x := index/world_height
+			y := index%world_height
+			area += 1
+			for offset in neighbour_offsets {
+				neighbour_x := WorldWrapCoordinate(x+offset[0], world_width)
+				neighbour_y := WorldWrapCoordinate(y+offset[1], world_height)
+				neighbour := neighbour_x*world_height+neighbour_y
+				if component[neighbour] >= 0 do continue
+				if !WorldTileWalkable(w, neighbour_x, neighbour_y, Builder{}, -1) {
+					continue
+				}
+				component[neighbour] = id
+				append(&stack, neighbour)
+			}
+		}
+		append(&component_area, area)
+	}
+
 	// One candidate per coarse block is plenty: the chosen site only needs to
 	// be on the right side of the map, and thinning the list keeps the ring
 	// search cheap even on the biggest maps.
@@ -463,8 +506,10 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdom_count: int, seed: u64) -> b
 	block_height := (world_height+SITE_BLOCK-1)/SITE_BLOCK
 	site_x := make([dynamic]int, 0, block_width*block_height/2)
 	site_y := make([dynamic]int, 0, block_width*block_height/2)
+	site_area := make([dynamic]int, 0, block_width*block_height/2)
 	defer delete(site_x)
 	defer delete(site_y)
+	defer delete(site_area)
 
 	for block_x in 0..<block_width {
 		for block_y in 0..<block_height {
@@ -490,13 +535,44 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdom_count: int, seed: u64) -> b
 					}
 					if is_occupied do continue
 
+					component_id := component[x*world_height+y]
+					if component_id < 0 do continue
 					block_site = len(site_x)
 					append(&site_x, x)
 					append(&site_y, y)
+					append(&site_area, component_area[component_id])
 					break
 				}
 			}
 		}
+	}
+	if len(site_x) < kingdom_count do return false
+
+	// Prefer large landmasses. The threshold relaxes only as far as needed to
+	// still offer one site per kingdom, so archipelago maps keep working while
+	// ordinary maps keep every capital on connected, expandable ground.
+	MIN_CAPITAL_LAND_AREA :: 3000
+	area_threshold := MIN_CAPITAL_LAND_AREA
+	for area_threshold > 0 {
+		enough := 0
+		for area in site_area {
+			if area >= area_threshold do enough += 1
+		}
+		if enough >= kingdom_count do break
+		area_threshold /= 2
+	}
+	if area_threshold > 0 {
+		write := 0
+		for site in 0..<len(site_area) {
+			if site_area[site] < area_threshold do continue
+			site_x[write] = site_x[site]
+			site_y[write] = site_y[site]
+			site_area[write] = site_area[site]
+			write += 1
+		}
+		resize(&site_x, write)
+		resize(&site_y, write)
+		resize(&site_area, write)
 	}
 	if len(site_x) < kingdom_count do return false
 

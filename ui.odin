@@ -1966,6 +1966,35 @@ UIDrawCommandBar :: proc(w: ^World, ui: ^UIState) {
 		UIFoundButtonEnabled(w, kingdom, town),
 		ui.command == .Found,
 	)
+	if rl.CheckCollisionPointRec(rl.GetMousePosition(), found_rect) {
+		UIDrawFoundHint(w, found_rect, kingdom, town)
+	}
+}
+
+// Found-button hover readout: shows exactly which requirement is missing, so
+// expansion never feels blocked for an unexplained reason.
+UIDrawFoundHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {
+	if !WorldTownExists(w, kingdom, town) do return
+	t := &w.kingdoms[kingdom].towns[town]
+	builders := TownUnitCount(w, kingdom, town, .Builder)
+	text := fmt.ctprintf(
+		"Found town  -  wood %d/%d   citizens %d/%d   builders %d/1",
+		int(t.wood),
+		TOWN_FOUNDING_WOOD,
+		t.citizens,
+		TOWN_FOUNDING_MIN_CITIZENS,
+		builders,
+	)
+	width := rl.MeasureTextEx(ui_font(), text, UI_TEXT_SIZE, 1).x+2*UI_PAD
+	height := UI_TEXT_SIZE+2*UI_PAD
+	screen_width := f32(rl.GetScreenWidth())
+	x := clamp(rect.x+rect.width*0.5-width*0.5, 8, screen_width-width-8)
+	y := rect.y-height-8
+	rl.DrawRectangleRec(rl.Rectangle{x, y, width, height}, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(rl.Rectangle{x, y, width, height}, 1, UI_COLOR_BORDER)
+	color := UI_COLOR_TEXT
+	if !UIFoundButtonEnabled(w, kingdom, town) do color = UI_COLOR_BAD
+	ui_text(text, x+UI_PAD, y+UI_PAD-2, color)
 }
 
 UIDrawCommandIcon :: proc(rect: rl.Rectangle, command: UICommand, enabled, active: bool) {

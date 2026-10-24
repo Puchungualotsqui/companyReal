@@ -192,7 +192,7 @@ UnitUpdateBuilder :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			state^ = .ToConstruction
 		}
 	}
-	if state^ == .Roaming && town.wood < TOWN_WOOD_TARGET {
+	if state^ == .Roaming && town.wood < TownWoodGatherTarget(w, kingdom_slot) {
 		if x, y, decoration, found := UnitFindResourceTarget(w, unit_slot, builder.taskSequence); found {
 			builder.targetDecoration = decoration
 			w.units[unit_slot].pathTargetX = x

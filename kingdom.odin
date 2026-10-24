@@ -13,10 +13,13 @@ TOWN_WOOD_TARGET :: 60
 // Founding a new town is funded by the selected town. The order uses the
 // town's construction queue, so regular builders travel to the site and raise
 // the hall. A player order preempts automatic construction.
-TOWN_FOUNDING_WOOD :: 80
-TOWN_FOUNDING_MIN_CITIZENS :: 10
-TOWN_FOUNDING_MIN_DISTANCE :: 24
+TOWN_FOUNDING_WOOD :: 50
+TOWN_FOUNDING_MIN_CITIZENS :: 8
+TOWN_FOUNDING_MIN_DISTANCE :: 20
 TOWN_FOUNDING_SETTLERS :: 5
+// Extra wood kept in reserve after a charter so the next house or road does not
+// leave the town unable to expand again.
+TOWN_FOUNDING_WOOD_BUFFER :: 12
 
 TOWN_MILESTONES := [TOWN_MILESTONE_COUNT]int{12, 25, 50}
 
@@ -201,6 +204,14 @@ KingdomFreeTownSlot :: proc(w: ^World, kingdom_slot: int) -> int {
 		if !w.kingdoms[kingdom_slot].townUsed[town_slot] do return town_slot
 	}
 	return -1
+}
+
+// Builders stop chopping at a routine stockpile, but expansion needs a much
+// larger reserve. While the kingdom still has room for another town, gathering
+// continues until it can pay for a charter plus a small buffer.
+TownWoodGatherTarget :: proc(w: ^World, kingdom_slot: int) -> f32 {
+	if KingdomFreeTownSlot(w, kingdom_slot) < 0 do return TOWN_WOOD_TARGET
+	return max(TOWN_WOOD_TARGET, TOWN_FOUNDING_WOOD+TOWN_FOUNDING_WOOD_BUFFER)
 }
 
 // A new town is founded when its hall finishes construction. The hall was

@@ -10,8 +10,8 @@ AI_DECISION_MIN :: 2.8
 AI_DECISION_MAX :: 5.4
 AI_DIPLOMACY_MIN :: 22
 AI_DIPLOMACY_MAX :: 46
-AI_EXPAND_MIN :: 26
-AI_EXPAND_MAX :: 52
+AI_EXPAND_MIN :: 9
+AI_EXPAND_MAX :: 20
 AI_ATTACK_GRACE_SECONDS :: 45
 AI_WAR_COMMIT_SECONDS :: 75
 AI_TRUCE_SECONDS :: 90
@@ -34,7 +34,7 @@ AIStateInit :: proc(w: ^World, kingdom: int) {
 	brain.expansion = WorldNoiseHash(kingdom, 11, seed)
 	brain.decisionTimer = 0.8+WorldNoiseHash(kingdom, 17, seed)*2
 	brain.diplomacyTimer = 8+WorldNoiseHash(kingdom, 19, seed)*18
-	brain.expandTimer = 18+WorldNoiseHash(kingdom, 23, seed)*24
+	brain.expandTimer = 5+WorldNoiseHash(kingdom, 23, seed)*10
 	brain.warCommitUntil = 0
 	brain.truceUntil = 0
 	brain.truceKingdom = -1
@@ -550,14 +550,14 @@ AIDiplomacy :: proc(w: ^World, kingdom: int) {
 
 AIExpand :: proc(w: ^World, kingdom: int) {
 	brain := &w.controllers[kingdom].ai
-	max_towns := 2+int(brain.expansion*4)
+	max_towns := 6+int(brain.expansion*6)
 	if AITownCount(w, kingdom) >= max_towns do return
 
 	for town_slot in 0 ..< TOWN_CAPACITY {
 		if !w.kingdoms[kingdom].townUsed[town_slot] do continue
 		town := &w.kingdoms[kingdom].towns[town_slot]
-		if town.citizens < TOWN_FOUNDING_MIN_CITIZENS+2 do continue
-		if town.wood < TOWN_FOUNDING_WOOD+12 do continue
+		if town.citizens < TOWN_FOUNDING_MIN_CITIZENS do continue
+		if town.wood < TOWN_FOUNDING_WOOD do continue
 		if town.constructionActive && town.construction.kind == .TownHall do continue
 		if TownUnitCount(w, kingdom, town_slot, .Builder) <= 0 do continue
 		if KingdomFreeTownSlot(w, kingdom) < 0 do continue
@@ -567,10 +567,10 @@ AIExpand :: proc(w: ^World, kingdom: int) {
 
 AIFoundTownAt :: proc(w: ^World, kingdom, town_slot: int) -> bool {
 	town := &w.kingdoms[kingdom].towns[town_slot]
-	for attempt in 0 ..< 18 {
+	for attempt in 0 ..< 32 {
 		angle := WorldNoiseHash(kingdom*31+town_slot, attempt, w.seed+0xF0D)*6.2831853
 		distance := f32(TOWN_FOUNDING_MIN_DISTANCE)+2+
-			WorldNoiseHash(attempt, kingdom, w.seed+0xF0E)*22
+			WorldNoiseHash(attempt, kingdom, w.seed+0xF0E)*28
 		center_x := f32(town.x)+2+math.cos(angle)*distance
 		center_y := f32(town.y)+2+math.sin(angle)*distance
 		x := WorldWrapCoordinate(int(center_x)-2, int(w.maxX))
