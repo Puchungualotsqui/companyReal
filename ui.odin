@@ -2026,8 +2026,10 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 
 	y := panel.y+UI_GROWTH_Y
 	eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
+	label := fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta)))
+	if WorldIsNight(w) do label = "Growth paused (night)"
 	UIText(
-		fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta))),
+		label,
 		panel.x+UI_PAD,
 		y,
 		UI_COLOR_DIM,

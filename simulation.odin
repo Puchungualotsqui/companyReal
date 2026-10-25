@@ -354,10 +354,12 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 	// water at all, so a bad start cannot permanently strand it.
 	speed := clamp(coverage, GROWTH_MIN_SPEED, GROWTH_MAX_SPEED)
 	speed *= 1+min(GROWTH_VILLAGER_SPEED_CAP, f32(town.villagers)*GROWTH_VILLAGER_SPEED_BONUS)
+	isNight := WorldIsNight(w)
+	if isNight do speed = 0
 	town.growthSpeed = speed
 
 	town.growthCooldown -= deltaTime*speed
-	if town.growthCooldown <= 0 {
+	if !isNight && town.growthCooldown <= 0 {
 		if town.growthPending <= 0 do town.growthPending = town.growthBatch
 		spawnNow := min(town.growthPending, GROWTH_MAX_SPAWN_PER_TICK)
 		spawned := TownSpawnCitizens(w, kingdomSlot, townSlot, spawnNow)

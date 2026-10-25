@@ -60,12 +60,12 @@ GrowthEra :: struct {
 }
 
 TOWN_ERAS := [6]GrowthEra{
-	{threshold = 0, batch = 1, interval = 12},
-	{threshold = 18, batch = 5, interval = 30},
-	{threshold = 45, batch = 20, interval = 60},
-	{threshold = 100, batch = 60, interval = 105},
-	{threshold = 200, batch = 150, interval = 150},
-	{threshold = 380, batch = 300, interval = 180},
+	{threshold = 0, batch = 1, interval = 24},
+	{threshold = 18, batch = 5, interval = 60},
+	{threshold = 45, batch = 20, interval = 120},
+	{threshold = 100, batch = 60, interval = 210},
+	{threshold = 200, batch = 150, interval = 300},
+	{threshold = 380, batch = 300, interval = 360},
 }
 
 // Milestone rewards are chosen per town, one tier at a time. There are five
