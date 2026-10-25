@@ -612,6 +612,85 @@ UIMilestoneTown :: proc(w: ^World) -> (kingdom, town: int, pending: bool) {
 	return -1, -1, false
 }
 
+MILESTONE_CAMERA_PAN_SECONDS : f32 : 0.9
+
+UIMilestoneCameraTarget :: proc(w: ^World, kingdom, town: int) -> (rl.Vector2, bool) {
+	if !WorldTownExists(w, kingdom, town) do return {}, false
+	if hall := TownHallSlot(w, kingdom, town); hall >= 0 {
+		width, height := BuildingTileSize(w.buildings[hall].type)
+		return rl.Vector2{
+			f32(w.buildings[hall].x)+f32(width)*0.5,
+			f32(w.buildings[hall].y)+f32(height)*0.5,
+		}, true
+	}
+	t := &w.kingdoms[kingdom].towns[town]
+	width, height := BuildingTileSize(TownHall{})
+	return rl.Vector2{f32(t.x)+f32(width)*0.5, f32(t.y)+f32(height)*0.5}, true
+}
+
+// A milestone opens a camera session: pan to the first pending town, keep it
+// centred while its rewards are chosen, and teleport back to the pre-milestone
+// view when nothing is left pending. If another town is queued, pan to it
+// without giving the view back first.
+WorldMilestoneCameraUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32) {
+	camera := &view.camera
+	cam := &view.milestone_camera
+	kingdom, town, pending := UIMilestoneTown(w)
+
+	if !pending {
+		if cam.active {
+			camera.target = cam.return_target
+			camera.zoom = cam.return_zoom
+			cam^ = {}
+		}
+		return
+	}
+
+	target, found := UIMilestoneCameraTarget(w, kingdom, town)
+	if !found {
+		if cam.active {
+			camera.target = cam.return_target
+			camera.zoom = cam.return_zoom
+			cam^ = {}
+		}
+		return
+	}
+
+	if !cam.active {
+		cam.active = true
+		cam.return_target = camera.target
+		cam.return_zoom = camera.zoom
+		cam.kingdom = kingdom
+		cam.town = town
+		cam.start = camera.target
+		cam.target = target
+		cam.elapsed = 0
+		cam.duration = MILESTONE_CAMERA_PAN_SECONDS
+		cam.panning = true
+	} else if cam.kingdom != kingdom || cam.town != town {
+		cam.kingdom = kingdom
+		cam.town = town
+		cam.start = camera.target
+		cam.target = target
+		cam.elapsed = 0
+		cam.duration = MILESTONE_CAMERA_PAN_SECONDS
+		cam.panning = true
+	}
+
+	if cam.panning {
+		cam.elapsed += delta_time
+		t := clamp(cam.elapsed/cam.duration, 0, 1)
+		smooth := t*t*(3-2*t)
+		camera.target.x = cam.start.x+(cam.target.x-cam.start.x)*smooth
+		camera.target.y = cam.start.y+(cam.target.y-cam.start.y)*smooth
+		if t >= 1 do cam.panning = false
+	} else {
+		// The choice window blocks map input, but keep the target pinned so the
+		// town stays centred even if the player uses camera keys or the wheel.
+		camera.target = cam.target
+	}
+}
+
 UIMilestoneRect :: proc() -> rl.Rectangle {
 	width: f32 = 620
 	height: f32 = 340

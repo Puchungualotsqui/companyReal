@@ -35,10 +35,23 @@ WorldRenderer :: struct {
 	bloodPixels: [dynamic]u8,
 }
 
+MilestoneCamera :: struct {
+	active:        bool,
+	panning:       bool,
+	elapsed:       f32,
+	duration:      f32,
+	start:         rl.Vector2,
+	target:        rl.Vector2,
+	return_target: rl.Vector2,
+	return_zoom:   f32,
+	kingdom, town: int,
+}
+
 WorldView :: struct {
-	renderer: WorldRenderer,
-	camera:   rl.Camera2D,
-	ui:       UIState,
+	renderer:         WorldRenderer,
+	camera:           rl.Camera2D,
+	ui:               UIState,
+	milestone_camera: MilestoneCamera,
 }
 
 WorldViewInit :: proc(w: ^World) -> WorldView {
@@ -89,6 +102,7 @@ WorldCameraFocus :: proc(w: ^World) -> (f32, f32) {
 WorldViewUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32) {
 	WorldRendererUpdate(w, &view.renderer)
 	WorldCameraUpdate(w, &view.camera, delta_time)
+	WorldMilestoneCameraUpdate(w, view, delta_time)
 	WorldUIUpdate(w, view, view.camera)
 }
 
