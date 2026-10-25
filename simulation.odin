@@ -292,11 +292,21 @@ WorldConversionAssign :: proc(w: ^World) {
 				UnitTrainingBuildingKind(job.to),
 			)
 			if building < 0 do continue
-			accessX, accessY, found := UnitFindBuildingAccessPoint(
+			buildingX := w.buildings.x[building]
+			buildingY := w.buildings.y[building]
+			width, height := BuildingTileSize(w.buildings[building].type)
+			// Choose an access point reachable from the unit, not merely the
+			// nearest walkable ring tile.
+			accessX, accessY, found := BuildingFindWorkAccessPoint(
 				w,
-				unitSlot,
-				building,
-				UnitTypeFromKind(job.to),
+				buildingX,
+				buildingY,
+				width,
+				height,
+				unit.type,
+				unit.kingdome,
+				int(WorldWrapPosition(unit.x, f32(w.maxX))),
+				int(WorldWrapPosition(unit.y, f32(w.maxY))),
 			)
 			if !found do continue
 

@@ -19,6 +19,32 @@ AUTO_TRAINING_BUILDINGS := [6]BuildingKind{
 	.ThievesGuild,
 }
 
+TownConstructionCount :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0
+	count := 0
+	for site in w.kingdoms[kingdomSlot].towns[townSlot].constructions {
+		if site.active do count += 1
+	}
+	return count
+}
+
+TownConstructionKindCount :: proc(w: ^World, kingdomSlot, townSlot: int, kind: BuildingKind) -> int {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0
+	count := 0
+	for site in w.kingdoms[kingdomSlot].towns[townSlot].constructions {
+		if site.active && site.kind == kind do count += 1
+	}
+	return count
+}
+
+TownConstructionFreeSlot :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return -1
+	for site, index in w.kingdoms[kingdomSlot].towns[townSlot].constructions {
+		if !site.active do return index
+	}
+	return -1
+}
+
 WorldBuildingUpdate :: proc(w: ^World, deltaTime: f32) {
 	for kingdomSlot in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[kingdomSlot] do continue
@@ -63,18 +89,11 @@ WorldBuildingUpdate :: proc(w: ^World, deltaTime: f32) {
 }
 
 // Keep pathfinding queries O(1); rebuild only when orders are added or removed.
+// Town construction sites deliberately stay walkable: a batch of sites must not
+// seal off another site's access or a training building's only route. Overlap
+// checks still prevent buildings and other sites from being placed on them.
 WorldConstructionChanged :: proc(w: ^World) {
 	for &blocked in w.tileConstructionBlocked do blocked = false
-	for kingdom in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom] do continue
-		for townSlot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdom].townUsed[townSlot] do continue
-			town := &w.kingdoms[kingdom].towns[townSlot]
-			if !town.constructionActive do continue
-			site := town.construction
-			BuildingReserveFootprint(w, site.x, site.y, BuildingTypeFromKind(site.kind))
-		}
-	}
 	for slot in 0..<COMBAT_SITE_CAPACITY {
 		if !w.combatSiteUsed[slot] do continue
 		site := w.combatSites[slot]
@@ -232,31 +251,56 @@ BuildingClearUnits :: proc(w: ^World, x, y: int, buildingType: BuildingType, rel
 
 TownBuilderConstruct :: proc(w: ^World, kingdomSlot, townSlot: int, canGrow: bool) -> bool {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	if town.constructionActive do return false
-	if town.farmlands < town.farmers {
-		if TownBuilderStartBuilding(w, kingdomSlot, townSlot, Farmland{}) do return true
-	}
-	if town.homes < town.citizens || (canGrow && town.homes == town.citizens) {
-		if TownBuilderStartBuilding(w, kingdomSlot, townSlot, Home{}) do return true
-	}
-	for kind in AUTO_TRAINING_BUILDINGS {
-		if kind in town.unlockedBuildings && town.buildingCounts[kind] == 0 {
-			if TownBuilderStartBuilding(w, kingdomSlot, townSlot, BuildingTypeFromKind(kind)) {
-				return true
+	startedAny := false
+	maxStarts := min(max(1, town.builders), TOWN_CONSTRUCTION_CAPACITY)
+	for _ in 0 ..< maxStarts {
+		if TownConstructionCount(w, kingdomSlot, townSlot) >= TOWN_CONSTRUCTION_CAPACITY do break
+
+		pendingFarmlands := TownConstructionKindCount(w, kingdomSlot, townSlot, .Farmland)
+		if town.farmlands+pendingFarmlands < town.farmers {
+			if TownBuilderStartBuilding(w, kingdomSlot, townSlot, Farmland{}) {
+				startedAny = true
+				continue
 			}
 		}
-	}
-	if town.wood >= 15 {
-		if x, y, found := TownAutoPathSite(w, kingdomSlot, townSlot); found {
-			if TownStartConstruction(w, kingdomSlot, townSlot, .Path, x, y) do return true
+
+		pendingHomes := TownConstructionKindCount(w, kingdomSlot, townSlot, .Home)
+		if town.homes+pendingHomes < town.citizens ||
+			(canGrow && town.homes+pendingHomes == town.citizens) {
+			if TownBuilderStartBuilding(w, kingdomSlot, townSlot, Home{}) {
+				startedAny = true
+				continue
+			}
 		}
+
+		startedTraining := false
+		for kind in AUTO_TRAINING_BUILDINGS {
+			if !(kind in town.unlockedBuildings) do continue
+			if town.buildingCounts[kind] > 0 do continue
+			if TownConstructionKindCount(w, kingdomSlot, townSlot, kind) > 0 do continue
+			if TownBuilderStartBuilding(w, kingdomSlot, townSlot, BuildingTypeFromKind(kind)) {
+				startedAny = true
+				startedTraining = true
+				break
+			}
+		}
+		if startedTraining do continue
+
+		if town.wood >= 15 {
+			if x, y, found := TownAutoPathSite(w, kingdomSlot, townSlot); found {
+				if TownStartConstruction(w, kingdomSlot, townSlot, .Path, x, y) {
+					startedAny = true
+					continue
+				}
+			}
+		}
+		break
 	}
-	return false
+	return startedAny
 }
 
 TownBuilderStartBuilding :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType: BuildingType) -> bool {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	if town.constructionActive do return false
 	kind := BuildingKindOf(buildingType)
 	if !(kind in town.unlockedBuildings) do return false
 	if town.wood < BuildingWoodCost(kind) do return false
@@ -270,7 +314,8 @@ TownBuilderStartBuilding :: proc(w: ^World, kingdomSlot, townSlot: int, building
 TownStartConstruction :: proc(w: ^World, kingdomSlot, townSlot: int, kind: BuildingKind, x, y: int) -> bool {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return false
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	if town.constructionActive do return false
+	slot := TownConstructionFreeSlot(w, kingdomSlot, townSlot)
+	if slot < 0 do return false
 	if !(kind in town.unlockedBuildings) do return false
 	if BuildingIsCombat(kind) do return false
 	if CombatSiteOverlaps(w, x, y, kind) do return false
@@ -284,38 +329,72 @@ TownStartConstruction :: proc(w: ^World, kingdomSlot, townSlot: int, kind: Build
 	BuildingClearUnits(w, x, y, buildingType, true)
 
 	town.wood -= cost
-	town.construction = ConstructionSite{kind = kind, x = x, y = y, paid = cost}
-	town.constructionActive = true
+	town.constructions[slot] = ConstructionSite{
+		active = true,
+		kind = kind,
+		x = x,
+		y = y,
+		paid = cost,
+	}
 	WorldConstructionChanged(w)
 	return true
 }
 
-// Cancels the current town construction and makes its builders re-path to the
-// next site. Used when a player order preempts automatic construction.
-TownConstructionPreempt :: proc(w: ^World, kingdomSlot, townSlot: int) {
+// Cancels one active site, refunding its cost and releasing its builders.
+TownConstructionCancel :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: int) {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	if !town.constructionActive do return
+	if siteIndex < 0 || siteIndex >= TOWN_CONSTRUCTION_CAPACITY do return
+	site := &town.constructions[siteIndex]
+	if !site.active do return
 
-	town.wood += town.construction.paid
-	settlers := town.construction.settlers
-	town.constructionActive = false
-	town.construction = {}
-	WorldConstructionChanged(w)
-
-	// A cancelled town hall returns the settlers that were waiting at home.
+	town.wood += site.paid
+	settlers := site.settlers
+	site^ = ConstructionSite{}
+	TownConstructionResetBuilders(w, kingdomSlot, townSlot, siteIndex)
 	for _ in 0..<settlers do TownSpawnCitizen(w, kingdomSlot, townSlot, Villager{})
+	WorldConstructionChanged(w)
+}
 
+// Frees the slot of the automatic site with the least work done.
+TownConstructionCancelLeastProgress :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return -1
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	best := -1
+	bestWork: f32 = 1e30
+	for site, index in town.constructions {
+		if !site.active || site.kind == .TownHall do continue
+		work := site.clearWork+site.buildWork
+		if work < bestWork {
+			bestWork = work
+			best = index
+		}
+	}
+	if best < 0 do return -1
+	TownConstructionCancel(w, kingdomSlot, townSlot, best)
+	return best
+}
+
+// Builders remember slot indices, so clear stale assignments whenever a slot is
+// completed or cancelled. Slot indices themselves stay stable.
+TownConstructionResetBuilders :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: int) {
 	for unitSlot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] do continue
 		unit := &w.units[unitSlot]
 		if unit.kingdome != kingdomSlot || unit.town != townSlot do continue
-		if UnitKindOf(unit.type) != .Builder do continue
+		if unit.type == nil || UnitKindOf(unit.type) != .Builder do continue
 		if _, converting := unit.state.(StateConverting); converting do continue
-		state := &unit.state.(StatePacific)
-		if state^ != .ToConstruction && state^ != .Building do continue
-		state^ = .Roaming
-		unit.pathReady = false
+		builder := &unit.type.(Builder)
+		if builder.failedConstruction == siteIndex do builder.failedConstruction = -1
+		if builder.constructionSite != siteIndex do continue
+
+		builder.constructionSite = -1
+		if state, pacific := &unit.state.(StatePacific); pacific {
+			if state^ == .ToConstruction || state^ == .Building {
+				state^ = .Roaming
+				unit.pathReady = false
+			}
+		}
 	}
 }
 
@@ -358,15 +437,66 @@ TownConstructionPendingDecoration :: proc(w: ^World, site: ConstructionSite) -> 
 }
 
 // Builders work the site from a walkable tile on the ring around the footprint.
-TownConstructionAccessPoint :: proc(w: ^World, unitSlot, kingdomSlot, townSlot: int) -> (int, int, bool) {
+TownConstructionAccessPoint :: proc(
+	w: ^World,
+	unitSlot, kingdomSlot, townSlot, siteIndex: int,
+) -> (int, int, bool) {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	if !town.constructionActive do return 0, 0, false
+	if siteIndex < 0 || siteIndex >= TOWN_CONSTRUCTION_CAPACITY do return 0, 0, false
+	site := town.constructions[siteIndex]
+	if !site.active do return 0, 0, false
 
-	site := town.construction
 	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
 	unit := &w.units[unitSlot]
 	return BuildingFindWorkAccessPoint(w, site.x, site.y, width, height, unit.type, unit.kingdome, int(unit.x), int(unit.y))
+}
+
+// Idle builders pick the site whose access point is closest to them. The failed
+// slot is avoided once, so an unreachable site cannot trap a builder in a loop.
+TownFindConstructionForBuilder :: proc(
+	w: ^World,
+	unitSlot, kingdomSlot, townSlot: int,
+) -> (siteIndex: int, x, y: int, found: bool) {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return
+	unit := &w.units[unitSlot]
+	if unit.type == nil || UnitKindOf(unit.type) != .Builder do return
+	builder := &unit.type.(Builder)
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+
+	bestScore: f32 = 1e30
+	fallback := -1
+	fallbackScore: f32 = 1e30
+	for site, index in town.constructions {
+		if !site.active do continue
+		accessX, accessY, ok := TownConstructionAccessPoint(w, unitSlot, kingdomSlot, townSlot, index)
+		if !ok do continue
+		deltaX := WorldShortestWrappedDelta(f32(accessX)+0.5-unit.x, worldWidth)
+		deltaY := WorldShortestWrappedDelta(f32(accessY)+0.5-unit.y, worldHeight)
+		score := deltaX*deltaX+deltaY*deltaY
+		if index == builder.failedConstruction {
+			if score < fallbackScore {
+				fallbackScore = score
+				fallback = index
+			}
+			continue
+		}
+		if score < bestScore {
+			bestScore = score
+			siteIndex = index
+			x = accessX
+			y = accessY
+			found = true
+		}
+	}
+	if !found && fallback >= 0 {
+		x, y, found = TownConstructionAccessPoint(w, unitSlot, kingdomSlot, townSlot, fallback)
+		siteIndex = fallback
+	}
+	return
 }
 
 ConstructionProgress :: enum {
@@ -375,12 +505,16 @@ ConstructionProgress :: enum {
 }
 
 // Advances one builder's share of site work: clearing first, then raising.
-TownConstructionWork :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32) -> ConstructionProgress {
+TownConstructionWork :: proc(
+	w: ^World,
+	kingdomSlot, townSlot, siteIndex: int,
+	deltaTime: f32,
+) -> ConstructionProgress {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return .Completed
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	if !town.constructionActive do return .Completed
-
-	site := &town.construction
+	if siteIndex < 0 || siteIndex >= TOWN_CONSTRUCTION_CAPACITY do return .Completed
+	site := &town.constructions[siteIndex]
+	if !site.active do return .Completed
 	slot := TownConstructionPendingDecoration(w, site^)
 	if slot >= 0 {
 		kind := w.decorations.kind[slot]
@@ -412,8 +546,9 @@ TownConstructionWork :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f
 	); !ok {
 		town.wood += site.paid
 	}
-	town.constructionActive = false
-	town.construction = {}
+	site.active = false
+	site^ = ConstructionSite{}
+	TownConstructionResetBuilders(w, kingdomSlot, townSlot, siteIndex)
 	WorldConstructionChanged(w)
 	return .Completed
 }
@@ -531,12 +666,13 @@ TownConstructionSiteOverlaps :: proc(w: ^World, x, y: int, kind: BuildingKind) -
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			if !town.constructionActive do continue
-			site := town.construction
-			otherWidth, otherHeight := BuildingTileSize(BuildingTypeFromKind(site.kind))
-			if x < site.x+otherWidth && site.x < x+width &&
-				y < site.y+otherHeight && site.y < y+height {
-				return true
+			for site in town.constructions {
+				if !site.active do continue
+				otherWidth, otherHeight := BuildingTileSize(BuildingTypeFromKind(site.kind))
+				if x < site.x+otherWidth && site.x < x+width &&
+					y < site.y+otherHeight && site.y < y+height {
+					return true
+				}
 			}
 		}
 	}

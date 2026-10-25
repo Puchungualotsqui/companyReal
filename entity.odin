@@ -491,9 +491,11 @@ StateConverting :: struct {
 
 Villager :: struct {}
 Builder :: struct {
-	carriedResource:  f32,
-	taskSequence:     int,
-	targetDecoration: int,
+	carriedResource:    f32,
+	taskSequence:       int,
+	targetDecoration:   int,
+	constructionSite:   int, // active town construction slot, or -1
+	failedConstruction: int, // unreachable slot to avoid for one assignment
 }
 CombatBuilder :: struct {
 	order:           WarriorOrder,
@@ -922,7 +924,13 @@ UnitTypeInit :: proc(w: ^World, unitSlot: int, type: UnitType) {
 		unit.type = Villager{}
 		unit.state = StatePacific.Roaming
 	case Builder:
-		unit.type = Builder{carriedResource = 0, taskSequence = 0, targetDecoration = -1}
+		unit.type = Builder{
+			carriedResource = 0,
+			taskSequence = 0,
+			targetDecoration = -1,
+			constructionSite = -1,
+			failedConstruction = -1,
+		}
 		unit.state = StatePacific.Roaming
 	case CombatBuilder:
 		unit.type = CombatBuilder{site = -1, failedSite = -1, orderKingdom = -1}

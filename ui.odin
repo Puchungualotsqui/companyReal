@@ -22,6 +22,7 @@ Selection :: struct {
 UITownTab :: enum {
 	Town,
 	Orders,
+	Works,
 }
 
 // Command modes arm the map for the next click. Inspect is the normal mode.
@@ -82,10 +83,11 @@ UI_TABS_H : f32 : 24
 UI_SECTION_HEADER : f32 : 26
 UI_ROWS_TOP : f32 : 330
 UI_ROW_HEIGHT : f32 : 36
+UI_CONSTRUCTION_ROW_HEIGHT : f32 : 28
 UI_BUTTON : f32 : 20
 UI_TEXT_BUTTON_H : f32 : 26
 
-UI_TOWN_TABS := [2]cstring{"TOWN", "ORDERS"}
+UI_TOWN_TABS := [3]cstring{"TOWN", "ORDERS", "WORKS"}
 
 UI_EFFECT_ROW_H : f32 : 30
 
@@ -803,6 +805,8 @@ UIPanelHeight :: proc(w: ^World, ui: ^UIState) -> f32 {
 				return UI_ROWS_TOP + f32(rows)*UI_ROW_HEIGHT + UI_PAD
 			case .Orders:
 				return UIOrdersPanelHeight(UITownOrderCount(w, kingdom, town))
+			case .Works:
+				return UIConstructionsPanelHeight(TownConstructionCount(w, kingdom, town))
 			}
 		}
 		return UI_GROWTH_Y+UI_GROWTH_H+UI_PAD
@@ -824,8 +828,8 @@ UIPanelRect :: proc(w: ^World, ui: ^UIState) -> rl.Rectangle {
 	return rl.Rectangle{UI_MARGIN, y, UI_PANEL_WIDTH, height}
 }
 
-UITabRects :: proc(panel: rl.Rectangle) -> [2]rl.Rectangle {
-	rects: [2]rl.Rectangle
+UITabRects :: proc(panel: rl.Rectangle) -> [len(UI_TOWN_TABS)]rl.Rectangle {
+	rects: [len(UI_TOWN_TABS)]rl.Rectangle
 	x := panel.x+UI_PAD
 	for label, index in UI_TOWN_TABS {
 		width := rl.MeasureTextEx(UIFont(), label, UI_TEXT_SIZE, 1).x+20
@@ -844,6 +848,10 @@ UIButtonRects :: proc(panel: rl.Rectangle, index: int) -> (minus, plus: rl.Recta
 
 UIOrdersPanelHeight :: proc(orders: int) -> f32 {
 	return UI_ROWS_TOP+UI_SECTION_HEADER+f32(max(orders, 1))*UI_ROW_HEIGHT+UI_PAD
+}
+
+UIConstructionsPanelHeight :: proc(sites: int) -> f32 {
+	return UI_ROWS_TOP+UI_SECTION_HEADER+f32(max(sites, 1))*UI_CONSTRUCTION_ROW_HEIGHT+UI_PAD
 }
 
 UIOrderCancelRect :: proc(panel: rl.Rectangle, index: int) -> rl.Rectangle {
@@ -1257,6 +1265,8 @@ UIPanelClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Vec
 			UIConversionClick(w, ui, panel, mouse)
 		case .Orders:
 			UIOrdersClick(w, ui, panel, mouse)
+		case .Works:
+			// Construction sites are automatic; the tab is read-only.
 		}
 		return
 	}
@@ -1731,6 +1741,8 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 				UIDrawConversions(w, renderer, ui, panel, kingdom, town)
 			case .Orders:
 				UIDrawOrdersTab(w, renderer, panel, kingdom, town)
+			case .Works:
+				UIDrawConstructionsTab(w, renderer, panel, kingdom, town)
 			}
 		}
 	}
@@ -2046,17 +2058,23 @@ UIDrawConstructionStatus :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: 
 	y := panel.y+UI_STAT_Y+4*UI_STAT_H
 	UIText("Construction", panel.x+UI_PAD, y, UI_COLOR_DIM)
 
+	count := TownConstructionCount(w, kingdom, town)
 	value: cstring = "None"
-	if t.constructionActive {
-		site := t.construction
-		if TownConstructionPendingDecoration(w, site) >= 0 {
-			value = fmt.ctprintf("%s  clearing", UIBuildingName(site.kind))
-		} else {
-			seconds := BuildingBuildSeconds(site.kind)
-			progress: f32 = 0
-			if seconds > 0 do progress = clamp(site.buildWork/seconds, 0, 1)
-			value = fmt.ctprintf("%s  %d%%", UIBuildingName(site.kind), int(progress*100))
+	if count == 1 {
+		for site in t.constructions {
+			if !site.active do continue
+			if TownConstructionPendingDecoration(w, site) >= 0 {
+				value = fmt.ctprintf("%s  clearing", UIBuildingName(site.kind))
+			} else {
+				seconds := BuildingBuildSeconds(site.kind)
+				progress: f32 = 0
+				if seconds > 0 do progress = clamp(site.buildWork/seconds, 0, 1)
+				value = fmt.ctprintf("%s  %d%%", UIBuildingName(site.kind), int(progress*100))
+			}
+			break
 		}
+	} else if count > 1 {
+		value = fmt.ctprintf("%d sites active", count)
 	}
 	UIText(value, panel.x+UI_PAD+150, y, UI_COLOR_TEXT)
 }
@@ -2112,8 +2130,7 @@ UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, p
 	if missingBuilding {
 		buildingKind := UnitTrainingBuildingKind(kind)
 		hint := fmt.ctprintf("Needs %s", UIBuildingName(buildingKind))
-		t := &w.kingdoms[kingdom].towns[town]
-		if t.constructionActive && t.construction.kind == buildingKind {
+		if TownConstructionKindCount(w, kingdom, town, buildingKind) > 0 {
 			hint = fmt.ctprintf("Building %s", UIBuildingName(buildingKind))
 		}
 		rl.DrawTextEx(UIFont(), hint, rl.Vector2{panel.x+UI_PAD+38, rowY+22}, 12, 1, UI_COLOR_DIM)
@@ -2182,6 +2199,62 @@ UIDrawOrdersTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle
 		labelColor := attack ? UI_COLOR_ATTACK : UI_COLOR_DEFEND
 		UIText(label, panel.x+UI_PAD+38, rowY+8, labelColor)
 		UIButton(UIOrderCancelRect(panel, index), "Cancel", true)
+	}
+}
+
+UIDrawConstructionsTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, kingdom, town: int) {
+	if !WorldTownExists(w, kingdom, town) do return
+	t := &w.kingdoms[kingdom].towns[town]
+	top := panel.y+UI_ROWS_TOP
+	count := TownConstructionCount(w, kingdom, town)
+
+	UIText("CONSTRUCTION SITES", panel.x+UI_PAD, top, UI_COLOR_DIM)
+	UITextRight(fmt.ctprintf("%d sites", count), panel.x+panel.width-UI_PAD, top, UI_COLOR_DIM)
+
+	if count == 0 {
+		UIText("No construction sites.", panel.x+UI_PAD, top+UI_SECTION_HEADER+8, UI_COLOR_DIM)
+		return
+	}
+
+	faction := FactionSpriteIndex(kingdom)
+	row := 0
+	for site in t.constructions {
+		if !site.active do continue
+		rowY := panel.y+UI_ROWS_TOP+UI_SECTION_HEADER+f32(row)*UI_CONSTRUCTION_ROW_HEIGHT
+		texture := renderer.sprites.building[faction][site.kind]
+		if texture.id != 0 {
+			icon := rl.Rectangle{panel.x+UI_PAD, rowY+3, 22, 22}
+			source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+			rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
+		}
+
+		labelX := panel.x+UI_PAD+30
+		rl.DrawTextEx(UIFont(), UIBuildingName(site.kind), rl.Vector2{labelX, rowY}, 16, 1, UI_COLOR_TEXT)
+
+		progress: f32 = 0
+		status: cstring
+		decoration := TownConstructionPendingDecoration(w, site)
+		if decoration >= 0 {
+			seconds := DecorationClearSeconds(w.decorations.kind[decoration])
+			if seconds > 0 do progress = clamp(site.clearWork/seconds, 0, 1)
+			status = fmt.ctprintf("Clearing ground  %d%%", int(progress*100))
+		} else {
+			seconds := BuildingBuildSeconds(site.kind)
+			if seconds > 0 do progress = clamp(site.buildWork/seconds, 0, 1)
+			status = fmt.ctprintf("Building  %d%%", int(progress*100))
+		}
+		rl.DrawTextEx(UIFont(), status, rl.Vector2{labelX, rowY+14}, 12, 1, UI_COLOR_DIM)
+
+		bar := rl.Rectangle{panel.x+panel.width-UI_PAD-90, rowY+11, 90, 6}
+		rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
+		if progress > 0 {
+			rl.DrawRectangleRec(
+				rl.Rectangle{bar.x, bar.y, bar.width*progress, bar.height},
+				UI_COLOR_GOLD,
+			)
+		}
+		rl.DrawRectangleLinesEx(bar, 1, UI_COLOR_BORDER_INNER)
+		row += 1
 	}
 }
 
@@ -2298,7 +2371,7 @@ TownFusionFailureText :: proc(failure: FusionFailure) -> cstring {
 	case .DistrictLimit:
 		return "This town has reached its district limit"
 	case .ConstructionConflict:
-		return "Both towns are already constructing"
+		return "Finish active construction first"
 	case .ConversionLimit:
 		return "Too many conversion jobs to merge"
 	}

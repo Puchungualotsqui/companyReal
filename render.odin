@@ -583,39 +583,40 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				for townSlot in 0 ..< TOWN_CAPACITY {
 					if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 					town := &w.kingdoms[kingdomSlot].towns[townSlot]
-					if !town.constructionActive do continue
-					site := town.construction
-					width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
-					if !FogRectVisible(w, site.x, site.y, width, height) {
-						FogAppendMemoryBuilding(
-							w,
-							renderer,
-							offsetX,
-							offsetY,
-							FogTileIndex(w, site.x, site.y),
-							minX,
-							maxX,
-							minY,
-							maxY,
-						)
-						continue
-					}
-					for tileX in site.x ..< site.x+width {
-						for tileY in site.y ..< site.y+height {
-							if f32(tileX)+1 < minX || f32(tileX) > maxX ||
-								f32(tileY)+1 < minY || f32(tileY) > maxY {
-								continue
+					for site in town.constructions {
+						if !site.active do continue
+						width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+						if !FogRectVisible(w, site.x, site.y, width, height) {
+							FogAppendMemoryBuilding(
+								w,
+								renderer,
+								offsetX,
+								offsetY,
+								FogTileIndex(w, site.x, site.y),
+								minX,
+								maxX,
+								minY,
+								maxY,
+							)
+							continue
+						}
+						for tileX in site.x ..< site.x+width {
+							for tileY in site.y ..< site.y+height {
+								if f32(tileX)+1 < minX || f32(tileX) > maxX ||
+									f32(tileY)+1 < minY || f32(tileY) > maxY {
+									continue
+								}
+								append(&renderer.items, RenderItem{
+									baseY = -1e9,
+									dest = rl.Rectangle{
+										offsetX+f32(tileX),
+										offsetY+f32(tileY),
+										1,
+										1,
+									},
+									texture = texture,
+								})
 							}
-							append(&renderer.items, RenderItem{
-								baseY = -1e9,
-								dest = rl.Rectangle{
-									offsetX+f32(tileX),
-									offsetY+f32(tileY),
-									1,
-									1,
-								},
-								texture = texture,
-							})
 						}
 					}
 				}

@@ -177,6 +177,9 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	builder := &w.units[unitSlot].type.(Builder)
 	state := &w.units[unitSlot].state.(StatePacific)
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	// Builders gathering wood are still available to switch to a construction
+	// site, so the town plans with the whole awake builder workforce.
+	town.builders += 1
 	if state^ == .Roaming && builder.carriedResource > 0 {
 		if x, y, found := UnitFindTownReturnPoint(w, kingdomSlot, townSlot); found {
 			w.units[unitSlot].pathTargetX = x
@@ -185,8 +188,9 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			state^ = .Returning
 		}
 	}
-	if state^ == .Roaming && town.constructionActive {
-		if x, y, found := TownConstructionAccessPoint(w, unitSlot, kingdomSlot, townSlot); found {
+	if state^ == .Roaming && TownConstructionCount(w, kingdomSlot, townSlot) > 0 {
+		if site, x, y, found := TownFindConstructionForBuilder(w, unitSlot, kingdomSlot, townSlot); found {
+			builder.constructionSite = site
 			w.units[unitSlot].pathTargetX = x
 			w.units[unitSlot].pathTargetY = y
 			w.units[unitSlot].pathReady = false
@@ -205,7 +209,6 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 
 	switch state^ {
 	case .Roaming:
-		town.builders += 1
 		UnitUpdateRoaming(w, unitSlot, deltaTime)
 	case .Traveling:
 		if UnitMoveToTarget(w, unitSlot, deltaTime) {
@@ -275,22 +278,36 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			w.units[unitSlot].pathReady = false
 		}
 	case .ToConstruction:
-		if UnitMoveToTarget(w, unitSlot, deltaTime) {
-			state^ = .Building
-			w.units[unitSlot].pathReady = false
-		} else if !w.units[unitSlot].pathFound {
-			state^ = .Roaming
-			w.units[unitSlot].pathReady = false
-			builder.taskSequence += 1
-		}
-	case .Building:
-		if !town.constructionActive {
+		if builder.constructionSite < 0 || builder.constructionSite >= TOWN_CONSTRUCTION_CAPACITY ||
+			!town.constructions[builder.constructionSite].active {
+			builder.constructionSite = -1
 			state^ = .Roaming
 			w.units[unitSlot].pathReady = false
 			builder.taskSequence += 1
 			break
 		}
-		if TownConstructionWork(w, kingdomSlot, townSlot, deltaTime) == .Completed {
+		if UnitMoveToTarget(w, unitSlot, deltaTime) {
+			builder.failedConstruction = -1
+			state^ = .Building
+			w.units[unitSlot].pathReady = false
+		} else if !w.units[unitSlot].pathFound {
+			builder.failedConstruction = builder.constructionSite
+			builder.constructionSite = -1
+			state^ = .Roaming
+			w.units[unitSlot].pathReady = false
+			builder.taskSequence += 1
+		}
+	case .Building:
+		if builder.constructionSite < 0 || builder.constructionSite >= TOWN_CONSTRUCTION_CAPACITY ||
+			!town.constructions[builder.constructionSite].active {
+			builder.constructionSite = -1
+			state^ = .Roaming
+			w.units[unitSlot].pathReady = false
+			builder.taskSequence += 1
+			break
+		}
+		if TownConstructionWork(w, kingdomSlot, townSlot, builder.constructionSite, deltaTime) == .Completed {
+			builder.constructionSite = -1
 			state^ = .Roaming
 			w.units[unitSlot].pathReady = false
 			builder.taskSequence += 1
@@ -460,7 +477,18 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	}
 
 	if !WorldTileWalkable(w, state.accessX, state.accessY, unit.type, unit.kingdome) {
-		x, y, found := UnitFindBuildingAccessPoint(w, unitSlot, state.building, UnitTypeFromKind(state.to))
+		width, height := BuildingTileSize(w.buildings[state.building].type)
+		x, y, found := BuildingFindWorkAccessPoint(
+			w,
+			w.buildings.x[state.building],
+			w.buildings.y[state.building],
+			width,
+			height,
+			unit.type,
+			unit.kingdome,
+			int(WorldWrapPosition(unit.x, f32(w.maxX))),
+			int(WorldWrapPosition(unit.y, f32(w.maxY))),
+		)
 		if !found {
 			UnitConversionCancel(w, unitSlot)
 			return
@@ -1150,42 +1178,6 @@ UnitFindTownReturnPoint :: proc(w: ^World, kingdomSlot, townSlot: int, unitSlot 
 				}
 				if !UnitValidTileType(Villager{}, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
 				return x, y, true
-			}
-		}
-	}
-	return 0, 0, false
-}
-
-// Finds a walkable tile on the ring around a building footprint.
-UnitFindBuildingAccessPoint :: proc(w: ^World, unitSlot, buildingSlot: int, targetType: UnitType) -> (int, int, bool) {
-	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return 0, 0, false
-	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] {
-		return 0, 0, false
-	}
-
-	unit := &w.units[unitSlot]
-	buildingX := w.buildings.x[buildingSlot]
-	buildingY := w.buildings.y[buildingSlot]
-	width, height := BuildingTileSize(w.buildings[buildingSlot].type)
-	worldWidth := int(w.maxX)
-	worldHeight := int(w.maxY)
-	if worldWidth <= 0 || worldHeight <= 0 do return 0, 0, false
-
-	for radius in 1..=6 {
-		innerMinX := buildingX-radius+1
-		innerMaxX := buildingX+width-1+radius-1
-		innerMinY := buildingY-radius+1
-		innerMaxY := buildingY+height-1+radius-1
-		for x in buildingX-radius ..= buildingX+width-1+radius {
-			for y in buildingY-radius ..= buildingY+height-1+radius {
-				if x >= innerMinX && x <= innerMaxX && y >= innerMinY && y <= innerMaxY {
-					continue
-				}
-				wrappedX := WorldWrapCoordinate(x, worldWidth)
-				wrappedY := WorldWrapCoordinate(y, worldHeight)
-				if !WorldTileWalkable(w, wrappedX, wrappedY, unit.type, unit.kingdome) do continue
-				if !WorldTileWalkable(w, wrappedX, wrappedY, targetType, unit.kingdome) do continue
-				return wrappedX, wrappedY, true
 			}
 		}
 	}

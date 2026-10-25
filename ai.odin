@@ -568,7 +568,7 @@ AIExpand :: proc(w: ^World, kingdom: int) {
 		if town.citizens < TOWN_FOUNDING_MIN_CITIZENS do continue
 		if town.wood < TownFoundingWoodCost(w, kingdom) do continue
 		if TownUnitCount(w, kingdom, townSlot, .Villager) < TOWN_FOUNDING_SETTLERS do continue
-		if town.constructionActive && town.construction.kind == .TownHall do continue
+		if TownConstructionKindCount(w, kingdom, townSlot, .TownHall) > 0 do continue
 		if TownUnitCount(w, kingdom, townSlot, .Builder) <= 0 do continue
 		if KingdomFreeTownSlot(w, kingdom) < 0 do continue
 		if AIFoundTownAt(w, kingdom, townSlot) do return

@@ -393,11 +393,11 @@ FogSnapshotBuilding :: proc(w: ^World, buildingSlot: int) {
 	FogGhostRemove(w, anchor)
 }
 
-FogSnapshotConstruction :: proc(w: ^World, kingdomSlot, townSlot: int) {
-	if !WorldTownExists(w, kingdomSlot, townSlot) do return
-	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	if !town.constructionActive do return
-	site := town.construction
+FogSnapshotConstruction :: proc(
+	w: ^World,
+	kingdomSlot, townSlot: int,
+	site: ConstructionSite,
+) {
 	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
 	anchor := FogTileIndex(w, site.x, site.y)
 	if anchor < 0 do return
@@ -482,16 +482,18 @@ FogUpdate :: proc(w: ^World) {
 		if !w.kingdomUsed[kingdomSlot] do continue
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
-			site := &w.kingdoms[kingdomSlot].towns[townSlot]
-			if !site.constructionActive do continue
-			width, height := BuildingTileSize(BuildingTypeFromKind(site.construction.kind))
-			FogRevealCircle(
-				w,
-				site.construction.x+width/2,
-				site.construction.y+height/2,
-				BuildingVision(site.construction.kind),
-				kingdomSlot,
-			)
+			town := &w.kingdoms[kingdomSlot].towns[townSlot]
+			for site in town.constructions {
+				if !site.active do continue
+				width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+				FogRevealCircle(
+					w,
+					site.x+width/2,
+					site.y+height/2,
+					BuildingVision(site.kind),
+					kingdomSlot,
+				)
+			}
 		}
 	}
 
@@ -530,9 +532,11 @@ FogUpdate :: proc(w: ^World) {
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			if !town.constructionActive do continue
-			width, height := BuildingTileSize(BuildingTypeFromKind(town.construction.kind))
-			FogContactRect(w, kingdomSlot, town.construction.x, town.construction.y, width, height)
+			for site in town.constructions {
+				if !site.active do continue
+				width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+				FogContactRect(w, kingdomSlot, site.x, site.y, width, height)
+			}
 		}
 	}
 
@@ -564,10 +568,12 @@ FogUpdate :: proc(w: ^World) {
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			if !town.constructionActive do continue
-			width, height := BuildingTileSize(BuildingTypeFromKind(town.construction.kind))
-			if FogRectVisible(w, town.construction.x, town.construction.y, width, height) {
-				FogRevealRect(w, town.construction.x, town.construction.y, width, height)
+			for site in town.constructions {
+				if !site.active do continue
+				width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+				if FogRectVisible(w, site.x, site.y, width, height) {
+					FogRevealRect(w, site.x, site.y, width, height)
+				}
 			}
 		}
 	}
@@ -590,11 +596,13 @@ FogUpdate :: proc(w: ^World) {
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			if !town.constructionActive do continue
-			width, height := BuildingTileSize(BuildingTypeFromKind(town.construction.kind))
-			if !FogRectVisible(w, town.construction.x, town.construction.y, width, height) do continue
-			KingdomMeet(w, observer, kingdomSlot)
-			FogSnapshotConstruction(w, kingdomSlot, townSlot)
+			for site in town.constructions {
+				if !site.active do continue
+				width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+				if !FogRectVisible(w, site.x, site.y, width, height) do continue
+				KingdomMeet(w, observer, kingdomSlot)
+				FogSnapshotConstruction(w, kingdomSlot, townSlot, site)
+			}
 		}
 	}
 

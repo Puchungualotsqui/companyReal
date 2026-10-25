@@ -196,6 +196,7 @@ ConversionJob :: struct {
 // A building ordered by the town. Builders must clear the decorations on the
 // footprint before they can raise the structure.
 ConstructionSite :: struct {
+	active:    bool, // false marks a free slot; keeps builder site indices stable
 	kind:      BuildingKind,
 	x, y:      int,
 	paid:      f32,
@@ -203,6 +204,8 @@ ConstructionSite :: struct {
 	clearWork: f32,
 	buildWork: f32,
 }
+
+TOWN_CONSTRUCTION_CAPACITY :: 10
 
 TownDistrict :: struct {
 	x, y:   int,
@@ -219,8 +222,7 @@ Town :: struct {
 	growthCooldown, growthInterval, growthRate, growthSpeed: f32,
 	growthBatch, growthBatchBonus, growthPending: int,
 	constructionProgress: f32,
-	construction: ConstructionSite,
-	constructionActive: bool,
+	constructions: [TOWN_CONSTRUCTION_CAPACITY]ConstructionSite,
 	builders, waterCollectors, farmers, villagers: int,
 	homes, farmlands: int,
 	farmlandOutput: f32,
@@ -547,34 +549,34 @@ PlacementFailure :: enum {
 TownFoundingFailure :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> PlacementFailure {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return .NoTown
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	if town.constructionActive && town.construction.kind == .TownHall do return .AlreadyFounding
+	if TownConstructionKindCount(w, kingdomSlot, townSlot, .TownHall) > 0 do return .AlreadyFounding
 	if kingdomSlot == w.observerKingdom {
 		width, height := BuildingTileSize(TownHall{})
 		if !FogRectExplored(w, x, y, width, height) do return .Unexplored
 	}
 	if !WorldBuildingValid(w, x, y, TownHall{}) do return .InvalidTerrain
 	if CombatSiteOverlaps(w, x, y, .TownHall) do return .CombatSiteOverlap
-	if TownFoundingOverlapsOtherConstruction(w, kingdomSlot, townSlot, x, y) {
+	if TownFoundingOverlapsOtherConstruction(w, x, y) {
 		return .ConstructionOverlap
 	}
 	if TownFoundingTooClose(w, x, y) do return .TooClose
 	return .None
 }
 
-TownFoundingOverlapsOtherConstruction :: proc(w: ^World, sourceKingdom, sourceTown, x, y: int) -> bool {
+TownFoundingOverlapsOtherConstruction :: proc(w: ^World, x, y: int) -> bool {
 	width, height := BuildingTileSize(TownHall{})
 	for kingdomSlot in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[kingdomSlot] do continue
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
-			if kingdomSlot == sourceKingdom && townSlot == sourceTown do continue
 			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			if !town.constructionActive do continue
-			site := town.construction
-			otherWidth, otherHeight := BuildingTileSize(BuildingTypeFromKind(site.kind))
-			if x < site.x+otherWidth && site.x < x+width &&
-				y < site.y+otherHeight && site.y < y+height {
-				return true
+			for site in town.constructions {
+				if !site.active do continue
+				otherWidth, otherHeight := BuildingTileSize(BuildingTypeFromKind(site.kind))
+				if x < site.x+otherWidth && site.x < x+width &&
+					y < site.y+otherHeight && site.y < y+height {
+					return true
+				}
 			}
 		}
 	}
@@ -634,19 +636,6 @@ TownFoundingAccessPoint :: proc(w: ^World, x, y: int, unitType: UnitType, unitKi
 }
 
 TownFoundingReachable :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> bool {
-	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	outgoing := town.construction
-	preempting := town.constructionActive
-	// Validate the layout after preemption, without cancelling a valid order
-	// when the proposed charter fails. Construction footprints cannot overlap.
-	if preempting {
-		BuildingReserveFootprint(w, outgoing.x, outgoing.y, BuildingTypeFromKind(outgoing.kind), false)
-	}
-	defer {
-		if preempting {
-			BuildingReserveFootprint(w, outgoing.x, outgoing.y, BuildingTypeFromKind(outgoing.kind))
-		}
-	}
 	if !BuildingClearUnits(w, x, y, TownHall{}, false) do return false
 	startX, startY, startFound := UnitFindTownReturnPoint(w, kingdomSlot, townSlot)
 	if !startFound do return false
@@ -660,8 +649,8 @@ TownFoundingReachable :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> bo
 }
 
 // Player order: found a new town. The mother town pays the charter and its
-// builders receive a town-hall construction site. An automatic construction is
-// refunded and replaced, because a player order takes priority.
+// builders receive a town-hall construction site. If every site slot is busy,
+// the least-progressed automatic site is refunded to make room.
 TownStartFounding :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> bool {
 	if TownFoundingFailure(w, kingdomSlot, townSlot, x, y) != .None do return false
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
@@ -675,7 +664,11 @@ TownStartFounding :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> bool {
 	if KingdomFreeTownSlot(w, kingdomSlot) < 0 do return false
 	if !TownFoundingReachable(w, kingdomSlot, townSlot, x, y) do return false
 
-	if town.constructionActive do TownConstructionPreempt(w, kingdomSlot, townSlot)
+	slot := TownConstructionFreeSlot(w, kingdomSlot, townSlot)
+	if slot < 0 {
+		slot = TownConstructionCancelLeastProgress(w, kingdomSlot, townSlot)
+		if slot < 0 do return false
+	}
 
 	town.wood -= cost
 	settlers := TownTakeVillagers(w, kingdomSlot, townSlot, TOWN_FOUNDING_SETTLERS)
@@ -684,14 +677,14 @@ TownStartFounding :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> bool {
 		for _ in 0..<settlers do TownSpawnCitizen(w, kingdomSlot, townSlot, Villager{})
 		return false
 	}
-	town.construction = ConstructionSite{
+	town.constructions[slot] = ConstructionSite{
+		active = true,
 		kind = .TownHall,
 		x = x,
 		y = y,
 		paid = cost,
 		settlers = settlers,
 	}
-	town.constructionActive = true
 	BuildingClearUnits(w, x, y, TownHall{}, true)
 	WorldConstructionChanged(w)
 	return true
@@ -1021,7 +1014,10 @@ TownFusionFailure :: proc(
 		return .PendingMilestone
 	}
 	if host.districtCount+1+guest.districtCount > MAX_TOWN_DISTRICTS do return .DistrictLimit
-	if host.constructionActive && guest.constructionActive do return .ConstructionConflict
+	if TownConstructionCount(w, kingdomSlot, hostSlot) > 0 ||
+		TownConstructionCount(w, kingdomSlot, guestSlot) > 0 {
+		return .ConstructionConflict
+	}
 	if host.conversionCount+TownFusionNewConversionSlots(w, kingdomSlot, hostSlot, guestSlot) >
 		MAX_CONVERSION_JOBS {
 		return .ConversionLimit
@@ -1096,12 +1092,6 @@ TownFuse :: proc(
 			host.conversions[host.conversionCount] = job
 			host.conversionCount += 1
 		}
-	}
-
-	if guest.constructionActive {
-		host.construction = guest.construction
-		host.constructionActive = true
-		host.constructionProgress = guest.constructionProgress
 	}
 
 	host.wood += guest.wood

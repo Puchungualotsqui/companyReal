@@ -672,7 +672,6 @@ BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitTyp
 			nextY = WorldWrapCoordinate(nextY, worldHeight)
 			nextIndex := nextX*worldHeight+nextY
 			if w.navigationStamp[nextIndex] == stamp do continue
-			if nextX >= x && nextX < x+width && nextY >= y && nextY < y+height do continue
 			if !WorldTileWalkable(w, nextX, nextY, unitType, kingdom) do continue
 			w.navigationStamp[nextIndex] = stamp
 			w.navigationQueue[queueEnd] = nextIndex
