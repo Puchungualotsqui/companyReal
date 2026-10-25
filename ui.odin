@@ -1714,7 +1714,7 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 				UITextRight(stats[i].value, rightValueX, y, valueColor)
 			}
 		}
-		UIDrawConstructionStatus(w, panel, kingdom, town)
+
 	} else {
 		for i in 0..<statCount {
 			y := panel.y+UI_STAT_Y+f32(i)*UI_STAT_H
@@ -2054,32 +2054,6 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	rl.DrawRectangleLinesEx(bar, 1, UI_COLOR_BORDER_INNER)
 }
 
-UIDrawConstructionStatus :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
-	if !WorldTownExists(w, kingdom, town) do return
-	t := &w.kingdoms[kingdom].towns[town]
-	y := panel.y+UI_STAT_Y+4*UI_STAT_H
-	UIText("Construction", panel.x+UI_PAD, y, UI_COLOR_DIM)
-
-	count := TownConstructionCount(w, kingdom, town)
-	value: cstring = "None"
-	if count == 1 {
-		for site in t.constructions {
-			if !site.active do continue
-			if TownConstructionPendingDecoration(w, site) >= 0 {
-				value = fmt.ctprintf("%s  clearing", UIBuildingName(site.kind))
-			} else {
-				seconds := BuildingBuildSeconds(site.kind)
-				progress: f32 = 0
-				if seconds > 0 do progress = clamp(site.buildWork/seconds, 0, 1)
-				value = fmt.ctprintf("%s  %d%%", UIBuildingName(site.kind), int(progress*100))
-			}
-			break
-		}
-	} else if count > 1 {
-		value = fmt.ctprintf("%d sites active", count)
-	}
-	UIText(value, panel.x+UI_PAD+150, y, UI_COLOR_TEXT)
-}
 
 UIDrawConversions :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle, kingdom, town: int) {
 	kinds: [len(UnitKind)]UnitKind
