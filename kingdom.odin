@@ -24,7 +24,10 @@ TOWN_FUSION_FRONTIER_SLACK :: 1
 // Founding a new town is funded by the selected town. The order uses the
 // town's construction queue, so regular builders travel to the site and raise
 // the hall. A player order preempts automatic construction.
+// Every town the kingdom already owns makes the next charter more expensive,
+// and the settlers are drawn from the source town instead of being created.
 TOWN_FOUNDING_WOOD :: 50
+TOWN_FOUNDING_WOOD_PER_TOWN :: 25
 TOWN_FOUNDING_MIN_CITIZENS :: 8
 TOWN_FOUNDING_MIN_DISTANCE :: 20
 TOWN_FOUNDING_SETTLERS :: 5
@@ -179,6 +182,7 @@ ConstructionSite :: struct {
 	kind:      BuildingKind,
 	x, y:      int,
 	paid:      f32,
+	settlers:  int,
 	clearWork: f32,
 	buildWork: f32,
 }
@@ -302,13 +306,31 @@ KingdomFreeTownSlot :: proc(w: ^World, kingdom_slot: int) -> int {
 	return -1
 }
 
+KingdomTownCount :: proc(w: ^World, kingdom_slot: int) -> int {
+	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
+		return 0
+	}
+	count := 0
+	for town_slot in 0..<TOWN_CAPACITY {
+		if w.kingdoms[kingdom_slot].townUsed[town_slot] do count += 1
+	}
+	return count
+}
+
+// The first charter costs the base price; every town already owned beyond that
+// adds a fixed increment, so wide expansion gets steadily more expensive.
+TownFoundingWoodCost :: proc(w: ^World, kingdom_slot: int) -> f32 {
+	towns := max(KingdomTownCount(w, kingdom_slot)-1, 0)
+	return f32(TOWN_FOUNDING_WOOD+TOWN_FOUNDING_WOOD_PER_TOWN*towns)
+}
+
 // Builders stop chopping at a routine stockpile, but expansion needs a much
 // larger reserve. While the kingdom still has room for another town, gathering
 // continues until it can pay for a charter plus a small buffer.
 TownWoodGatherTarget :: proc(w: ^World, kingdom_slot, town_slot: int) -> f32 {
 	target: f32 = TOWN_WOOD_TARGET
 	if KingdomFreeTownSlot(w, kingdom_slot) >= 0 {
-		target = max(target, TOWN_FOUNDING_WOOD+TOWN_FOUNDING_WOOD_BUFFER)
+		target = max(target, TownFoundingWoodCost(w, kingdom_slot)+TOWN_FOUNDING_WOOD_BUFFER)
 	}
 
 	// Era-5 towns need a real stockpile to pay the fusion sink. Builders keep
@@ -324,7 +346,7 @@ TownWoodGatherTarget :: proc(w: ^World, kingdom_slot, town_slot: int) -> f32 {
 // A new town is founded when its hall finishes construction. The hall was
 // already paid for by the mother town, so it is spawned directly into the new
 // town slot.
-TownFound :: proc(w: ^World, kingdom_slot, x, y: int) -> bool {
+TownFound :: proc(w: ^World, kingdom_slot, x, y, settlers: int) -> bool {
 	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
 		return false
 	}
@@ -340,7 +362,9 @@ TownFound :: proc(w: ^World, kingdom_slot, x, y: int) -> bool {
 		WorldAlertAdd(w, .TownFounded, kingdom_slot, town_slot, -1, f32(x), f32(y))
 	}
 
-	for _ in 0..<TOWN_FOUNDING_SETTLERS {
+	// The settlers were taken from the mother town when the charter was paid for.
+	// The builder that raised the hall stays behind and gets the new town going.
+	for _ in 0..<settlers {
 		TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{})
 	}
 	TownSpawnCitizen(w, kingdom_slot, town_slot, Builder{})
@@ -483,20 +507,31 @@ TownFoundingReachable :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> 
 TownStartFounding :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
 	if TownFoundingFailure(w, kingdom_slot, town_slot, x, y) != .None do return false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	if town.wood < TOWN_FOUNDING_WOOD do return false
+	cost := TownFoundingWoodCost(w, kingdom_slot)
+	if town.wood < cost do return false
 	if town.citizens < TOWN_FOUNDING_MIN_CITIZENS do return false
+	if TownUnitCount(w, kingdom_slot, town_slot, .Villager) < TOWN_FOUNDING_SETTLERS {
+		return false
+	}
 	if TownUnitCount(w, kingdom_slot, town_slot, .Builder) <= 0 do return false
 	if KingdomFreeTownSlot(w, kingdom_slot) < 0 do return false
 	if !TownFoundingReachable(w, kingdom_slot, town_slot, x, y) do return false
 
 	if town.constructionActive do TownConstructionPreempt(w, kingdom_slot, town_slot)
 
-	town.wood -= TOWN_FOUNDING_WOOD
+	town.wood -= cost
+	settlers := TownTakeVillagers(w, kingdom_slot, town_slot, TOWN_FOUNDING_SETTLERS)
+	if settlers < TOWN_FOUNDING_SETTLERS {
+		town.wood += cost
+		for _ in 0..<settlers do TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{})
+		return false
+	}
 	town.construction = ConstructionSite{
 		kind = .TownHall,
 		x = x,
 		y = y,
-		paid = TOWN_FOUNDING_WOOD,
+		paid = cost,
+		settlers = settlers,
 	}
 	town.constructionActive = true
 	BuildingClearUnits(w, x, y, TownHall{}, true)
@@ -639,6 +674,25 @@ TownUnitCount :: proc(w: ^World, kingdom_slot, town_slot: int, kind: UnitKind) -
 		if UnitKindOf(w.units[unit_slot].type) == kind do count += 1
 	}
 	return count
+}
+
+// Moves up to count villagers out of a town. Villagers that are not already
+// retraining are taken first, so queued jobs keep their workers when possible.
+TownTakeVillagers :: proc(w: ^World, kingdom_slot, town_slot, count: int) -> int {
+	taken := 0
+	for pass in 0..<2 {
+		for unit_slot in 0..<UNIT_CAPACITY {
+			if taken >= count do return taken
+			if !w.unitUsed[unit_slot] do continue
+			unit := &w.units[unit_slot]
+			if unit.kingdome != kingdom_slot || unit.town != town_slot do continue
+			if UnitKindOf(unit.type) != .Villager do continue
+			_, converting := unit.state.(StateConverting)
+			if (pass == 0) == converting do continue
+			if UnitDespawn(w, unit_slot) do taken += 1
+		}
+	}
+	return taken
 }
 
 // Conversions always pass through villagers: A -> Villager -> B.

@@ -203,6 +203,12 @@ AITownEconomy :: proc(
 	// kingdom is at war or its army target is far behind.
 	economy_reserve := max(2, town.citizens/2)
 	military_reserve := max(2, town.citizens/4)
+	// Keep a full settler party at home so the town can still pay the next
+	// charter instead of converting every villager into a job.
+	if KingdomFreeTownSlot(w, kingdom) >= 0 {
+		economy_reserve = max(economy_reserve, TOWN_FOUNDING_SETTLERS)
+		military_reserve = max(military_reserve, TOWN_FOUNDING_SETTLERS)
+	}
 	economy_allowed := available > economy_reserve
 	military_allowed := available > military_reserve
 	if !economy_allowed && !military_allowed do return
@@ -560,7 +566,8 @@ AIExpand :: proc(w: ^World, kingdom: int) {
 		if !w.kingdoms[kingdom].townUsed[town_slot] do continue
 		town := &w.kingdoms[kingdom].towns[town_slot]
 		if town.citizens < TOWN_FOUNDING_MIN_CITIZENS do continue
-		if town.wood < TOWN_FOUNDING_WOOD do continue
+		if town.wood < TownFoundingWoodCost(w, kingdom) do continue
+		if TownUnitCount(w, kingdom, town_slot, .Villager) < TOWN_FOUNDING_SETTLERS do continue
 		if town.constructionActive && town.construction.kind == .TownHall do continue
 		if TownUnitCount(w, kingdom, town_slot, .Builder) <= 0 do continue
 		if KingdomFreeTownSlot(w, kingdom) < 0 do continue

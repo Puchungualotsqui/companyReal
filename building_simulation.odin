@@ -298,9 +298,13 @@ TownConstructionPreempt :: proc(w: ^World, kingdom_slot, town_slot: int) {
 	if !town.constructionActive do return
 
 	town.wood += town.construction.paid
+	settlers := town.construction.settlers
 	town.constructionActive = false
 	town.construction = {}
 	WorldConstructionChanged(w)
+
+	// A cancelled town hall returns the settlers that were waiting at home.
+	for _ in 0..<settlers do TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{})
 
 	for unit_slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unit_slot] do continue
@@ -394,8 +398,9 @@ TownConstructionWork :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time
 	if !BuildingClearUnits(w, site.x, site.y, BuildingTypeFromKind(site.kind), false) do return .Working
 
 	if site.kind == .TownHall {
-		if !TownFound(w, kingdom_slot, site.x, site.y) {
+		if !TownFound(w, kingdom_slot, site.x, site.y, site.settlers) {
 			town.wood += site.paid
+			for _ in 0..<site.settlers do TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{})
 		}
 	} else if _, ok := BuildingSpawn(
 		w,

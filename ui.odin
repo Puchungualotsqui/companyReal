@@ -869,8 +869,9 @@ UICommandBarRects :: proc() -> (attack, defend, found, fuse: rl.Rectangle) {
 UIFoundButtonEnabled :: proc(w: ^World, kingdom, town: int) -> bool {
 	if !UICanControlKingdom(w, kingdom) || !WorldTownExists(w, kingdom, town) do return false
 	t := &w.kingdoms[kingdom].towns[town]
-	if t.wood < TOWN_FOUNDING_WOOD do return false
+	if t.wood < TownFoundingWoodCost(w, kingdom) do return false
 	if t.citizens < TOWN_FOUNDING_MIN_CITIZENS do return false
+	if TownUnitCount(w, kingdom, town, .Villager) < TOWN_FOUNDING_SETTLERS do return false
 	if TownUnitCount(w, kingdom, town, .Builder) <= 0 do return false
 	return KingdomFreeTownSlot(w, kingdom) >= 0
 }
@@ -2002,13 +2003,23 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	t := &w.kingdoms[kingdom].towns[town]
 
 	y := panel.y+UI_GROWTH_Y
-	eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
-	ui_text(
-		fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta))),
-		panel.x+UI_PAD,
-		y,
-		UI_COLOR_DIM,
-	)
+	if t.growthSpeed <= 0 {
+		reason: cstring = "No growth  -  no food or water"
+		if t.foodPotential <= 0 && t.waterPotential > 0 {
+			reason = "No growth  -  no food"
+		} else if t.waterPotential <= 0 && t.foodPotential > 0 {
+			reason = "No growth  -  no water"
+		}
+		ui_text(reason, panel.x+UI_PAD, y, UI_COLOR_BAD)
+	} else {
+		eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
+		ui_text(
+			fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta))),
+			panel.x+UI_PAD,
+			y,
+			UI_COLOR_DIM,
+		)
+	}
 
 	bar := rl.Rectangle{
 		panel.x+UI_PAD+164,
@@ -2218,12 +2229,15 @@ UIDrawFoundHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {
 	if !WorldTownExists(w, kingdom, town) do return
 	t := &w.kingdoms[kingdom].towns[town]
 	builders := TownUnitCount(w, kingdom, town, .Builder)
+	villagers := TownUnitCount(w, kingdom, town, .Villager)
 	text := fmt.ctprintf(
-		"Found town  -  wood %d/%d   citizens %d/%d   builders %d/1",
+		"Found town  -  wood %d/%d   citizens %d/%d   settlers %d/%d   builders %d/1",
 		int(t.wood),
-		TOWN_FOUNDING_WOOD,
+		int(TownFoundingWoodCost(w, kingdom)),
 		t.citizens,
 		TOWN_FOUNDING_MIN_CITIZENS,
+		villagers,
+		TOWN_FOUNDING_SETTLERS,
 		builders,
 	)
 	width := rl.MeasureTextEx(ui_font(), text, UI_TEXT_SIZE, 1).x+2*UI_PAD
@@ -2726,11 +2740,15 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 	case .Defend:
 		label = "Click a building of a non-enemy town  -  Esc to cancel"
 	case .Found:
+		kingdom, town := UISelectionTown(w, ui.selection)
+		cost: f32 = 0
+		if WorldTownExists(w, kingdom, town) {
+			cost = TownFoundingWoodCost(w, kingdom)
+		}
 		label = fmt.ctprintf(
 			"Click land to found a town  -  %d wood  -  Esc to cancel",
-			TOWN_FOUNDING_WOOD,
+			int(cost),
 		)
-		kingdom, town := UISelectionTown(w, ui.selection)
 		if tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse); ok {
 			failure := TownFoundingFailure(w, kingdom, town, tile_x, tile_y)
 			if failure != .None do label = UIPlacementFailureText(failure)
