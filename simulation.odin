@@ -61,7 +61,7 @@ WorldIsNight :: proc(w: ^World) -> bool {
 }
 
 WorldTownExists :: proc(w: ^World, kingdomSlot, townSlot: int) -> bool {
-	return kingdomSlot >= 0 && kingdomSlot < KINGDOMS_CAPACITY &&
+	return kingdomSlot >= 0 && kingdomSlot < KINGDOM_SLOTS &&
 		townSlot >= 0 && townSlot < TOWN_CAPACITY &&
 		w.kingdomUsed[kingdomSlot] && w.kingdoms[kingdomSlot].townUsed[townSlot]
 }
@@ -154,7 +154,11 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		case Explorer:
 			UnitUpdateExplorer(w, unitSlot, deltaTime)
 		case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
-			UnitUpdateWarrior(w, unitSlot, deltaTime)
+			if w.units[unitSlot].kingdome == NEUTRAL_KINGDOM {
+				UnitUpdateIndependentKnight(w, unitSlot, deltaTime)
+			} else {
+				UnitUpdateWarrior(w, unitSlot, deltaTime)
+			}
 		}
 		if w.unitUsed[unitSlot] do BloodBleedTick(w, unitSlot, deltaTime)
 	}
@@ -191,7 +195,7 @@ WorldKingdomUpdate :: proc(w: ^World, deltaTime: f32) {
 // a persistent Home identity. Awake citizens (including soldiers) reserve capacity
 // too, so sleep and the NoHome/regeneration effects cannot disagree.
 WorldHousingUpdate :: proc(w: ^World) {
-	remaining: [KINGDOMS_CAPACITY][TOWN_CAPACITY]int
+	remaining: [KINGDOM_SLOTS][TOWN_CAPACITY]int
 	for home in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[home] do continue
 		building := &w.buildings[home]
@@ -214,7 +218,7 @@ WorldHousingUpdate :: proc(w: ^World) {
 		if unit.sleepInside && UnitInsideHome(w, slot) < 0 do UnitSleepWake(w, slot)
 	}
 
-	freeHome: [KINGDOMS_CAPACITY][TOWN_CAPACITY]int
+	freeHome: [KINGDOM_SLOTS][TOWN_CAPACITY]int
 	for &kingdom in freeHome do for &town in kingdom do town = -1
 	nextHome: [BUILDING_CAPACITY]int
 	for home in 0..<BUILDING_CAPACITY {

@@ -328,7 +328,7 @@ KINGDOM_ENDINGS := [TownCulture][]string {
 // Town names are rolled from the kingdom's language pool. Names already used
 // anywhere in the match are skipped, so every town is unique.
 NameTownAssign :: proc(w: ^World, kingdomSlot, townSlot: int) {
-	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY ||
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOM_SLOTS ||
 		townSlot < 0 || townSlot >= TOWN_CAPACITY {
 		return
 	}
@@ -477,7 +477,7 @@ NameEqual :: proc(name: ^Name, value: string) -> bool {
 }
 
 NameTownTaken :: proc(w: ^World, value: string) -> bool {
-	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+	for kingdomSlot in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[kingdomSlot] do continue
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
@@ -496,7 +496,7 @@ NameKingdomTaken :: proc(w: ^World, value: string, ignoreKingdom: int) -> bool {
 }
 
 NameKingdomCString :: proc(w: ^World, kingdomSlot: int) -> cstring {
-	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdomSlot] {
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOM_SLOTS || !w.kingdomUsed[kingdomSlot] {
 		return "Unknown"
 	}
 	return cstring(&w.kingdoms[kingdomSlot].name[0])

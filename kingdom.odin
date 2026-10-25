@@ -35,6 +35,18 @@ TOWN_FOUNDING_SETTLERS :: 5
 // leave the town unable to expand again.
 TOWN_FOUNDING_WOOD_BUFFER :: 12
 
+// Independent towns are neutral start locations: one town hall, one to three
+// knights, no growth and no construction. They all share the neutral faction
+// slot, but each is a separate town.
+INDEPENDENT_TOWNS_PER_KINGDOM :: 2
+INDEPENDENT_TOWN_TARGET_DISTANCE :: 22
+INDEPENDENT_TOWN_MIN_DISTANCE :: 16
+INDEPENDENT_TOWN_SEPARATION :: 16
+INDEPENDENT_KNIGHT_MIN :: 1
+INDEPENDENT_KNIGHT_MAX :: 3
+INDEPENDENT_REWARD_VILLAGERS_MIN :: 1
+INDEPENDENT_REWARD_VILLAGERS_MAX :: 3
+
 // Growth eras. Each era gives a larger cohort with a longer interval, so the
 // number of arrival events falls while total throughput keeps rising.
 GrowthEra :: struct {
@@ -66,7 +78,7 @@ Kingdom :: struct {
 	capitalSlot: int,
 	towns: #soa [TOWN_CAPACITY]Town,
 	townUsed: [TOWN_CAPACITY]bool,
-	kingdomWar: [KINGDOMS_CAPACITY]bool,
+	kingdomWar: [KINGDOM_SLOTS]bool,
 }
 
 TownOrder :: union {
@@ -226,10 +238,10 @@ Town :: struct {
 	milestonePending: bool,
 	conversions: [MAX_CONVERSION_JOBS]ConversionJob,
 	conversionCount: int,
-	attackOrders: [KINGDOMS_CAPACITY][TOWN_CAPACITY]bool,
-	defendOrders: [KINGDOMS_CAPACITY][TOWN_CAPACITY]bool,
-	attackedBy: [KINGDOMS_CAPACITY][TOWN_CAPACITY]bool,
-	defendedBy: [KINGDOMS_CAPACITY][TOWN_CAPACITY]bool,
+	attackOrders: [KINGDOM_SLOTS][TOWN_CAPACITY]bool,
+	defendOrders: [KINGDOM_SLOTS][TOWN_CAPACITY]bool,
+	attackedBy: [KINGDOM_SLOTS][TOWN_CAPACITY]bool,
+	defendedBy: [KINGDOM_SLOTS][TOWN_CAPACITY]bool,
 	orders: [TOWN_WARRIOR_ORDERS_CAPACITY]TownOrder,
 	orderCount: int,
 	orderRevision: u64,
@@ -251,6 +263,104 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 	TownInitialize(w, kingdomSlot, i, bId, x, y, 35)
 	w.kingdoms[kingdomSlot].townUsed[i] = true
 	return i, true
+}
+
+// Spawns a neutral town hall plus its small knight guard. Used only during
+// world generation.
+IndependentTownSpawn :: proc(w: ^World, x, y: int) -> (int, bool) {
+	if !WorldBuildingValid(w, x, y, TownHall{}) do return 0, false
+	townSlot := KingdomFreeTownSlot(w, NEUTRAL_KINGDOM)
+	if townSlot < 0 do return 0, false
+
+	hallSlot, ok := BuildingSpawn(w, x, y, TownHall{}, NEUTRAL_KINGDOM, townSlot)
+	if !ok do return 0, false
+
+	TownInitialize(w, NEUTRAL_KINGDOM, townSlot, hallSlot, x, y, 0)
+	w.kingdoms[NEUTRAL_KINGDOM].townUsed[townSlot] = true
+
+	roll := WorldNoiseHash(x, y, w.seed+0x1D3)
+	guardCount := INDEPENDENT_KNIGHT_MIN+
+		int(roll*f32(INDEPENDENT_KNIGHT_MAX-INDEPENDENT_KNIGHT_MIN+1))
+	guardCount = clamp(guardCount, INDEPENDENT_KNIGHT_MIN, INDEPENDENT_KNIGHT_MAX)
+	for _ in 0..<guardCount {
+		if TownSpawnCitizen(w, NEUTRAL_KINGDOM, townSlot, Knight{}) < 0 do break
+	}
+	return townSlot, true
+}
+
+// The independent town is gone: its guards die with it and the destroyer
+// receives one to three villagers in its nearest town.
+IndependentTownDefeat :: proc(w: ^World, townSlot, destroyer: int) {
+	if townSlot < 0 || townSlot >= TOWN_CAPACITY ||
+		!w.kingdomUsed[NEUTRAL_KINGDOM] || !w.kingdoms[NEUTRAL_KINGDOM].townUsed[townSlot] {
+		return
+	}
+	town := &w.kingdoms[NEUTRAL_KINGDOM].towns[townSlot]
+	townX, townY := town.x, town.y
+
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] do continue
+		if w.units[unitSlot].kingdome != NEUTRAL_KINGDOM ||
+			w.units[unitSlot].town != townSlot {
+			continue
+		}
+		UnitDespawn(w, unitSlot)
+	}
+
+	for buildingSlot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[buildingSlot] do continue
+		if w.buildings[buildingSlot].kingdom != NEUTRAL_KINGDOM ||
+			w.buildings[buildingSlot].town != townSlot {
+			continue
+		}
+		if BuildingKindOf(w.buildings[buildingSlot].type) == .TownHall do continue
+		BuildingDespawn(w, buildingSlot, destroyer)
+	}
+
+	if destroyer >= 0 && destroyer < KINGDOMS_CAPACITY && w.kingdomUsed[destroyer] {
+		rewardTown := IndependentTownRewardTown(w, destroyer, townX, townY)
+		if rewardTown >= 0 {
+			roll := WorldNoiseHash(townX, townY, w.seed+u64(destroyer)*7919+0x5EED)
+			reward := INDEPENDENT_REWARD_VILLAGERS_MIN+
+				int(roll*f32(INDEPENDENT_REWARD_VILLAGERS_MAX-INDEPENDENT_REWARD_VILLAGERS_MIN+1))
+			reward = clamp(
+				reward,
+				INDEPENDENT_REWARD_VILLAGERS_MIN,
+				INDEPENDENT_REWARD_VILLAGERS_MAX,
+			)
+			for _ in 0..<reward {
+				if TownSpawnCitizen(w, destroyer, rewardTown, Villager{}) < 0 do break
+			}
+		}
+	}
+
+	TownOrdersClear(w, NEUTRAL_KINGDOM, townSlot)
+	w.kingdoms[NEUTRAL_KINGDOM].townUsed[townSlot] = false
+
+	if KingdomTownCount(w, NEUTRAL_KINGDOM) == 0 {
+		for kingdom in 0..<KINGDOMS_CAPACITY {
+			w.kingdoms[kingdom].kingdomWar[NEUTRAL_KINGDOM] = false
+		}
+		w.kingdoms[NEUTRAL_KINGDOM].kingdomWar = {}
+		w.kingdomUsed[NEUTRAL_KINGDOM] = false
+	}
+}
+
+IndependentTownRewardTown :: proc(w: ^World, kingdomSlot, x, y: int) -> int {
+	best := -1
+	bestDistance: f32 = 0
+	for townSlot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+		town := &w.kingdoms[kingdomSlot].towns[townSlot]
+		deltaX := WorldShortestWrappedDelta(f32(town.x)-f32(x), f32(w.maxX))
+		deltaY := WorldShortestWrappedDelta(f32(town.y)-f32(y), f32(w.maxY))
+		distance := deltaX*deltaX+deltaY*deltaY
+		if best < 0 || distance < bestDistance {
+			best = townSlot
+			bestDistance = distance
+		}
+	}
+	return best
 }
 
 // Shared town setup for the initial kingdom spawn and for founded towns.
@@ -297,7 +407,7 @@ TownEffectiveBatch :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {
 }
 
 KingdomFreeTownSlot :: proc(w: ^World, kingdomSlot: int) -> int {
-	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdomSlot] {
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOM_SLOTS || !w.kingdomUsed[kingdomSlot] {
 		return -1
 	}
 	for townSlot in 0..<TOWN_CAPACITY {
@@ -307,7 +417,7 @@ KingdomFreeTownSlot :: proc(w: ^World, kingdomSlot: int) -> int {
 }
 
 KingdomTownCount :: proc(w: ^World, kingdomSlot: int) -> int {
-	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdomSlot] {
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOM_SLOTS || !w.kingdomUsed[kingdomSlot] {
 		return 0
 	}
 	count := 0
@@ -405,7 +515,7 @@ TownFoundingFailure :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> Plac
 
 TownFoundingOverlapsOtherConstruction :: proc(w: ^World, sourceKingdom, sourceTown, x, y: int) -> bool {
 	width, height := BuildingTileSize(TownHall{})
-	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+	for kingdomSlot in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[kingdomSlot] do continue
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
@@ -431,7 +541,7 @@ TownFoundingTooClose :: proc(w: ^World, x, y: int) -> bool {
 	worldHeight := f32(w.maxY)
 	minDistance := f32(TOWN_FOUNDING_MIN_DISTANCE)
 
-	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+	for kingdomSlot in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[kingdomSlot] do continue
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
@@ -1065,12 +1175,24 @@ TownFusionRedirectOrders :: proc(w: ^World, kingdomSlot, hostSlot, guestSlot: in
 // Player order: attacker town -> attack -> any town of another kingdom.
 // Declaring the order is also the declaration of war.
 TownStartAttack :: proc(w: ^World, kingdomSlotA, townSlotA, kingdomSlotB, townSlotB: int) -> bool {
-	if !KingdomsMet(w, kingdomSlotA, kingdomSlotB) do return false
 	if !WorldTownExists(w, kingdomSlotA, townSlotA) || !WorldTownExists(w, kingdomSlotB, townSlotB) {
 		return false
 	}
 	if w.kingdoms[kingdomSlotA].towns[townSlotA].attackOrders[kingdomSlotB][townSlotB] do return false
 
+	// Independent towns are not diplomatic kingdoms: attacking one does not
+	// require contact, and the neutral faction simply becomes hostile.
+	if kingdomSlotB == NEUTRAL_KINGDOM {
+		if kingdomSlotA == NEUTRAL_KINGDOM do return false
+		w.kingdoms[kingdomSlotA].kingdomWar[NEUTRAL_KINGDOM] = true
+		w.kingdoms[NEUTRAL_KINGDOM].kingdomWar[kingdomSlotA] = true
+		w.kingdoms[kingdomSlotA].towns[townSlotA].attackOrders[NEUTRAL_KINGDOM][townSlotB] = true
+		w.kingdoms[NEUTRAL_KINGDOM].towns[townSlotB].attackedBy[kingdomSlotA][townSlotA] = true
+		TownOrdersRebuild(w, kingdomSlotA, townSlotA)
+		return true
+	}
+
+	if !KingdomsMet(w, kingdomSlotA, kingdomSlotB) do return false
 	if !KingdomAtWar(w, kingdomSlotA, kingdomSlotB) &&
 		!KingdomDeclareWar(w, kingdomSlotA, kingdomSlotB) {
 		return false
@@ -1089,6 +1211,7 @@ TownStartDefending :: proc(w: ^World, kingdomSlot, defenderTownSlot, protectedKi
 		!WorldTownExists(w, protectedKingdomSlot, protectedTownSlot) {
 		return
 	}
+	if protectedKingdomSlot == NEUTRAL_KINGDOM do return
 	if kingdomSlot == protectedKingdomSlot && defenderTownSlot == protectedTownSlot do return
 	if KingdomAtWar(w, kingdomSlot, protectedKingdomSlot) do return
 	if w.kingdoms[kingdomSlot].towns[defenderTownSlot].defendOrders[protectedKingdomSlot][protectedTownSlot] {
@@ -1199,6 +1322,8 @@ KingdomMakePeace :: proc(w: ^World, kingdomA, kingdomB: int) {
 		kingdomB < 0 || kingdomB >= KINGDOMS_CAPACITY || kingdomA == kingdomB {
 		return
 	}
+	// The neutral faction never negotiates.
+	if kingdomA == NEUTRAL_KINGDOM || kingdomB == NEUTRAL_KINGDOM do return
 	if !w.kingdomUsed[kingdomA] || !w.kingdomUsed[kingdomB] do return
 	if !KingdomAtWar(w, kingdomA, kingdomB) do return
 
@@ -1236,8 +1361,8 @@ KingdomMakePeace :: proc(w: ^World, kingdomA, kingdomB: int) {
 }
 
 KingdomAtWar :: proc(w: ^World, kingdomSlotA, kingdomSlotB: int) -> bool {
-	if kingdomSlotA < 0 || kingdomSlotA >= KINGDOMS_CAPACITY ||
-		kingdomSlotB < 0 || kingdomSlotB >= KINGDOMS_CAPACITY || kingdomSlotA == kingdomSlotB {
+	if kingdomSlotA < 0 || kingdomSlotA >= KINGDOM_SLOTS ||
+		kingdomSlotB < 0 || kingdomSlotB >= KINGDOM_SLOTS || kingdomSlotA == kingdomSlotB {
 		return false
 	}
 	return w.kingdomUsed[kingdomSlotA] && w.kingdomUsed[kingdomSlotB] &&
@@ -1251,7 +1376,7 @@ TownOrdersRebuild :: proc(w: ^World, kingdomSlot, townSlot: int) {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	count := 0
-	for kingdomB in 0..<KINGDOMS_CAPACITY {
+	for kingdomB in 0..<KINGDOM_SLOTS {
 		for townB in 0..<TOWN_CAPACITY {
 			if !town.attackOrders[kingdomB][townB] do continue
 			if !WorldTownExists(w, kingdomB, townB) || !KingdomAtWar(w, kingdomSlot, kingdomB) {
@@ -1302,7 +1427,7 @@ TownOrdersClear :: proc(w: ^World, kingdomSlot, townSlot: int) {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 
-	for kingdomB in 0..<KINGDOMS_CAPACITY {
+	for kingdomB in 0..<KINGDOM_SLOTS {
 		for townB in 0..<TOWN_CAPACITY {
 			if !town.attackOrders[kingdomB][townB] do continue
 			town.attackOrders[kingdomB][townB] = false
@@ -1311,7 +1436,7 @@ TownOrdersClear :: proc(w: ^World, kingdomSlot, townSlot: int) {
 			}
 		}
 	}
-	for kingdomA in 0..<KINGDOMS_CAPACITY {
+	for kingdomA in 0..<KINGDOM_SLOTS {
 		for townA in 0..<TOWN_CAPACITY {
 			if !town.attackedBy[kingdomA][townA] do continue
 			town.attackedBy[kingdomA][townA] = false
@@ -1357,7 +1482,7 @@ KingdomEndWar :: proc(w: ^World, kingdomSlot: int) {
 		TownConversionsClear(w, kingdomSlot, townSlot)
 	}
 
-	for other in 0..<KINGDOMS_CAPACITY {
+	for other in 0..<KINGDOM_SLOTS {
 		w.kingdoms[kingdomSlot].kingdomWar[other] = false
 		if other == kingdomSlot do continue
 		w.kingdoms[other].kingdomWar[kingdomSlot] = false

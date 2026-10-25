@@ -5,6 +5,11 @@ import rl "vendor:raylib"
 UNIT_CAPACITY :: 10_000
 BUILDING_CAPACITY :: 5_000
 KINGDOMS_CAPACITY :: 5
+// Playable kingdoms plus the dedicated independent-town faction. Independent
+// towns live in the last slot but never get a controller, AI, diplomacy or
+// victory count.
+KINGDOM_SLOTS :: KINGDOMS_CAPACITY+1
+NEUTRAL_KINGDOM :: KINGDOMS_CAPACITY
 
 World :: struct {
 	units: #soa [UNIT_CAPACITY]Unit,
@@ -26,8 +31,8 @@ World :: struct {
 	particleCursor: int,
 	particleCount: int,
 	particleRandom: u64,
-	kingdoms: #soa [KINGDOMS_CAPACITY]Kingdom,
-	kingdomUsed: [KINGDOMS_CAPACITY]bool,
+	kingdoms: #soa [KINGDOM_SLOTS]Kingdom,
+	kingdomUsed: [KINGDOM_SLOTS]bool,
 	kingdomColors: [KINGDOMS_CAPACITY]rl.Color,
 	controllers: [KINGDOMS_CAPACITY]KingdomController,
 	playerKingdom: int,
@@ -216,9 +221,7 @@ UnitDespawn :: proc(w: ^World, slot: int) -> bool {
 	townSlot := w.units[slot].town
 	UnitConversionCancel(w, slot)
 	UnitReleaseHome(w, slot)
-	if kingdomSlot >= 0 && kingdomSlot < KINGDOMS_CAPACITY &&
-		townSlot >= 0 && townSlot < TOWN_CAPACITY &&
-		w.kingdoms[kingdomSlot].townUsed[townSlot] &&
+	if WorldTownExists(w, kingdomSlot, townSlot) &&
 		w.kingdoms[kingdomSlot].towns[townSlot].citizens > 0 {
 		w.kingdoms[kingdomSlot].towns[townSlot].citizens -= 1
 	}
@@ -298,10 +301,14 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 	case TownHall:
 		kingdomSlot := w.buildings[slot].kingdom
 		townSlot := w.buildings[slot].town
-		if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY ||
+		if kingdomSlot < 0 || kingdomSlot >= KINGDOM_SLOTS ||
 			townSlot < 0 || townSlot >= TOWN_CAPACITY ||
 			!w.kingdomUsed[kingdomSlot] || !w.kingdoms[kingdomSlot].townUsed[townSlot] {
 			return false
+		}
+		if kingdomSlot == NEUTRAL_KINGDOM {
+			IndependentTownDefeat(w, townSlot, destroyerKingdom)
+			break
 		}
 		if kingdomSlot == w.observerKingdom {
 			WorldAlertAdd(

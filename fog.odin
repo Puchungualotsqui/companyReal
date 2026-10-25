@@ -219,7 +219,7 @@ FogFindTownAt :: proc(w: ^World, tileX, tileY: int) -> (kingdom, town: int, foun
 
 	kingdom = int(w.fog.buildingKingdom[anchor])
 	town = int(w.fog.buildingTown[anchor])
-	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || town < 0 || town >= TOWN_CAPACITY {
+	if kingdom < 0 || kingdom >= KINGDOM_SLOTS || town < 0 || town >= TOWN_CAPACITY {
 		return -1, -1, false
 	}
 	if !WorldTownExists(w, kingdom, town) do return -1, -1, false
@@ -374,7 +374,7 @@ FogSnapshotBuilding :: proc(w: ^World, buildingSlot: int) {
 	w.fog.buildingKind[anchor] = u8(BuildingKindOf(building.type))
 	w.fog.buildingFlags[anchor] = 0
 	if FogBuildingBurning(w, buildingSlot) do w.fog.buildingFlags[anchor] |= FOG_FLAG_BURNING
-	if building.kingdom >= 0 && building.kingdom < KINGDOMS_CAPACITY {
+	if building.kingdom >= 0 && building.kingdom < KINGDOM_SLOTS {
 		w.fog.buildingKingdom[anchor] = u8(building.kingdom)
 	} else {
 		w.fog.buildingKingdom[anchor] = FOG_NONE

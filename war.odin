@@ -15,6 +15,12 @@ WARRIOR_GARRISON_ESCORT_RATIO :: 0.15
 WARRIOR_ESCORT_RADIUS :: 30
 WARRIOR_BREACH_RADIUS :: 40
 
+// Independent-town guards stay close to their hall and only fight units, never
+// buildings.
+NEUTRAL_GUARD_RADIUS :: 11
+NEUTRAL_GUARD_CHASE_SLACK :: 6
+NEUTRAL_GUARD_PATROL_RADIUS :: 5
+
 StateWarriorInit :: proc(unitSlot, kingdomSlot, townSlot: int) -> StateWarrior {
 	return StateWarrior{
 		activity = .Idle,
@@ -35,6 +41,95 @@ UnitWarriorReset :: proc(w: ^World, unitSlot: int) {
 		w.units[unitSlot].kingdome,
 		w.units[unitSlot].town,
 	)
+}
+
+// Independent guards have no orders and no interest in buildings. They patrol
+// their hall and respond to hostile units that enter the small guard radius.
+UnitUpdateIndependentKnight :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
+	unit := &w.units[unitSlot]
+	state, ok := &unit.state.(StateWarrior)
+	if !ok do return
+
+	kingdomSlot := unit.kingdome
+	townSlot := unit.town
+	if !WorldTownExists(w, kingdomSlot, townSlot) {
+		state.target = TargetNone{}
+		return
+	}
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+
+	if !IndependentKnightFocusValid(w, unitSlot, state, town.x, town.y) {
+		state.target = TargetNone{}
+	}
+
+	state.scanTimer -= deltaTime
+	if state.scanTimer <= 0 {
+		jitter := 0.75+WorldNoiseHash(unitSlot, state.scanSequence, u64(kingdomSlot)+911)*0.5
+		state.scanTimer = WARRIOR_SCAN_INTERVAL*jitter
+		if _, isNone := state.target.(TargetNone); isNone {
+			state.target = IndependentKnightFindFocus(w, unitSlot, town.x, town.y)
+		}
+	}
+
+	if _, isNone := state.target.(TargetNone); !isNone {
+		state.activity = .Attacking
+		unit.pathReady = false
+		if UnitWarriorEngage(w, unitSlot, state, deltaTime) do return
+		state.target = TargetNone{}
+	}
+
+	state.activity = .Moving
+	UnitWarriorPatrol(
+		w,
+		unitSlot,
+		kingdomSlot,
+		townSlot,
+		NEUTRAL_GUARD_PATROL_RADIUS,
+		deltaTime,
+		state,
+	)
+}
+
+IndependentKnightDistanceSquared :: proc(w: ^World, x, y: f32, townX, townY: int) -> f32 {
+	deltaX := WorldShortestWrappedDelta(x-(f32(townX)+2), f32(w.maxX))
+	deltaY := WorldShortestWrappedDelta(y-(f32(townY)+2), f32(w.maxY))
+	return deltaX*deltaX+deltaY*deltaY
+}
+
+IndependentKnightFocusValid :: proc(
+	w: ^World,
+	unitSlot: int,
+	state: ^StateWarrior,
+	townX, townY: int,
+) -> bool {
+	target, ok := state.target.(TargetUnit)
+	if !ok do return false
+	slot := target.slot
+	if slot < 0 || slot >= UNIT_CAPACITY || !w.unitUsed[slot] do return false
+	if UnitHiddenInside(w, slot) do return false
+
+	unit := &w.units[unitSlot]
+	if !KingdomAtWar(w, unit.kingdome, w.units[slot].kingdome) do return false
+	if IndependentKnightDistanceSquared(w, w.units[slot].x, w.units[slot].y, townX, townY) >
+		f32(NEUTRAL_GUARD_RADIUS*NEUTRAL_GUARD_RADIUS) {
+		return false
+	}
+	chaseRadius := NEUTRAL_GUARD_RADIUS+NEUTRAL_GUARD_CHASE_SLACK
+	return IndependentKnightDistanceSquared(w, unit.x, unit.y, townX, townY) <=
+		f32(chaseRadius*chaseRadius)
+}
+
+IndependentKnightFindFocus :: proc(w: ^World, unitSlot, townX, townY: int) -> WarriorTarget {
+	enemies: [1]UnitNearbyEnemy
+	if UnitCollectNearbyEnemies(w, unitSlot, NEUTRAL_GUARD_RADIUS, enemies[:]) == 0 {
+		return TargetNone{}
+	}
+	slot := enemies[0].slot
+	if IndependentKnightDistanceSquared(w, w.units[slot].x, w.units[slot].y, townX, townY) >
+		f32(NEUTRAL_GUARD_RADIUS*NEUTRAL_GUARD_RADIUS) {
+		return TargetNone{}
+	}
+	return TargetUnit{slot = slot}
 }
 
 // Units react to enemies inside their distraction radius, which is usually

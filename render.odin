@@ -345,7 +345,7 @@ FogAppendMemoryBuilding :: proc(
 	kind := BuildingKind(kindByte)
 	flags := w.fog.buildingFlags[anchor]
 	kingdom := int(w.fog.buildingKingdom[anchor])
-	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY do return
+	if kingdom < 0 || kingdom >= KINGDOM_SLOTS do return
 
 	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
 	heightMap := int(w.maxY)

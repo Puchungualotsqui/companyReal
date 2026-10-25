@@ -20,7 +20,7 @@ AUTO_TRAINING_BUILDINGS := [6]BuildingKind{
 }
 
 WorldBuildingUpdate :: proc(w: ^World, deltaTime: f32) {
-	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+	for kingdomSlot in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[kingdomSlot] do continue
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue

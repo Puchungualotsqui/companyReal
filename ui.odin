@@ -508,6 +508,7 @@ UIAttackOrderValid :: proc(w: ^World, kingdom, town, targetKingdom, targetTown: 
 }
 
 UIDefendOrderValid :: proc(w: ^World, kingdom, town, targetKingdom, targetTown: int) -> bool {
+	if targetKingdom == NEUTRAL_KINGDOM do return false
 	if kingdom == targetKingdom && town == targetTown do return false
 	if !WorldTownExists(w, kingdom, town) || !WorldTownExists(w, targetKingdom, targetTown) {
 		return false
@@ -519,7 +520,7 @@ UIDefendOrderValid :: proc(w: ^World, kingdom, town, targetKingdom, targetTown: 
 }
 
 UIAttackTargetExists :: proc(w: ^World, kingdom, town: int) -> bool {
-	for targetKingdom in 0..<KINGDOMS_CAPACITY {
+	for targetKingdom in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[targetKingdom] do continue
 		for targetTown in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[targetKingdom].townUsed[targetTown] do continue
@@ -530,7 +531,7 @@ UIAttackTargetExists :: proc(w: ^World, kingdom, town: int) -> bool {
 }
 
 UIDefendTargetExists :: proc(w: ^World, kingdom, town: int) -> bool {
-	for targetKingdom in 0..<KINGDOMS_CAPACITY {
+	for targetKingdom in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[targetKingdom] do continue
 		for targetTown in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[targetKingdom].townUsed[targetTown] do continue
@@ -554,7 +555,7 @@ UITownOrderCount :: proc(w: ^World, kingdom, town: int) -> int {
 	if !WorldTownExists(w, kingdom, town) do return 0
 	orders := &w.kingdoms[kingdom].towns[town]
 	count := 0
-	for targetKingdom in 0..<KINGDOMS_CAPACITY {
+	for targetKingdom in 0..<KINGDOM_SLOTS {
 		for targetTown in 0..<TOWN_CAPACITY {
 			if !orders.attackOrders[targetKingdom][targetTown] do continue
 			if WorldTownExists(w, targetKingdom, targetTown) do count += 1
@@ -576,7 +577,7 @@ UITownOrderAt :: proc(w: ^World, kingdom, town, index: int) -> (attack: bool, ta
 	if !WorldTownExists(w, kingdom, town) do return false, -1, -1, false
 	orders := &w.kingdoms[kingdom].towns[town]
 	count := 0
-	for otherKingdom in 0..<KINGDOMS_CAPACITY {
+	for otherKingdom in 0..<KINGDOM_SLOTS {
 		for otherTown in 0..<TOWN_CAPACITY {
 			if !orders.attackOrders[otherKingdom][otherTown] do continue
 			if !WorldTownExists(w, otherKingdom, otherTown) do continue
@@ -1719,7 +1720,7 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 	}
 
 	if UISelectionTownHall(w, ui.selection) {
-		UIDrawGrowthBar(w, panel, kingdom, town)
+		if kingdom != NEUTRAL_KINGDOM do UIDrawGrowthBar(w, panel, kingdom, town)
 		if UICanControlKingdom(w, kingdom) {
 			UIDrawTownTabs(w, ui, panel)
 			switch ui.tab {
@@ -1863,6 +1864,12 @@ UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[8]UIStat) -> int {
 		if kind == .TownHall {
 			t := &w.kingdoms[building.kingdom].towns[building.town]
 			stats[1] = {"Citizens", fmt.ctprintf("%d", t.citizens), UI_COLOR_TEXT}
+			if building.kingdom == NEUTRAL_KINGDOM {
+				guards := TownUnitCount(w, building.kingdom, building.town, .Knight)
+				stats[2] = {"Guards", fmt.ctprintf("%d", guards), UI_COLOR_TEXT}
+				stats[3] = {"Growth", "None", UI_COLOR_DIM}
+				return 4
+			}
 			stats[2] = {"Wood", fmt.ctprintf("%d", int(t.wood)), UI_COLOR_TEXT}
 			if t.milestonesEarned < TOWN_MILESTONE_TIER_COUNT {
 				stats[3] = {
@@ -2514,7 +2521,7 @@ UIDrawCommandTargets :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 	kingdom, town := UISelectionTown(w, ui.selection)
 	if !WorldTownExists(w, kingdom, town) do return
 
-	for targetKingdom in 0..<KINGDOMS_CAPACITY {
+	for targetKingdom in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[targetKingdom] do continue
 		for targetTown in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[targetKingdom].townUsed[targetTown] do continue
@@ -2621,7 +2628,7 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 		}
 	}
 
-	for targetKingdom in 0..<KINGDOMS_CAPACITY {
+	for targetKingdom in 0..<KINGDOM_SLOTS {
 		for targetTown in 0..<TOWN_CAPACITY {
 			if !orders.attackOrders[targetKingdom][targetTown] do continue
 			if !WorldTownExists(w, targetKingdom, targetTown) do continue
