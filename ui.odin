@@ -1660,6 +1660,9 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 		kind := BuildingKindOf(w.buildings[ui.selection.slot].type)
 		title := UIBuildingName(kind)
 		if kind == .DistrictHall do title = UIDistrictHallName(w, ui.selection.slot)
+		if kind == .TownHall && w.buildings[ui.selection.slot].kingdom == NEUTRAL_KINGDOM {
+			title = "Independent Hall"
+		}
 		UITitle(title, titleX, panel.y+10, UI_COLOR_GOLD)
 	case .None:
 	}

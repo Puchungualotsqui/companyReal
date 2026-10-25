@@ -39,9 +39,13 @@ TOWN_FOUNDING_WOOD_BUFFER :: 12
 // knights, no growth and no construction. They all share the neutral faction
 // slot, but each is a separate town.
 INDEPENDENT_TOWNS_PER_KINGDOM :: 2
-INDEPENDENT_TOWN_TARGET_DISTANCE :: 22
-INDEPENDENT_TOWN_MIN_DISTANCE :: 16
-INDEPENDENT_TOWN_SEPARATION :: 16
+INDEPENDENT_TOWN_MIN_DISTANCE :: 32
+INDEPENDENT_TOWN_MAX_DISTANCE :: 72
+INDEPENDENT_TOWN_SEPARATION :: 20
+INDEPENDENT_HOMES_MIN :: 1
+INDEPENDENT_HOMES_MAX :: 3
+INDEPENDENT_FARMLANDS_MIN :: 0
+INDEPENDENT_FARMLANDS_MAX :: 2
 INDEPENDENT_KNIGHT_MIN :: 1
 INDEPENDENT_KNIGHT_MAX :: 3
 INDEPENDENT_REWARD_VILLAGERS_MIN :: 1
@@ -265,8 +269,35 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 	return i, true
 }
 
-// Spawns a neutral town hall plus its small knight guard. Used only during
-// world generation.
+// Places a small outbuilding on the first valid ring position around the hall.
+// The hashed starting direction keeps each town's cluster varied.
+IndependentTownPlaceBuilding :: proc(
+	w: ^World,
+	townSlot, townX, townY: int,
+	bType: BuildingType,
+	sequence: int,
+) -> bool {
+	hallWidth, hallHeight := BuildingTileSize(TownHall{})
+	centerX := townX+hallWidth/2
+	centerY := townY+hallHeight/2
+	offsets := [8][2]int{{1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1}}
+	for radius in 2..=8 {
+		start := int(WorldNoiseHash(townX+sequence*37, townY+radius, w.seed+0x51D)*8)
+		for step in 0..<8 {
+			direction := (start+step)%8
+			x := WorldWrapCoordinate(centerX+offsets[direction][0]*radius, int(w.maxX))
+			y := WorldWrapCoordinate(centerY+offsets[direction][1]*radius, int(w.maxY))
+			if !WorldBuildingValid(w, x, y, bType) do continue
+			if _, ok := BuildingSpawn(w, x, y, bType, NEUTRAL_KINGDOM, townSlot); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Spawns a neutral town hall, a few homes and fields, plus its knight guard.
+// Used only during world generation.
 IndependentTownSpawn :: proc(w: ^World, x, y: int) -> (int, bool) {
 	if !WorldBuildingValid(w, x, y, TownHall{}) do return 0, false
 	townSlot := KingdomFreeTownSlot(w, NEUTRAL_KINGDOM)
@@ -277,6 +308,22 @@ IndependentTownSpawn :: proc(w: ^World, x, y: int) -> (int, bool) {
 
 	TownInitialize(w, NEUTRAL_KINGDOM, townSlot, hallSlot, x, y, 0)
 	w.kingdoms[NEUTRAL_KINGDOM].townUsed[townSlot] = true
+
+	homeRoll := WorldNoiseHash(x, y, w.seed+0x1D5)
+	homes := INDEPENDENT_HOMES_MIN+
+		int(homeRoll*f32(INDEPENDENT_HOMES_MAX-INDEPENDENT_HOMES_MIN+1))
+	homes = clamp(homes, INDEPENDENT_HOMES_MIN, INDEPENDENT_HOMES_MAX)
+	for index in 0..<homes {
+		IndependentTownPlaceBuilding(w, townSlot, x, y, Home{}, index)
+	}
+
+	farmRoll := WorldNoiseHash(x, y, w.seed+0x1D7)
+	farmlands := INDEPENDENT_FARMLANDS_MIN+
+		int(farmRoll*f32(INDEPENDENT_FARMLANDS_MAX-INDEPENDENT_FARMLANDS_MIN+1))
+	farmlands = clamp(farmlands, INDEPENDENT_FARMLANDS_MIN, INDEPENDENT_FARMLANDS_MAX)
+	for index in 0..<farmlands {
+		IndependentTownPlaceBuilding(w, townSlot, x, y, Farmland{}, 16+index)
+	}
 
 	roll := WorldNoiseHash(x, y, w.seed+0x1D3)
 	guardCount := INDEPENDENT_KNIGHT_MIN+

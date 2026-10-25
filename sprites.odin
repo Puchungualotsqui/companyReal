@@ -623,6 +623,73 @@ DrawTownHall :: proc(art: ^Art, accent: rl.Color) {
 	ArtPixel(art, 42, 51, C_GOLD_LIGHT)
 }
 
+// Independent towns use a humbler timber longhouse with a thatched roof and a
+// market front, so they read as settlements rather than royal halls.
+DrawIndependentTownHall :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 32, 61, 27, 3)
+
+	ArtRect(art, 9, 54, 46, 7, C_OUTLINE)
+	ArtRect(art, 10, 55, 44, 5, C_STONE_DARK)
+	ArtRect(art, 11, 56, 42, 3, C_STONE)
+
+	ArtRect(art, 9, 30, 46, 25, C_OUTLINE)
+	ArtRect(art, 10, 31, 44, 23, C_WOOD_DARK)
+	ArtRect(art, 10, 31, 44, 2, C_WOOD)
+	for y := 36; y < 54; y += 5 {
+		ArtLine(art, 11, y, 53, y, C_WOOD_DARKEST)
+	}
+	for x in ([5]int{13, 24, 37, 48, 52}) {
+		ArtRect(art, x, 31, 2, 23, C_WOOD_DARKEST)
+	}
+
+	roofOutline := [5]Point{{4, 32}, {60, 32}, {52, 15}, {32, 2}, {12, 15}}
+	ArtPolygon(art, roofOutline[:], C_OUTLINE)
+	roof := [5]Point{{6, 31}, {58, 31}, {50, 16}, {32, 4}, {14, 16}}
+	ArtPolygon(art, roof[:], C_GOLD_DARK)
+	roofHigh := [5]Point{{9, 29}, {55, 29}, {48, 17}, {32, 7}, {17, 17}}
+	ArtPolygon(art, roofHigh[:], C_GOLD)
+	for y := 12; y < 30; y += 4 {
+		ArtLine(art, 10, y, 54, y, C_WOOD_DARKEST)
+	}
+	ArtLine(art, 18, 15, 46, 15, C_WOOD_DARKEST)
+
+	ArtRect(art, 44, 9, 8, 15, C_OUTLINE)
+	ArtRect(art, 45, 10, 6, 13, C_STONE_DARK)
+	ArtRect(art, 45, 10, 6, 2, C_STONE_LIGHT)
+	ArtPixel(art, 48, 7, C_STONE_LIGHT)
+	ArtPixel(art, 50, 5, C_STONE)
+	ArtPixel(art, 47, 4, C_STONE_DARK)
+
+	ArtRect(art, 27, 39, 10, 16, C_OUTLINE)
+	ArtRect(art, 28, 40, 8, 15, C_WOOD_DARKEST)
+	ArtRect(art, 29, 41, 6, 14, C_WOOD)
+	ArtLine(art, 32, 41, 32, 54, C_WOOD_DARKEST)
+	ArtPixel(art, 30, 48, C_GOLD)
+	ArtPixel(art, 34, 48, C_GOLD)
+
+	DrawWindow(art, 14, 38, 6, 7, true)
+	DrawWindow(art, 43, 38, 6, 7, true)
+
+	ArtRect(art, 4, 38, 2, 19, C_OUTLINE)
+	ArtRect(art, 5, 39, 1, 17, C_WOOD_DARK)
+	ArtRect(art, 1, 40, 12, 8, C_OUTLINE)
+	ArtRect(art, 2, 41, 10, 6, accent)
+	ArtRect(art, 4, 43, 6, 1, C_WOOD_DARKEST)
+	ArtRect(art, 4, 45, 4, 1, C_WOOD_DARKEST)
+
+	ArtRect(art, 45, 50, 11, 5, C_OUTLINE)
+	ArtRect(art, 46, 51, 9, 3, C_WOOD_DARK)
+	ArtRect(art, 46, 49, 9, 2, accent)
+	ArtRect(art, 48, 51, 2, 3, C_WOOD_LIGHT)
+	ArtRect(art, 51, 51, 2, 3, C_GOLD_DARK)
+
+	ArtRect(art, 18, 50, 5, 5, C_OUTLINE)
+	ArtRect(art, 19, 51, 3, 3, C_WOOD)
+	ArtRect(art, 21, 51, 1, 3, C_WOOD_LIGHT)
+	ArtRect(art, 38, 49, 4, 4, C_OUTLINE)
+	ArtRect(art, 39, 50, 2, 2, C_WOOD_LIGHT)
+}
+
 // A smaller twin-towered hall raised where an absorbed town's hall stood.
 // It marks a district of the merged town without competing with the main hall.
 DrawDistrictHall :: proc(art: ^Art, accent: rl.Color) {
@@ -1658,7 +1725,14 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 	for faction in 0 ..< SPRITE_FACTION_COUNT {
 		accent := FactionColor(w, faction)
 		for kind in ALL_BUILDING_KINDS {
-			art := DrawBuildingSprite(kind, accent)
+			art: Art
+			if faction == NEUTRAL_KINGDOM && kind == .TownHall {
+				width, height := BuildingTileSize(TownHall{})
+				art = ArtInit(width*PIXELS_PER_TILE, height*PIXELS_PER_TILE)
+				DrawIndependentTownHall(&art, accent)
+			} else {
+				art = DrawBuildingSprite(kind, accent)
+			}
 			ArtGrain(&art, u64(kind)+1)
 			set.building[faction][kind] = ArtToTexture(art)
 			rl.UnloadImage(art.image)

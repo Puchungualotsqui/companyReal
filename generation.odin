@@ -796,8 +796,8 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdomCount: int, seed: u64) -> bo
 	return true
 }
 
-// Independent towns are placed near each capital so a new kingdom has a soft
-// early objective. They all live in the neutral faction slot and never expand.
+// Independent towns are scattered randomly across the map, with a quota per
+// nearest capital so every kingdom gets a similar share. They never expand.
 WorldSpawnIndependentTowns :: proc(w: ^World, siteX, siteY: []int, kingdomCount: int) {
 	if kingdomCount <= 0 || len(siteX) == 0 || len(siteX) != len(siteY) do return
 
@@ -806,64 +806,82 @@ WorldSpawnIndependentTowns :: proc(w: ^World, siteX, siteY: []int, kingdomCount:
 	w.kingdomUsed[NEUTRAL_KINGDOM] = true
 
 	hallWidth, hallHeight := BuildingTileSize(TownHall{})
+	minDistanceSquared := f32(INDEPENDENT_TOWN_MIN_DISTANCE*INDEPENDENT_TOWN_MIN_DISTANCE)
+	maxDistanceSquared := f32(INDEPENDENT_TOWN_MAX_DISTANCE*INDEPENDENT_TOWN_MAX_DISTANCE)
+	separationSquared := f32(INDEPENDENT_TOWN_SEPARATION*INDEPENDENT_TOWN_SEPARATION)
+
+	// Shuffle the candidate sites deterministically so placement is random but
+	// reproducible from the world seed.
+	order := make([dynamic]int, len(siteX))
+	defer delete(order)
+	for i in 0..<len(order) do order[i] = i
+	for i := len(order)-1; i > 0; i -= 1 {
+		j := int(WorldNoiseHash(i, len(order), w.seed+0x51F)*f32(i+1))
+		j = clamp(j, 0, i)
+		order[i], order[j] = order[j], order[i]
+	}
+
+	perKingdom: [KINGDOMS_CAPACITY]int
+	target := kingdomCount*INDEPENDENT_TOWNS_PER_KINGDOM
 	spawned := 0
-	for kingdom in 0..<kingdomCount {
-		if !w.kingdomUsed[kingdom] do continue
-		capital := w.kingdoms[kingdom].capitalSlot
-		if capital < 0 || !w.kingdoms[kingdom].townUsed[capital] do continue
-		capitalX := f32(w.kingdoms[kingdom].towns[capital].x)+f32(hallWidth)*0.5
-		capitalY := f32(w.kingdoms[kingdom].towns[capital].y)+f32(hallHeight)*0.5
 
-		for _ in 0..<INDEPENDENT_TOWNS_PER_KINGDOM {
-			bestSite := -1
-			bestScore: f32 = 1e30
-			bestTie: f32 = -1
-			for site in 0..<len(siteX) {
-				x, y := siteX[site], siteY[site]
-				if !WorldBuildingValid(w, x, y, TownHall{}) do continue
+	// The first pass fills each capital's quota; the second is a fallback for
+	// maps where one region is too cramped to fit its towns.
+	for pass in 0..<2 {
+		for site in order {
+			if spawned >= target do return
 
-				centerX := f32(x)+f32(hallWidth)*0.5
-				centerY := f32(y)+f32(hallHeight)*0.5
+			x, y := siteX[site], siteY[site]
+			if !WorldBuildingValid(w, x, y, TownHall{}) do continue
+
+			centerX := f32(x)+f32(hallWidth)*0.5
+			centerY := f32(y)+f32(hallHeight)*0.5
+			nearestKingdom := -1
+			nearestDistanceSquared: f32 = 0
+			for kingdom in 0..<kingdomCount {
+				if !w.kingdomUsed[kingdom] do continue
+				capital := w.kingdoms[kingdom].capitalSlot
+				if capital < 0 || !w.kingdoms[kingdom].townUsed[capital] do continue
+				capitalX := f32(w.kingdoms[kingdom].towns[capital].x)+f32(hallWidth)*0.5
+				capitalY := f32(w.kingdoms[kingdom].towns[capital].y)+f32(hallHeight)*0.5
 				deltaX := WorldShortestWrappedDelta(centerX-capitalX, f32(w.maxX))
 				deltaY := WorldShortestWrappedDelta(centerY-capitalY, f32(w.maxY))
-				distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-				if distance < INDEPENDENT_TOWN_MIN_DISTANCE do continue
-
-				tooClose := false
-				for otherKingdom in 0..<KINGDOM_SLOTS {
-					if !w.kingdomUsed[otherKingdom] do continue
-					for otherTown in 0..<TOWN_CAPACITY {
-						if !w.kingdoms[otherKingdom].townUsed[otherTown] do continue
-						otherX := f32(w.kingdoms[otherKingdom].towns[otherTown].x)+f32(hallWidth)*0.5
-						otherY := f32(w.kingdoms[otherKingdom].towns[otherTown].y)+f32(hallHeight)*0.5
-						spacingX := WorldShortestWrappedDelta(centerX-otherX, f32(w.maxX))
-						spacingY := WorldShortestWrappedDelta(centerY-otherY, f32(w.maxY))
-						if spacingX*spacingX+spacingY*spacingY <
-							f32(INDEPENDENT_TOWN_SEPARATION*INDEPENDENT_TOWN_SEPARATION) {
-							tooClose = true
-							break
-						}
-					}
-					if tooClose do break
-				}
-				if tooClose do continue
-
-				score := math.abs(distance-f32(INDEPENDENT_TOWN_TARGET_DISTANCE))
-				tie := WorldNoiseHash(
-					x,
-					y,
-					w.seed+u64(kingdom)*131+u64(spawned)*7919,
-				)
-				if score < bestScore || (score == bestScore && tie > bestTie) {
-					bestSite = site
-					bestScore = score
-					bestTie = tie
+				distanceSquared := deltaX*deltaX+deltaY*deltaY
+				if nearestKingdom < 0 || distanceSquared < nearestDistanceSquared {
+					nearestKingdom = kingdom
+					nearestDistanceSquared = distanceSquared
 				}
 			}
+			if nearestKingdom < 0 do continue
+			if nearestDistanceSquared < minDistanceSquared ||
+				nearestDistanceSquared > maxDistanceSquared {
+				continue
+			}
+			if pass == 0 && perKingdom[nearestKingdom] >= INDEPENDENT_TOWNS_PER_KINGDOM {
+				continue
+			}
 
-			if bestSite < 0 do continue
-			if _, ok := IndependentTownSpawn(w, siteX[bestSite], siteY[bestSite]); ok {
+			tooClose := false
+			for otherKingdom in 0..<KINGDOM_SLOTS {
+				if !w.kingdomUsed[otherKingdom] do continue
+				for otherTown in 0..<TOWN_CAPACITY {
+					if !w.kingdoms[otherKingdom].townUsed[otherTown] do continue
+					otherX := f32(w.kingdoms[otherKingdom].towns[otherTown].x)+f32(hallWidth)*0.5
+					otherY := f32(w.kingdoms[otherKingdom].towns[otherTown].y)+f32(hallHeight)*0.5
+					spacingX := WorldShortestWrappedDelta(centerX-otherX, f32(w.maxX))
+					spacingY := WorldShortestWrappedDelta(centerY-otherY, f32(w.maxY))
+					if spacingX*spacingX+spacingY*spacingY < separationSquared {
+						tooClose = true
+						break
+					}
+				}
+				if tooClose do break
+			}
+			if tooClose do continue
+
+			if _, ok := IndependentTownSpawn(w, x, y); ok {
 				spawned += 1
+				perKingdom[nearestKingdom] += 1
 			}
 		}
 	}
