@@ -603,6 +603,29 @@ UnitIsWarrior :: proc(type: UnitType) -> bool {
 	unreachable()
 }
 
+UnitIsMelee :: proc(type: UnitType) -> bool {
+	switch _ in type {
+	case Knight, Giant, Turtle, Rogue, CombatBuilder:
+		return true
+	case Archer, Mage, Catapult, Villager, Builder, WaterCollector, Farmer, Explorer:
+		return false
+	}
+	unreachable()
+}
+
+// Centre-to-centre space a unit needs so its sprite does not merge with
+// another unit's sprite. Based on the rendered sprite width.
+UNIT_BODY_RADIUS_FACTOR :: 0.45
+UNIT_BODY_GAP :: 0.06
+
+UnitBodyRadius :: proc(type: UnitType) -> f32 {
+	return UnitSpriteScale(UnitKindOf(type))*UNIT_BODY_RADIUS_FACTOR
+}
+
+UnitMeleeStandoff :: proc(attacker, target: UnitType) -> f32 {
+	return UnitBodyRadius(attacker)+UnitBodyRadius(target)+UNIT_BODY_GAP
+}
+
 UnitTrainingBuildingKind :: proc(kind: UnitKind) -> BuildingKind {
 	switch kind {
 	case .Villager, .Builder, .CombatBuilder, .WaterCollector, .Farmer, .Knight, .Explorer:

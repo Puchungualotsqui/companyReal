@@ -1285,20 +1285,12 @@ BloodMaskClearEllipse :: proc(mask: ^BloodMask, cx, cy, rx, ry: int) {
 	}
 }
 
-BloodMaskCircle :: proc(mask: ^BloodMask, cx, cy, radius: int) {
-	BloodMaskEllipse(mask, cx, cy, radius, radius)
-}
-
-BloodMaskClearCircle :: proc(mask: ^BloodMask, cx, cy, radius: int) {
-	BloodMaskClearEllipse(mask, cx, cy, radius, radius)
-}
-
 BloodMaskLine :: proc(mask: ^BloodMask, x0, y0, x1, y1, radius: int) {
 	dx := x1-x0
 	dy := y1-y0
 	steps := max(abs(dx), abs(dy))
 	if steps <= 0 {
-		BloodMaskCircle(mask, x0, y0, max(radius, 1))
+		BloodMaskEllipse(mask, x0, y0, max(radius, 1), max(radius, 1))
 		return
 	}
 	for step in 0 ..= steps {
@@ -1308,7 +1300,7 @@ BloodMaskLine :: proc(mask: ^BloodMask, x0, y0, x1, y1, radius: int) {
 		if radius <= 1 {
 			BloodMaskSet(mask, x, y)
 		} else {
-			BloodMaskCircle(mask, x, y, radius)
+			BloodMaskEllipse(mask, x, y, radius, radius)
 		}
 	}
 }
@@ -1342,7 +1334,7 @@ DrawBloodSplatArt :: proc(seed: u64, size: int, pool: bool) -> Art {
 			radius := max(int(base*(0.28-0.045*f32(i))), 2)
 			px := int(center+math.cos(sprayAngle)*distance)
 			py := int(center+math.sin(sprayAngle)*distance)
-			BloodMaskCircle(&mask, px, py, radius)
+			BloodMaskEllipse(&mask, px, py, radius, radius)
 		}
 	}
 
@@ -1355,7 +1347,7 @@ DrawBloodSplatArt :: proc(seed: u64, size: int, pool: bool) -> Art {
 		radius := 1+int(WorldNoiseHash(i, int(seed)+41, 0xB39)*(pool ? 3.2 : 2.4))
 		px := int(center+math.cos(angle)*distance)
 		py := int(center+math.sin(angle)*distance)
-		BloodMaskCircle(&mask, px, py, radius)
+		BloodMaskEllipse(&mask, px, py, radius, radius)
 	}
 
 	// Thin tendrils where the spray ran outward.
@@ -1378,7 +1370,7 @@ DrawBloodSplatArt :: proc(seed: u64, size: int, pool: bool) -> Art {
 		px := int(center+math.cos(angle)*distance)
 		py := int(center+math.sin(angle)*distance)
 		radius := 1+int(WorldNoiseHash(i, int(seed)+67, 0xB3F)*(pool ? 1.4 : 2.0))
-		BloodMaskClearCircle(&mask, px, py, radius)
+		BloodMaskClearEllipse(&mask, px, py, radius, radius)
 	}
 
 	// Render flat layers with a dark blood rim, matching the outlined sprites.

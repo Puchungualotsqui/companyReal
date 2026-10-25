@@ -15,6 +15,13 @@ WARRIOR_GARRISON_ESCORT_RATIO :: 0.15
 WARRIOR_ESCORT_RADIUS :: 30
 WARRIOR_BREACH_RADIUS :: 40
 
+// Melee units stop on a ring around their target and keep personal space, so a
+// crowd does not collapse into the same few pixels.
+MELEE_FAN_SLOTS :: 7
+MELEE_FAN_STEP :: 0.18
+MELEE_SEPARATION_RADIUS :: 2.0
+MELEE_SEPARATION_MAX_PUSH :: 0.30
+
 // Independent-town guards stay close to their hall and only fight units, never
 // buildings.
 NEUTRAL_GUARD_RADIUS :: 11
@@ -514,10 +521,35 @@ UnitWarriorEngage :: proc(w: ^World, unitSlot: int, state: ^StateWarrior, deltaT
 			WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
 	}
 
-	if distance > UnitDefaultRange(unit.type) {
+	attackRange := UnitDefaultRange(unit.type)
+	moveX, moveY := targetX, targetY
+	if unitTarget, ok := state.target.(TargetUnit); ok && UnitIsMelee(unit.type) {
+		standoff := UnitMeleeStandoff(unit.type, w.units[unitTarget.slot].type)
+		attackRange = max(attackRange, standoff)
+		if distance > attackRange {
+			dirX := WorldShortestWrappedDelta(unit.x-targetX, f32(w.maxX))
+			dirY := WorldShortestWrappedDelta(unit.y-targetY, f32(w.maxY))
+			length := math.sqrt(dirX*dirX+dirY*dirY)
+			if length > 0.001 {
+				angle := math.atan2(dirY, dirX)
+				fanSlot := (unitSlot+unitTarget.slot)%MELEE_FAN_SLOTS
+				angle += (f32(fanSlot)-f32(MELEE_FAN_SLOTS/2))*MELEE_FAN_STEP
+				moveX = WorldWrapPosition(targetX+math.cos(angle)*standoff, f32(w.maxX))
+				moveY = WorldWrapPosition(targetY+math.sin(angle)*standoff, f32(w.maxY))
+				// A wall can block the chosen slot; fall back to the target rather
+				// than dropping the chase, then separation pushes the bodies apart.
+				if !WorldTileWalkable(w, int(moveX), int(moveY), unit.type, unit.kingdome) {
+					moveX = targetX
+					moveY = targetY
+				}
+			}
+		}
+	}
+
+	if distance > attackRange {
 		speed := UnitDefaultSpeed(unit.type)
 		if unit.effects[.NoWater] do speed *= 0.7
-		_, blocked, _ := UnitStepTowards(w, unitSlot, targetX, targetY, speed*deltaTime)
+		_, blocked, _ := UnitStepTowards(w, unitSlot, moveX, moveY, speed*deltaTime)
 		return !blocked
 	}
 
@@ -527,6 +559,95 @@ UnitWarriorEngage :: proc(w: ^World, unitSlot: int, state: ^StateWarrior, deltaT
 		unit.cooldown = UnitDefaultCooldown(unit.type)
 	}
 	return true
+}
+
+// Melee attackers are pushed out of each other's bodies after movement. Each
+// unit only moves itself, which keeps the pass cheap and avoids re-linking the
+// spatial index while it is being walked.
+WorldMeleeSeparation :: proc(w: ^World) {
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	chunkSize := w.spatial.chunkSize
+	if worldWidth <= 0 || worldHeight <= 0 || chunkSize <= 0 ||
+		w.spatial.chunksX <= 0 || w.spatial.chunksY <= 0 {
+		return
+	}
+
+	for slot in 0 ..< UNIT_CAPACITY {
+		if !w.unitUsed[slot] do continue
+		unit := &w.units[slot]
+		if unit.type == nil || !UnitIsMelee(unit.type) do continue
+		state, isWarrior := unit.state.(StateWarrior)
+		if !isWarrior || state.activity != .Attacking do continue
+
+		x := WorldWrapPosition(unit.x, worldWidth)
+		y := WorldWrapPosition(unit.y, worldHeight)
+		unitRadius := UnitBodyRadius(unit.type)
+		firstX, countX := UnitNearbyChunkRange(
+			x,
+			MELEE_SEPARATION_RADIUS,
+			worldWidth,
+			chunkSize,
+			w.spatial.chunksX,
+		)
+		firstY, countY := UnitNearbyChunkRange(
+			y,
+			MELEE_SEPARATION_RADIUS,
+			worldHeight,
+			chunkSize,
+			w.spatial.chunksY,
+		)
+		pushX: f32
+		pushY: f32
+		for offsetX in 0 ..< countX {
+			chunkX := WorldWrapCoordinate(firstX+offsetX, w.spatial.chunksX)
+			for offsetY in 0 ..< countY {
+				chunkY := WorldWrapCoordinate(firstY+offsetY, w.spatial.chunksY)
+				chunk := chunkX*w.spatial.chunksY+chunkY
+				for other := w.spatial.unitHead[chunk]; other >= 0;
+					other = w.spatial.unitNext[other] {
+					if other == slot || !w.unitUsed[other] || w.units[other].health <= 0 {
+						continue
+					}
+					if w.units[other].type == nil do continue
+
+					deltaX := WorldShortestWrappedDelta(x-w.units.x[other], worldWidth)
+					deltaY := WorldShortestWrappedDelta(y-w.units.y[other], worldHeight)
+					distanceSquared := deltaX*deltaX+deltaY*deltaY
+					if distanceSquared >= MELEE_SEPARATION_RADIUS*MELEE_SEPARATION_RADIUS do continue
+					if UnitHiddenInside(w, other) do continue
+
+					minDistance :=
+						unitRadius+UnitBodyRadius(w.units[other].type)+UNIT_BODY_GAP
+					if distanceSquared >= minDistance*minDistance do continue
+
+					distance := math.sqrt(distanceSquared)
+					if distance < 0.0001 {
+						angle := WorldNoiseHash(slot, other, 0x5E9A)*6.2831853
+						deltaX = math.cos(angle)
+						deltaY = math.sin(angle)
+						distance = 1
+					}
+					overlap := minDistance-distance
+					pushX += deltaX/distance*overlap*0.5
+					pushY += deltaY/distance*overlap*0.5
+				}
+			}
+		}
+		if pushX == 0 && pushY == 0 do continue
+
+		pushLength := math.sqrt(pushX*pushX+pushY*pushY)
+		if pushLength > MELEE_SEPARATION_MAX_PUSH {
+			pushX = pushX/pushLength*MELEE_SEPARATION_MAX_PUSH
+			pushY = pushY/pushLength*MELEE_SEPARATION_MAX_PUSH
+		}
+		newX := WorldWrapPosition(unit.x+pushX, worldWidth)
+		newY := WorldWrapPosition(unit.y+pushY, worldHeight)
+		if !WorldTileWalkable(w, int(newX), int(newY), unit.type, unit.kingdome) do continue
+		unit.x = newX
+		unit.y = newY
+		SpatialUnitMove(w, slot)
+	}
 }
 
 WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {

@@ -162,6 +162,7 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		}
 		if w.unitUsed[unitSlot] do BloodBleedTick(w, unitSlot, deltaTime)
 	}
+	WorldMeleeSeparation(w)
 }
 
 WorldKingdomUpdate :: proc(w: ^World, deltaTime: f32) {
