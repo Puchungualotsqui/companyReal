@@ -2010,23 +2010,14 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	t := &w.kingdoms[kingdom].towns[town]
 
 	y := panel.y+UI_GROWTH_Y
-	if t.growthSpeed <= 0 {
-		reason: cstring = "No growth  -  no food or water"
-		if t.foodPotential <= 0 && t.waterPotential > 0 {
-			reason = "No growth  -  no food"
-		} else if t.waterPotential <= 0 && t.foodPotential > 0 {
-			reason = "No growth  -  no water"
-		}
-		UIText(reason, panel.x+UI_PAD, y, UI_COLOR_BAD)
-	} else {
-		eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
-		UIText(
-			fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta))),
-			panel.x+UI_PAD,
-			y,
-			UI_COLOR_DIM,
-		)
+	eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
+	label := fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta)))
+	labelColor := UI_COLOR_DIM
+	if t.foodPotential <= 0 || t.waterPotential <= 0 {
+		label = fmt.ctprintf("Starving  -  next %d in %ds", t.growthBatch, int(math.ceil(eta)))
+		labelColor = UI_COLOR_BAD
 	}
+	UIText(label, panel.x+UI_PAD, y, labelColor)
 
 	bar := rl.Rectangle{
 		panel.x+UI_PAD+164,

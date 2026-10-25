@@ -339,13 +339,10 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 	if populationNeed > 0 {
 		coverage = clamp(limitingSupply/populationNeed, 0, 1.5)
 	}
-	// A town with no food or water at all stalls completely. As soon as it has
-	// any supply the usual minimum speed applies again.
-	speed: f32 = 0
-	if limitingSupply > 0 {
-		speed = clamp(coverage, GROWTH_MIN_SPEED, GROWTH_MAX_SPEED)
-		speed *= 1+min(GROWTH_VILLAGER_SPEED_CAP, f32(town.villagers)*GROWTH_VILLAGER_SPEED_BONUS)
-	}
+	// A town always grows at least at the minimum speed, even with no food or
+	// water at all, so a bad start cannot permanently strand it.
+	speed := clamp(coverage, GROWTH_MIN_SPEED, GROWTH_MAX_SPEED)
+	speed *= 1+min(GROWTH_VILLAGER_SPEED_CAP, f32(town.villagers)*GROWTH_VILLAGER_SPEED_BONUS)
 	town.growthSpeed = speed
 
 	town.growthCooldown -= deltaTime*speed
