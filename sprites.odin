@@ -1710,7 +1710,7 @@ SpriteSet :: struct {
 	construction: [SPRITE_FACTION_COUNT]rl.Texture2D,
 	bloodSplat:   [BLOOD_SPLAT_VARIANTS]rl.Texture2D,
 	bloodPool:    [BLOOD_POOL_VARIANTS]rl.Texture2D,
-	gore:         [SPRITE_FACTION_COUNT][GorePartKind]rl.Texture2D,
+	gore:         [SPRITE_FACTION_COUNT][UnitKind][GorePartKind]rl.Texture2D,
 	particle:     [ParticleKind]rl.Texture2D,
 	effect:       [UnitEffects]rl.Texture2D,
 	fire:         rl.Texture2D,
@@ -1747,10 +1747,13 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 		set.construction[faction] = ArtToTexture(art)
 		rl.UnloadImage(art.image)
 
-		for part in ALL_GORE_PARTS {
-			goreArt := DrawGorePart(part, accent)
-			set.gore[faction][part] = ArtToTexture(goreArt)
-			rl.UnloadImage(goreArt.image)
+		for kind in ALL_UNIT_KINDS {
+			if kind == .Catapult do continue
+			for part in ALL_GORE_PARTS {
+				goreArt := DrawGorePart(kind, part, accent)
+				set.gore[faction][kind][part] = ArtToTexture(goreArt)
+				rl.UnloadImage(goreArt.image)
+			}
 		}
 	}
 	for kind in ALL_DECORATION_KINDS {
@@ -1768,10 +1771,14 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 		rl.UnloadImage(art.image)
 	}
 	for variant in 0 ..< BLOOD_SPLAT_VARIANTS {
-		set.bloodSplat[variant] = CreateBloodSplatTexture(u64(variant)+1, 48, false)
+		set.bloodSplat[variant] = ArtTakeTexture(
+			DrawBloodSplatArt(u64(variant)+1, BLOOD_SPLAT_TEXTURE_SIZE, false),
+		)
 	}
 	for variant in 0 ..< BLOOD_POOL_VARIANTS {
-		set.bloodPool[variant] = CreateBloodSplatTexture(u64(variant)+101, 96, true)
+		set.bloodPool[variant] = ArtTakeTexture(
+			DrawBloodSplatArt(u64(variant)+101, BLOOD_POOL_TEXTURE_SIZE, true),
+		)
 	}
 	set.fire = ArtToTexture(DrawFireSprite())
 	return set
@@ -1794,9 +1801,12 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 		if set.construction[faction].id != 0 {
 			rl.UnloadTexture(set.construction[faction])
 		}
-		for part in ALL_GORE_PARTS {
-			if set.gore[faction][part].id != 0 {
-				rl.UnloadTexture(set.gore[faction][part])
+		for kind in ALL_UNIT_KINDS {
+			if kind == .Catapult do continue
+			for part in ALL_GORE_PARTS {
+				if set.gore[faction][kind][part].id != 0 {
+					rl.UnloadTexture(set.gore[faction][kind][part])
+				}
 			}
 		}
 	}

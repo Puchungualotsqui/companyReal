@@ -19,6 +19,8 @@ BLOOD_DECAL_MIN_ZOOM :: 5
 BLOOD_TILE_SPLAT_MIN_ZOOM :: 9
 BLOOD_SPLAT_VARIANTS :: 8
 BLOOD_POOL_VARIANTS :: 4
+BLOOD_SPLAT_TEXTURE_SIZE :: 32
+BLOOD_POOL_TEXTURE_SIZE :: 48
 BLOOD_SPREAD_THRESHOLD :: 42
 BLOOD_DIRTY_BLOCK :: 32
 BLOOD_BLOCK_UPLOADS_PER_FRAME :: 64
@@ -37,15 +39,15 @@ BLOOD_PALETTE := [BLOOD_TINT_COUNT]rl.Color {
 }
 
 C_BONE := rl.Color{232, 222, 190, 255}
-C_ENTRAIL := rl.Color{196, 92, 96, 255}
-C_ENTRAIL_DARK := rl.Color{118, 34, 44, 255}
 
 // Greyscale art is tinted with BLOOD_PALETTE, so one texture serves every
-// creature that bleeds a different colour.
-C_SPLAT_DEEP := rl.Color{92, 92, 100, 255}
-C_SPLAT_DARK := rl.Color{138, 138, 146, 255}
-C_SPLAT_MID := rl.Color{198, 198, 206, 255}
-C_SPLAT_LIGHT := rl.Color{244, 244, 250, 255}
+// creature that bleeds a different colour. Bright greys keep the tinted
+// result close to the palette instead of muddying it.
+C_SPLAT_RIM := rl.Color{118, 118, 128, 255}
+C_SPLAT_DEEP := rl.Color{168, 168, 178, 255}
+C_SPLAT_DARK := rl.Color{202, 202, 212, 255}
+C_SPLAT_MID := rl.Color{228, 228, 238, 255}
+C_SPLAT_LIGHT := rl.Color{252, 252, 255, 255}
 
 BloodField :: struct {
 	amount:      []u8,
@@ -417,6 +419,7 @@ SpawnGorePart :: proc(
 	w: ^World,
 	x, y, z, scale: f32,
 	faction: int,
+	unitKind: UnitKind,
 	part: GorePartKind,
 ) {
 	partSize: f32 = 0.7
@@ -453,6 +456,7 @@ SpawnGorePart :: proc(
 		bounce = 0.34,
 		kind = .Gore,
 		variant = u8(int(part)%GORE_PART_COUNT),
+		goreKind = u8(int(unitKind)%len(ALL_UNIT_KINDS)),
 		faction = u8(clamp(faction, 0, SPRITE_FACTION_COUNT-1)),
 		tint = rl.Color{255, 255, 255, 255},
 	})
@@ -495,6 +499,8 @@ BloodDeath :: proc(
 		angle := PRandom(w)*6.2831853
 		speed := PRandomRange(w, 1.2, 4.8)
 		isBone := PRandom(w) < 0.22
+		chunkColor := rl.Color{255, 255, 255, 255}
+		if !isBone do chunkColor = BloodParticleColor(w, tint)
 		ParticleSpawn(w, Particle{
 			x = x,
 			y = y,
@@ -510,17 +516,24 @@ BloodDeath :: proc(
 			gravity = 25,
 			bounce = 0.3,
 			kind = isBone ? .Bone : .Gib,
-			tint = rl.Color{255, 255, 255, 255},
+			tint = chunkColor,
 		})
 	}
 
-	if kind != .Turtle {
-		parts := 1+int(PRandom(w)*3)
-		if scale > 1.3 do parts += 1
-		for _ in 0 ..< parts {
-			part := GorePartKind(int(PRandom(w)*GORE_PART_COUNT)%GORE_PART_COUNT)
-			SpawnGorePart(w, x, y, PRandomRange(w, 0.4, 0.9), scale, faction, part)
-		}
+	parts := 0
+	switch kind {
+	case .Catapult:
+		// Siege engines return above.
+	case .Giant:
+		parts = 2+int(PRandom(w)*3)
+	case .Turtle:
+		parts = 1+int(PRandom(w)*2)
+	case .Villager, .Builder, .CombatBuilder, .WaterCollector, .Farmer, .Knight, .Archer, .Mage, .Rogue, .Explorer:
+		parts = 1+int(PRandom(w)*3)
+	}
+	for _ in 0 ..< parts {
+		part := GorePartKind(int(PRandom(w)*GORE_PART_COUNT)%GORE_PART_COUNT)
+		SpawnGorePart(w, x, y, PRandomRange(w, 0.4, 0.9), scale, faction, kind, part)
 	}
 
 	if kind == .Mage {
@@ -1031,8 +1044,8 @@ BloodRenderUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
 
 				tint := BloodPaletteColor(w.blood.tint[index])
 				tone := clamp(smooth/210, 0, 1)
-				shade := (0.34+0.46*math.sqrt(tone))*(0.86+0.28*WorldNoiseHash(x, y, 0xB100D5))
-				alpha := u8(clamp(smooth*0.9, 0, 112))
+				shade := (0.42+0.46*math.sqrt(tone))*(0.88+0.24*WorldNoiseHash(x, y, 0xB100D5))
+				alpha := u8(clamp(smooth*1.05+20, 0, 130))
 				pixels[pixel+0] = u8(clamp(f32(tint.r)*shade, 0, 255))
 				pixels[pixel+1] = u8(clamp(f32(tint.g)*shade, 0, 255))
 				pixels[pixel+2] = u8(clamp(f32(tint.b)*shade, 0, 255))
@@ -1231,186 +1244,749 @@ BloodRenderGround :: proc(
 
 // --- procedural blood art ---------------------------------------------------
 
-CreateBloodSplatTexture :: proc(seed: u64, size: int, pool: bool) -> rl.Texture2D {
-	art := ArtInit(size, size)
-	centerX := f32(size)*0.5
-	centerY := f32(size)*0.5
-	base := f32(size)*(pool ? 0.255 : 0.215)
-	coreColor := C_SPLAT_DARK
-	midColor := C_SPLAT_MID
-	if pool {
-		coreColor = C_SPLAT_DEEP
-		midColor = C_SPLAT_DARK
-	}
-
-	lobes := 6+int(WorldNoiseHash(int(seed), 1, 0xB10)*3)
-	for i in 0 ..< lobes {
-		angle := 6.2831853*f32(i)/f32(lobes)+WorldNoiseHash(i, int(seed), 0xB11)*0.9
-		distance := base*WorldNoiseHash(i, int(seed)+3, 0xB12)*0.55
-		radiusX := int(base*(0.52+0.46*WorldNoiseHash(i, int(seed)+5, 0xB13)))
-		radiusY := int(base*(0.46+0.46*WorldNoiseHash(i, int(seed)+7, 0xB14)))
-		px := int(centerX+math.cos(angle)*distance)
-		py := int(centerY+math.sin(angle)*distance)
-		ArtEllipse(&art, px, py, max(radiusX, 1), max(radiusY, 1), coreColor)
-	}
-
-	for i in 0 ..< lobes {
-		angle := 6.2831853*f32(i)/f32(lobes)+WorldNoiseHash(i, int(seed)+11, 0xB15)*1.2
-		distance := base*WorldNoiseHash(i, int(seed)+13, 0xB16)*0.42
-		radiusX := int(base*(0.26+0.30*WorldNoiseHash(i, int(seed)+17, 0xB17)))
-		radiusY := int(base*(0.24+0.30*WorldNoiseHash(i, int(seed)+19, 0xB18)))
-		px := int(centerX+math.cos(angle)*distance)
-		py := int(centerY+math.sin(angle)*distance)
-		ArtEllipse(&art, px, py, max(radiusX, 1), max(radiusY, 1), midColor)
-	}
-
-	if !pool {
-		for i in 0 ..< 3 {
-			angle := WorldNoiseHash(i, int(seed)+23, 0xB19)*6.2831853
-			distance := base*WorldNoiseHash(i, int(seed)+29, 0xB1A)*0.30
-			px := int(centerX+math.cos(angle)*distance)
-			py := int(centerY+math.sin(angle)*distance)
-			ArtEllipse(&art, px, py, 1+int(base*0.12), 1+int(base*0.10), C_SPLAT_LIGHT)
-		}
-	}
-
-	// Satellite droplets give every splat an organic, directional silhouette.
-	droplets := 14+int(WorldNoiseHash(int(seed), 31, 0xB1B)*10)
-	if pool do droplets += 8
-	for i in 0 ..< droplets {
-		angle := WorldNoiseHash(i, int(seed)+33, 0xB1C)*6.2831853
-		distance := base*(0.82+WorldNoiseHash(i, int(seed)+37, 0xB1D)*1.35)
-		radius := 1+int(WorldNoiseHash(i, int(seed)+41, 0xB1E)*(pool ? 3.4 : 2.4))
-		px := int(centerX+math.cos(angle)*distance)
-		py := int(centerY+math.sin(angle)*distance)
-		ArtCircle(&art, px, py, radius, coreColor)
-		if radius > 2 {
-			ArtPixel(&art, px-1, py-1, midColor)
-		}
-	}
-
-	// A few thin tendrils where the spray ran outwards.
-	streaks := 3+int(WorldNoiseHash(int(seed), 43, 0xB1F)*4)
-	for i in 0 ..< streaks {
-		angle := WorldNoiseHash(i, int(seed)+47, 0xB20)*6.2831853
-		startX := int(centerX+math.cos(angle)*base*0.65)
-		startY := int(centerY+math.sin(angle)*base*0.65)
-		endX := int(centerX+math.cos(angle)*base*1.45)
-		endY := int(centerY+math.sin(angle)*base*1.45)
-		ArtLine(&art, startX, startY, endX, endY, coreColor)
-	}
-
-	// Punch small holes so the terrain shows through and the edge is not solid.
-	holes := 4+int(WorldNoiseHash(int(seed), 53, 0xB21)*5)
-	for i in 0 ..< holes {
-		angle := WorldNoiseHash(i, int(seed)+59, 0xB22)*6.2831853
-		distance := base*WorldNoiseHash(i, int(seed)+61, 0xB23)*0.75
-		px := int(centerX+math.cos(angle)*distance)
-		py := int(centerY+math.sin(angle)*distance)
-		radius := 1+int(WorldNoiseHash(i, int(seed)+67, 0xB24)*2.2)
-		ArtCircle(&art, px, py, radius, C_CLEAR)
-	}
-
-	return ArtTakeTexture(art)
+// Temporary coverage mask used while building a stain. The mask lets the
+// generator put a crisp dark rim around the whole silhouette instead of
+// outlining every overlapping lobe separately.
+BloodMask :: struct {
+	pixels: []bool,
+	width:  int,
+	height: int,
 }
 
-DrawGorePart :: proc(part: GorePartKind, accent: rl.Color) -> Art {
+BloodMaskSet :: proc(mask: ^BloodMask, x, y: int) {
+	if x < 0 || y < 0 || x >= mask.width || y >= mask.height do return
+	mask.pixels[y*mask.width+x] = true
+}
+
+BloodMaskClear :: proc(mask: ^BloodMask, x, y: int) {
+	if x < 0 || y < 0 || x >= mask.width || y >= mask.height do return
+	mask.pixels[y*mask.width+x] = false
+}
+
+BloodMaskEllipse :: proc(mask: ^BloodMask, cx, cy, rx, ry: int) {
+	if rx <= 0 || ry <= 0 do return
+	for y in -ry ..= ry {
+		for x in -rx ..= rx {
+			if x*x*ry*ry+y*y*rx*rx <= rx*rx*ry*ry {
+				BloodMaskSet(mask, cx+x, cy+y)
+			}
+		}
+	}
+}
+
+BloodMaskClearEllipse :: proc(mask: ^BloodMask, cx, cy, rx, ry: int) {
+	if rx <= 0 || ry <= 0 do return
+	for y in -ry ..= ry {
+		for x in -rx ..= rx {
+			if x*x*ry*ry+y*y*rx*rx <= rx*rx*ry*ry {
+				BloodMaskClear(mask, cx+x, cy+y)
+			}
+		}
+	}
+}
+
+BloodMaskCircle :: proc(mask: ^BloodMask, cx, cy, radius: int) {
+	BloodMaskEllipse(mask, cx, cy, radius, radius)
+}
+
+BloodMaskClearCircle :: proc(mask: ^BloodMask, cx, cy, radius: int) {
+	BloodMaskClearEllipse(mask, cx, cy, radius, radius)
+}
+
+BloodMaskLine :: proc(mask: ^BloodMask, x0, y0, x1, y1, radius: int) {
+	dx := x1-x0
+	dy := y1-y0
+	steps := max(abs(dx), abs(dy))
+	if steps <= 0 {
+		BloodMaskCircle(mask, x0, y0, max(radius, 1))
+		return
+	}
+	for step in 0 ..= steps {
+		t := f32(step)/f32(steps)
+		x := int(f32(x0)+f32(dx)*t+0.5)
+		y := int(f32(y0)+f32(dy)*t+0.5)
+		if radius <= 1 {
+			BloodMaskSet(mask, x, y)
+		} else {
+			BloodMaskCircle(mask, x, y, radius)
+		}
+	}
+}
+
+DrawBloodSplatArt :: proc(seed: u64, size: int, pool: bool) -> Art {
+	art := ArtInit(size, size)
+	maskPixels := make([]bool, size*size)
+	defer delete(maskPixels)
+	mask := BloodMask{pixels = maskPixels, width = size, height = size}
+
+	center := f32(size)*0.5
+	base := f32(size)*(pool ? 0.25 : 0.21)
+	sprayAngle := WorldNoiseHash(int(seed), 3, 0xB30)*6.2831853
+
+	// Main mass: overlapping, irregular lobes around the impact point.
+	lobes := 7+int(WorldNoiseHash(int(seed), 1, 0xB31)*4)
+	for i in 0 ..< lobes {
+		angle := 6.2831853*f32(i)/f32(lobes)+WorldNoiseHash(i, int(seed), 0xB32)*0.8
+		distance := base*WorldNoiseHash(i, int(seed)+3, 0xB33)*0.48
+		radiusX := int(base*(0.42+0.42*WorldNoiseHash(i, int(seed)+5, 0xB34)))
+		radiusY := int(base*(0.38+0.42*WorldNoiseHash(i, int(seed)+7, 0xB35)))
+		px := int(center+math.cos(angle)*distance)
+		py := int(center+math.sin(angle)*distance)
+		BloodMaskEllipse(&mask, px, py, max(radiusX, 2), max(radiusY, 2))
+	}
+
+	// Splats carry a directional spray; pools spread evenly.
+	if !pool {
+		for i in 0 ..< 4 {
+			distance := base*(0.25+0.22*f32(i))
+			radius := max(int(base*(0.28-0.045*f32(i))), 2)
+			px := int(center+math.cos(sprayAngle)*distance)
+			py := int(center+math.sin(sprayAngle)*distance)
+			BloodMaskCircle(&mask, px, py, radius)
+		}
+	}
+
+	// Satellite droplets break up the silhouette.
+	droplets := 14+int(WorldNoiseHash(int(seed), 31, 0xB36)*10)
+	if pool do droplets += 6
+	for i in 0 ..< droplets {
+		angle := WorldNoiseHash(i, int(seed)+33, 0xB37)*6.2831853
+		distance := base*(0.75+WorldNoiseHash(i, int(seed)+37, 0xB38)*(pool ? 0.80 : 0.95))
+		radius := 1+int(WorldNoiseHash(i, int(seed)+41, 0xB39)*(pool ? 3.2 : 2.4))
+		px := int(center+math.cos(angle)*distance)
+		py := int(center+math.sin(angle)*distance)
+		BloodMaskCircle(&mask, px, py, radius)
+	}
+
+	// Thin tendrils where the spray ran outward.
+	streaks := 3+int(WorldNoiseHash(int(seed), 43, 0xB3A)*4)
+	for i in 0 ..< streaks {
+		angle := WorldNoiseHash(i, int(seed)+47, 0xB3B)*6.2831853
+		startX := int(center+math.cos(angle)*base*0.55)
+		startY := int(center+math.sin(angle)*base*0.55)
+		endX := int(center+math.cos(angle)*base*1.55)
+		endY := int(center+math.sin(angle)*base*1.55)
+		BloodMaskLine(&mask, startX, startY, endX, endY, 1)
+	}
+
+	// Punch holes so the terrain shows through and the edge is not solid.
+	holes := (pool ? 2 : 3)+int(WorldNoiseHash(int(seed), 53, 0xB3C)*(pool ? 3 : 4))
+	for i in 0 ..< holes {
+		angle := WorldNoiseHash(i, int(seed)+59, 0xB3D)*6.2831853
+		distance := base*WorldNoiseHash(i, int(seed)+61, 0xB3E)*(pool ? 0.85 : 0.70)
+		if pool do distance += base*0.30
+		px := int(center+math.cos(angle)*distance)
+		py := int(center+math.sin(angle)*distance)
+		radius := 1+int(WorldNoiseHash(i, int(seed)+67, 0xB3F)*(pool ? 1.4 : 2.0))
+		BloodMaskClearCircle(&mask, px, py, radius)
+	}
+
+	// Render flat layers with a dark blood rim, matching the outlined sprites.
+	offsets := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
+	for y in 0 ..< size {
+		for x in 0 ..< size {
+			if !mask.pixels[y*size+x] do continue
+			edge := false
+			for offset in offsets {
+				nx := x+offset[0]
+				ny := y+offset[1]
+				if nx < 0 || ny < 0 || nx >= size || ny >= size || !mask.pixels[ny*size+nx] {
+					edge = true
+					break
+				}
+			}
+			if edge {
+				ArtPixel(&art, x, y, C_SPLAT_RIM)
+				continue
+			}
+
+			dx := (f32(x)+0.5-center)/base
+			dy := (f32(y)+0.5-center)/base
+			distance := math.sqrt(dx*dx+dy*dy)
+			grain := WorldNoiseHash(x/2, y/2, seed+0xB40)
+			tone: rl.Color
+			if pool {
+				if distance < 0.40+grain*0.12 {
+					tone = C_SPLAT_DEEP
+				} else if distance < 0.72+grain*0.10 {
+					tone = C_SPLAT_DARK
+				} else {
+					tone = C_SPLAT_MID
+				}
+			} else {
+				if distance < 0.34+grain*0.10 {
+					tone = C_SPLAT_LIGHT
+				} else if distance < 0.68+grain*0.10 {
+					tone = C_SPLAT_MID
+				} else {
+					tone = C_SPLAT_DARK
+				}
+			}
+			ArtPixel(&art, x, y, tone)
+		}
+	}
+
+	// Stray specks around the stain sell the spray direction.
+	specks := 10+int(WorldNoiseHash(int(seed), 71, 0xB41)*8)
+	for i in 0 ..< specks {
+		angle := WorldNoiseHash(i, int(seed)+73, 0xB42)*6.2831853
+		distance := base*(1.2+WorldNoiseHash(i, int(seed)+79, 0xB43)*(pool ? 0.6 : 0.7))
+		px := int(center+math.cos(angle)*distance)
+		py := int(center+math.sin(angle)*distance)
+		radius := 1+int(WorldNoiseHash(i, int(seed)+83, 0xB44)*1.6)
+		ArtCircle(&art, px, py, radius, C_SPLAT_RIM)
+		if radius > 1 {
+			ArtPixel(&art, px, py, C_SPLAT_DARK)
+		}
+	}
+
+	return art
+}
+
+GoreHeadgear :: enum {
+	Hair,
+	Bald,
+	Helmet,
+	Cap,
+	Hood,
+	WideHat,
+	StrawHat,
+	Headwrap,
+	ArcaneHat,
+}
+
+// Colours and silhouette cues borrowed from each unit sprite so a severed
+// limb reads as belonging to the unit that actually died.
+GoreLook :: struct {
+	skin:      rl.Color, // exposed flesh
+	skinDark:  rl.Color, // shadowed flesh
+	hair:      rl.Color, // hair, mane or beard
+	body:      rl.Color, // main garment or armour
+	bodyDark:  rl.Color, // shaded garment or armour
+	bodyLight: rl.Color, // trim on garment or armour
+	boot:      rl.Color, // boots and belts
+	hat:       rl.Color, // headgear
+	hatDark:   rl.Color, // headgear shadow
+	headgear:  GoreHeadgear,
+	armored:   bool, // torso and limbs show plate instead of cloth
+}
+
+GoreLookForUnit :: proc(kind: UnitKind) -> GoreLook {
+	look := GoreLook {
+		skin      = C_SKIN,
+		skinDark  = C_SKIN_DARK,
+		hair      = C_HAIR,
+		body      = C_CLOTH,
+		bodyDark  = C_CLOTH_DARK,
+		bodyLight = C_CLOTH_LIGHT,
+		boot      = C_WOOD_DARKEST,
+		hat       = C_CLOTH_DARK,
+		hatDark    = C_CLOTH_DARKEST,
+		headgear  = .Hair,
+		armored   = false,
+	}
+	switch kind {
+	case .Villager:
+	case .Builder:
+		look.body = C_LEAF_DARK
+		look.bodyDark = C_LEAF_DARKEST
+		look.bodyLight = C_LEAF
+		look.hat = C_WOOD_DARK
+		look.hatDark = C_WOOD_DARKEST
+		look.headgear = .Cap
+	case .CombatBuilder:
+		look.body = C_IRON_DARK
+		look.bodyDark = C_IRON_DARK
+		look.bodyLight = C_IRON
+		look.hat = C_IRON
+		look.hatDark = C_IRON_DARK
+		look.headgear = .Helmet
+		look.armored = true
+	case .WaterCollector:
+		look.body = C_WATER_DARK
+		look.bodyDark = C_WATER_DARK
+		look.bodyLight = C_WATER_LIGHT
+		look.hat = C_WATER_DARK
+		look.hatDark = C_WATER_DARK
+		look.headgear = .Headwrap
+	case .Farmer:
+		look.body = C_LEAF_DARK
+		look.bodyDark = C_LEAF_DARKEST
+		look.bodyLight = C_LEAF
+		look.hat = C_GOLD
+		look.hatDark = C_GOLD_DARK
+		look.headgear = .StrawHat
+	case .Knight:
+		look.body = C_IRON_DARK
+		look.bodyDark = C_IRON_DARK
+		look.bodyLight = C_IRON_LIGHT
+		look.hat = C_IRON
+		look.hatDark = C_IRON_DARK
+		look.headgear = .Helmet
+		look.armored = true
+	case .Archer:
+		look.body = C_LEAF_DARK
+		look.bodyDark = C_LEAF_DARKEST
+		look.bodyLight = C_LEAF
+		look.hat = C_LEAF_DARK
+		look.hatDark = C_LEAF_DARKEST
+		look.headgear = .Cap
+	case .Mage:
+		look.skin = rl.Color{214, 198, 196, 255}
+		look.skinDark = rl.Color{160, 138, 150, 255}
+		look.hair = C_WHITE
+		look.body = C_ARCANE_DARK
+		look.bodyDark = rl.Color{40, 26, 70, 255}
+		look.bodyLight = C_ARCANE
+		look.hat = C_ARCANE_DARK
+		look.hatDark = rl.Color{40, 26, 70, 255}
+		look.headgear = .ArcaneHat
+	case .Rogue:
+		look.body = C_CLOTH_DARKEST
+		look.bodyDark = rl.Color{30, 26, 40, 255}
+		look.bodyLight = C_CLOTH_DARK
+		look.hat = C_CLOTH_DARKEST
+		look.hatDark = rl.Color{30, 26, 40, 255}
+		look.headgear = .Hood
+	case .Explorer:
+		look.body = C_CLOTH_LIGHT
+		look.bodyDark = C_CLOTH
+		look.bodyLight = C_CLOTH_LIGHT
+		look.hat = C_WOOD_DARK
+		look.hatDark = C_WOOD_DARKEST
+		look.headgear = .WideHat
+	case .Giant:
+		look.body = C_WOOD_DARK
+		look.bodyDark = C_WOOD_DARKEST
+		look.bodyLight = C_WOOD
+		look.headgear = .Bald
+	case .Turtle, .Catapult:
+		// Dedicated art; these never use a humanoid body.
+	}
+	return look
+}
+
+GoreBloodColors :: proc(tint: u8) -> (entrail, entrailDark, entrailLight: rl.Color) {
+	base := BloodPaletteColor(tint)
+	entrail = CShade(base, 1.32)
+	entrailDark = CShade(base, 0.58)
+	entrailLight = CShade(base, 1.85)
+	return
+}
+
+DrawHumanoidGoreHead :: proc(
+	look: GoreLook,
+	accent: rl.Color,
+	entrail, entrailDark: rl.Color,
+) -> Art {
+	art := ArtInit(12, 12)
+	ArtEllipse(&art, 6, 4, 4, 4, C_OUTLINE)
+	ArtEllipse(&art, 6, 4, 3, 3, look.skin)
+	ArtRect(&art, 4, 6, 5, 1, look.skinDark)
+	ArtPixel(&art, 4, 4, C_OUTLINE)
+	ArtPixel(&art, 8, 4, C_OUTLINE)
+	ArtPixel(&art, 5, 5, look.skinDark)
+	ArtRect(&art, 4, 8, 5, 1, entrailDark)
+	ArtRect(&art, 5, 9, 3, 1, entrail)
+	ArtPixel(&art, 5, 10, C_BONE)
+	ArtPixel(&art, 8, 10, C_BONE)
+
+	switch look.headgear {
+	case .Hair:
+		ArtRect(&art, 3, 1, 6, 2, look.hair)
+		ArtRect(&art, 2, 3, 1, 2, look.hair)
+		ArtRect(&art, 9, 3, 1, 2, look.hair)
+		ArtPixel(&art, 5, 1, CShade(look.hair, 1.2))
+	case .Bald:
+		ArtPixel(&art, 5, 0, look.skinDark)
+		ArtPixel(&art, 6, 0, look.skinDark)
+		ArtPixel(&art, 4, 1, look.skinDark)
+		ArtRect(&art, 5, 7, 3, 1, look.hair)
+	case .Helmet:
+		ArtEllipse(&art, 6, 3, 4, 4, C_OUTLINE)
+		ArtEllipse(&art, 6, 3, 3, 3, look.hat)
+		ArtRect(&art, 3, 3, 7, 1, look.hatDark)
+		ArtRect(&art, 4, 5, 5, 1, C_OUTLINE)
+		ArtPixel(&art, 4, 5, look.hatDark)
+		ArtPixel(&art, 8, 5, look.hatDark)
+		ArtRect(&art, 5, 7, 3, 1, look.skinDark)
+		ArtRect(&art, 6, 0, 2, 2, accent)
+		ArtPixel(&art, 7, 0, CShade(accent, 1.25))
+	case .Cap:
+		ArtRect(&art, 3, 1, 6, 2, C_OUTLINE)
+		ArtRect(&art, 4, 1, 5, 1, look.hat)
+		ArtRect(&art, 2, 2, 8, 1, C_OUTLINE)
+		ArtRect(&art, 3, 2, 6, 1, look.hatDark)
+	case .Hood:
+		ArtRect(&art, 2, 1, 8, 3, C_OUTLINE)
+		ArtRect(&art, 3, 1, 6, 2, look.hat)
+		ArtRect(&art, 2, 2, 1, 4, C_OUTLINE)
+		ArtRect(&art, 9, 2, 1, 4, C_OUTLINE)
+		ArtRect(&art, 3, 2, 1, 3, look.hat)
+		ArtRect(&art, 8, 2, 1, 3, look.hat)
+		ArtPixel(&art, 4, 4, accent)
+		ArtPixel(&art, 8, 4, accent)
+	case .WideHat:
+		ArtRect(&art, 1, 1, 10, 1, C_OUTLINE)
+		ArtRect(&art, 2, 1, 8, 1, look.hatDark)
+		ArtRect(&art, 4, 0, 4, 2, C_OUTLINE)
+		ArtRect(&art, 5, 0, 2, 1, look.hat)
+	case .StrawHat:
+		ArtRect(&art, 1, 2, 10, 1, C_OUTLINE)
+		ArtRect(&art, 2, 2, 8, 1, look.hatDark)
+		ArtRect(&art, 3, 1, 6, 1, look.hat)
+		ArtRect(&art, 4, 0, 4, 2, C_OUTLINE)
+		ArtRect(&art, 5, 0, 2, 1, look.hat)
+	case .Headwrap:
+		ArtRect(&art, 2, 1, 8, 2, C_OUTLINE)
+		ArtRect(&art, 3, 1, 6, 1, look.hat)
+		ArtRect(&art, 3, 2, 6, 1, look.hatDark)
+		ArtPixel(&art, 5, 1, look.bodyLight)
+	case .ArcaneHat:
+		ArtRect(&art, 1, 2, 10, 1, C_OUTLINE)
+		ArtRect(&art, 2, 2, 8, 1, look.hat)
+		hat := [3]Point{{4, 2}, {9, 2}, {7, 0}}
+		ArtPolygon(&art, hat[:], C_OUTLINE)
+		innerHat := [3]Point{{5, 2}, {8, 2}, {7, 1}}
+		ArtPolygon(&art, innerHat[:], look.hatDark)
+		ArtPixel(&art, 7, 1, C_ARCANE_GLOW)
+		ArtRect(&art, 5, 5, 4, 1, C_WHITE)
+	}
+	return art
+}
+
+DrawHumanoidGoreArm :: proc(
+	look: GoreLook,
+	accent: rl.Color,
+	entrail, entrailDark: rl.Color,
+) -> Art {
+	art := ArtInit(15, 7)
+	ArtEllipse(&art, 3, 3, 3, 2, C_OUTLINE)
+	ArtEllipse(&art, 6, 3, 3, 2, C_OUTLINE)
+	ArtEllipse(&art, 9, 2, 2, 2, C_OUTLINE)
+	ArtEllipse(&art, 11, 2, 2, 2, C_OUTLINE)
+	ArtEllipse(&art, 3, 3, 2, 1, look.body)
+	ArtEllipse(&art, 6, 3, 2, 1, look.bodyDark)
+	ArtEllipse(&art, 9, 2, 1, 1, look.skin)
+	ArtEllipse(&art, 11, 2, 1, 1, look.skin)
+	ArtRect(&art, 9, 0, 4, 4, C_OUTLINE)
+	ArtRect(&art, 10, 1, 2, 2, look.armored ? look.bodyLight : accent)
+	ArtPixel(&art, 11, 1, CShade(look.armored ? look.bodyLight : accent, 1.2))
+	ArtEllipse(&art, 1, 3, 2, 1, entrailDark)
+	ArtPixel(&art, 1, 3, C_BONE)
+	ArtPixel(&art, 4, 4, entrailDark)
+	ArtPixel(&art, 6, 2, entrail)
+	if look.armored {
+		ArtLine(&art, 4, 2, 8, 2, look.bodyLight)
+	}
+	return art
+}
+
+DrawHumanoidGoreLeg :: proc(look: GoreLook, entrail, entrailDark: rl.Color) -> Art {
+	art := ArtInit(9, 14)
+	ArtEllipse(&art, 4, 3, 3, 3, C_OUTLINE)
+	ArtEllipse(&art, 4, 6, 3, 3, C_OUTLINE)
+	ArtEllipse(&art, 4, 9, 2, 2, C_OUTLINE)
+	ArtEllipse(&art, 4, 12, 2, 2, C_OUTLINE)
+	ArtEllipse(&art, 4, 3, 2, 2, look.body)
+	ArtEllipse(&art, 4, 6, 2, 2, look.bodyDark)
+	ArtEllipse(&art, 4, 9, 1, 1, look.armored ? look.bodyLight : look.skin)
+	ArtEllipse(&art, 4, 12, 1, 1, look.armored ? look.bodyLight : look.skin)
+	ArtRect(&art, 2, 11, 4, 3, C_OUTLINE)
+	ArtRect(&art, 3, 11, 3, 2, look.boot)
+	ArtPixel(&art, 3, 12, CShade(look.boot, 1.2))
+	ArtEllipse(&art, 4, 1, 2, 1, entrailDark)
+	ArtPixel(&art, 4, 1, C_BONE)
+	ArtPixel(&art, 5, 5, entrailDark)
+	ArtPixel(&art, 3, 7, entrail)
+	if look.armored {
+		ArtLine(&art, 2, 7, 6, 7, look.bodyLight)
+	}
+	return art
+}
+
+DrawHumanoidGoreTorso :: proc(
+	look: GoreLook,
+	accent: rl.Color,
+	entrail, entrailDark, entrailLight: rl.Color,
+) -> Art {
+	art := ArtInit(16, 14)
+	spans := [12]int{4, 7, 9, 10, 11, 11, 11, 10, 9, 8, 7, 6}
+	center := 8
+	for y in 0 ..< len(spans) {
+		width := spans[y]
+		x := center-width/2
+		ArtRect(&art, x, y+1, width, 1, C_OUTLINE)
+	}
+	for y in 1 ..< len(spans)-1 {
+		width := spans[y]-2
+		x := center-width/2
+		ArtRect(&art, x, y+1, width, 1, look.body)
+	}
+	for y in 2 ..< 8 {
+		width := spans[y]-4
+		x := center-width/2
+		ArtRect(&art, x, y+1, width, 1, look.bodyDark)
+	}
+	ArtRect(&art, 4, 6, 8, 1, accent)
+	if look.armored {
+		ArtLine(&art, 3, 5, 13, 5, look.bodyLight)
+		ArtLine(&art, 4, 9, 12, 9, look.bodyLight)
+		ArtPixel(&art, 8, 7, C_GOLD_LIGHT)
+	} else {
+		ArtRect(&art, 5, 7, 6, 1, accent)
+	}
+	ArtRect(&art, 5, 1, 6, 2, entrailDark)
+	ArtRect(&art, 6, 1, 4, 1, entrail)
+	ArtRect(&art, 4, 9, 8, 2, entrailDark)
+	ArtRect(&art, 5, 10, 6, 1, entrail)
+	ArtRect(&art, 6, 10, 4, 1, entrailLight)
+	ArtPixel(&art, 6, 11, C_BONE)
+	ArtPixel(&art, 8, 11, C_BONE)
+	ArtPixel(&art, 10, 11, C_BONE)
+	ArtLine(&art, 5, 4, 10, 8, entrailDark)
+	ArtPixel(&art, 10, 5, entrail)
+	ArtPixel(&art, 3, 7, entrailDark)
+	return art
+}
+
+DrawHumanoidGoreHand :: proc(look: GoreLook, entrail, entrailDark: rl.Color) -> Art {
+	art := ArtInit(7, 7)
+	ArtEllipse(&art, 3, 3, 2, 2, C_OUTLINE)
+	ArtEllipse(&art, 3, 3, 1, 1, look.skin)
+	ArtPixel(&art, 4, 2, look.skinDark)
+	ArtRect(&art, 0, 2, 2, 2, entrailDark)
+	ArtPixel(&art, 0, 2, C_BONE)
+	ArtPixel(&art, 1, 3, entrail)
+	return art
+}
+
+DrawHumanoidGoreIntestine :: proc(entrail, entrailDark, entrailLight: rl.Color) -> Art {
+	art := ArtInit(17, 10)
+	for i in 0 ..< 6 {
+		x := 2+i*2
+		y := 5+int(math.sin(f32(i)*1.7)*2)
+		ArtCircle(&art, x, y, 2, C_OUTLINE)
+		ArtCircle(&art, x, y, 1, entrail)
+	}
+	ArtPixel(&art, 4, 3, entrailDark)
+	ArtPixel(&art, 10, 5, entrailDark)
+	ArtPixel(&art, 7, 7, entrailLight)
+	ArtPixel(&art, 12, 4, entrailLight)
+	return art
+}
+
+DrawGiantGorePart :: proc(part: GorePartKind, accent, entrail, entrailDark: rl.Color) -> Art {
 	switch part {
 	case .Head:
-		art := ArtInit(10, 10)
-		ArtEllipse(&art, 5, 4, 4, 4, C_OUTLINE)
-		ArtEllipse(&art, 5, 4, 3, 3, C_SKIN)
-		ArtRect(&art, 3, 1, 5, 2, C_HAIR)
-		ArtPixel(&art, 3, 4, C_OUTLINE)
-		ArtPixel(&art, 6, 4, C_OUTLINE)
-		ArtPixel(&art, 4, 5, C_SKIN_DARK)
-		ArtRect(&art, 4, 6, 3, 1, C_ENTRAIL_DARK)
-		ArtLine(&art, 2, 5, 3, 8, C_ENTRAIL)
-		ArtRect(&art, 4, 8, 3, 1, C_ENTRAIL_DARK)
+		art := ArtInit(16, 16)
+		ArtEllipse(&art, 8, 6, 6, 6, C_OUTLINE)
+		ArtEllipse(&art, 8, 6, 5, 5, C_SKIN)
+		ArtRect(&art, 4, 9, 9, 2, C_SKIN_DARK)
+		ArtRect(&art, 4, 1, 9, 3, C_HAIR)
+		ArtRect(&art, 3, 4, 2, 3, C_HAIR)
+		ArtRect(&art, 12, 4, 2, 3, C_HAIR)
+		ArtPixel(&art, 6, 6, C_OUTLINE)
+		ArtPixel(&art, 10, 6, C_OUTLINE)
+		ArtRect(&art, 6, 8, 5, 1, C_HAIR)
 		ArtPixel(&art, 5, 9, C_BONE)
+		ArtPixel(&art, 11, 9, C_BONE)
+		ArtRect(&art, 6, 11, 5, 1, entrailDark)
+		ArtRect(&art, 7, 12, 3, 1, entrail)
+		ArtPixel(&art, 7, 14, C_BONE)
+		ArtPixel(&art, 10, 14, C_BONE)
 		return art
 	case .Arm:
-		art := ArtInit(13, 6)
-		ArtEllipse(&art, 3, 3, 3, 2, C_OUTLINE)
-		ArtEllipse(&art, 6, 3, 3, 2, C_OUTLINE)
-		ArtEllipse(&art, 9, 2, 2, 2, C_OUTLINE)
-		ArtEllipse(&art, 11, 2, 2, 2, C_OUTLINE)
-		ArtEllipse(&art, 3, 3, 2, 1, C_SKIN)
-		ArtEllipse(&art, 6, 3, 2, 1, C_SKIN)
-		ArtEllipse(&art, 9, 2, 1, 1, C_SKIN)
-		ArtEllipse(&art, 11, 2, 1, 1, C_SKIN)
-		ArtRect(&art, 9, 0, 4, 4, C_OUTLINE)
-		ArtRect(&art, 10, 1, 2, 2, accent)
-		ArtEllipse(&art, 1, 3, 2, 1, C_ENTRAIL_DARK)
-		ArtPixel(&art, 1, 3, C_BONE)
-		ArtPixel(&art, 4, 4, C_ENTRAIL_DARK)
-		ArtPixel(&art, 6, 2, C_ENTRAIL)
+		art := ArtInit(22, 11)
+		ArtEllipse(&art, 4, 5, 4, 3, C_OUTLINE)
+		ArtEllipse(&art, 9, 5, 4, 3, C_OUTLINE)
+		ArtEllipse(&art, 14, 4, 3, 3, C_OUTLINE)
+		ArtEllipse(&art, 18, 4, 3, 3, C_OUTLINE)
+		ArtEllipse(&art, 4, 5, 3, 2, C_SKIN_DARK)
+		ArtEllipse(&art, 9, 5, 3, 2, C_SKIN)
+		ArtEllipse(&art, 14, 4, 2, 2, C_SKIN_DARK)
+		ArtEllipse(&art, 18, 4, 2, 2, C_SKIN)
+		ArtRect(&art, 15, 1, 6, 6, C_OUTLINE)
+		ArtRect(&art, 16, 2, 4, 4, C_WOOD_DARK)
+		ArtRect(&art, 16, 2, 4, 1, C_WOOD_LIGHT)
+		ArtEllipse(&art, 1, 5, 2, 2, entrailDark)
+		ArtPixel(&art, 1, 5, C_BONE)
+		ArtPixel(&art, 6, 6, entrailDark)
+		ArtPixel(&art, 9, 4, entrail)
 		return art
 	case .Leg:
-		art := ArtInit(8, 13)
-		ArtEllipse(&art, 4, 3, 3, 3, C_OUTLINE)
-		ArtEllipse(&art, 4, 6, 3, 3, C_OUTLINE)
-		ArtEllipse(&art, 4, 9, 2, 2, C_OUTLINE)
-		ArtEllipse(&art, 4, 11, 2, 2, C_OUTLINE)
-		ArtEllipse(&art, 4, 3, 2, 2, C_SKIN)
-		ArtEllipse(&art, 4, 6, 2, 2, C_SKIN)
-		ArtEllipse(&art, 4, 9, 1, 1, C_SKIN)
-		ArtRect(&art, 2, 10, 4, 3, C_OUTLINE)
-		ArtRect(&art, 2, 10, 4, 2, C_WOOD_DARKEST)
-		ArtPixel(&art, 3, 10, C_WOOD)
-		ArtEllipse(&art, 4, 1, 2, 1, C_ENTRAIL_DARK)
-		ArtPixel(&art, 4, 1, C_BONE)
-		ArtPixel(&art, 5, 5, C_ENTRAIL_DARK)
+		art := ArtInit(14, 20)
+		ArtEllipse(&art, 7, 4, 5, 4, C_OUTLINE)
+		ArtEllipse(&art, 7, 9, 4, 4, C_OUTLINE)
+		ArtEllipse(&art, 7, 14, 3, 3, C_OUTLINE)
+		ArtEllipse(&art, 7, 17, 3, 3, C_OUTLINE)
+		ArtEllipse(&art, 7, 4, 4, 3, C_SKIN)
+		ArtEllipse(&art, 7, 9, 3, 3, C_SKIN_DARK)
+		ArtEllipse(&art, 7, 14, 2, 2, C_SKIN)
+		ArtEllipse(&art, 7, 17, 2, 2, C_SKIN_DARK)
+		ArtRect(&art, 3, 17, 8, 3, C_OUTLINE)
+		ArtRect(&art, 4, 17, 6, 2, C_SKIN_DARK)
+		ArtPixel(&art, 4, 17, C_SKIN)
+		ArtRect(&art, 4, 6, 6, 2, accent)
+		ArtRect(&art, 4, 6, 6, 1, CShade(accent, 1.3))
+		ArtEllipse(&art, 7, 1, 3, 2, entrailDark)
+		ArtPixel(&art, 7, 1, C_BONE)
+		ArtPixel(&art, 8, 3, entrailDark)
+		ArtPixel(&art, 6, 6, entrail)
 		return art
 	case .Torso:
-		art := ArtInit(15, 13)
-		spans := [12]int{4, 7, 9, 10, 11, 11, 11, 10, 9, 8, 7, 6}
+		art := ArtInit(22, 18)
+		spans := [15]int{6, 10, 13, 15, 16, 16, 16, 16, 15, 14, 13, 12, 11, 10, 8}
+		center := 11
 		for y in 0 ..< len(spans) {
 			width := spans[y]
-			x := 7-width/2
-			ArtRect(&art, x, y, width, 1, C_OUTLINE)
+			x := center-width/2
+			ArtRect(&art, x, y+1, width, 1, C_OUTLINE)
 		}
 		for y in 1 ..< len(spans)-1 {
 			width := spans[y]-2
-			x := 7-width/2
-			ArtRect(&art, x, y, width, 1, C_SKIN)
+			x := center-width/2
+			ArtRect(&art, x, y+1, width, 1, C_SKIN)
 		}
-		for y in 2 ..< 7 {
-			width := spans[y]-4
-			x := 7-width/2
-			ArtRect(&art, x, y, width, 1, accent)
+		for y in 3 ..< 10 {
+			width := spans[y]-6
+			x := center-width/2
+			ArtRect(&art, x, y+1, width, 1, C_SKIN_DARK)
 		}
-		ArtRect(&art, 5, 0, 3, 2, C_ENTRAIL_DARK)
-		ArtRect(&art, 4, 8, 6, 2, C_ENTRAIL_DARK)
-		ArtRect(&art, 5, 9, 4, 1, C_ENTRAIL)
-		ArtPixel(&art, 5, 10, C_BONE)
-		ArtPixel(&art, 7, 10, C_BONE)
-		ArtPixel(&art, 9, 10, C_BONE)
-		ArtLine(&art, 5, 3, 9, 7, C_ENTRAIL_DARK)
-		ArtPixel(&art, 9, 4, C_ENTRAIL)
-		ArtPixel(&art, 4, 6, C_ENTRAIL_DARK)
-		ArtPixel(&art, 10, 7, C_ENTRAIL)
-		ArtPixel(&art, 2, 4, C_ENTRAIL_DARK)
+		ArtRect(&art, 3, 2, 16, 3, C_WOOD_DARK)
+		ArtRect(&art, 3, 2, 16, 1, C_WOOD_LIGHT)
+		ArtRect(&art, 4, 13, 14, 3, C_WOOD_DARKEST)
+		ArtRect(&art, 4, 13, 14, 1, accent)
+		ArtRect(&art, 7, 5, 8, 2, entrailDark)
+		ArtRect(&art, 8, 5, 6, 1, entrail)
+		ArtRect(&art, 6, 9, 10, 3, entrailDark)
+		ArtRect(&art, 7, 10, 8, 2, entrail)
+		ArtRect(&art, 9, 11, 5, 1, CShade(entrail, 1.4))
+		ArtPixel(&art, 8, 12, C_BONE)
+		ArtPixel(&art, 12, 12, C_BONE)
+		ArtPixel(&art, 15, 12, C_BONE)
 		return art
 	case .Hand:
-		art := ArtInit(6, 6)
+		art := ArtInit(10, 10)
+		ArtEllipse(&art, 5, 5, 4, 4, C_OUTLINE)
+		ArtEllipse(&art, 5, 5, 3, 3, C_SKIN)
+		ArtPixel(&art, 4, 5, C_SKIN_DARK)
+		ArtPixel(&art, 6, 5, C_SKIN_DARK)
+		ArtRect(&art, 0, 3, 3, 3, entrailDark)
+		ArtPixel(&art, 1, 4, C_BONE)
+		ArtPixel(&art, 2, 5, entrail)
+		return art
+	case .Intestine:
+		art := ArtInit(22, 12)
+		for i in 0 ..< 8 {
+			x := 2+i*2
+			y := 6+int(math.sin(f32(i)*1.5)*3)
+			ArtCircle(&art, x, y, 2, C_OUTLINE)
+			ArtCircle(&art, x, y, 1, entrail)
+		}
+		ArtPixel(&art, 6, 3, entrailDark)
+		ArtPixel(&art, 12, 5, entrailDark)
+		ArtPixel(&art, 18, 7, CShade(entrail, 1.4))
+		return art
+	}
+	unreachable()
+}
+
+DrawTurtleGorePart :: proc(part: GorePartKind, accent, entrail, entrailDark: rl.Color) -> Art {
+	switch part {
+	case .Head:
+		art := ArtInit(12, 10)
+		ArtEllipse(&art, 6, 4, 4, 3, C_OUTLINE)
+		ArtEllipse(&art, 6, 4, 3, 2, C_LEAF_LIGHT)
+		ArtRect(&art, 8, 4, 3, 2, C_OUTLINE)
+		ArtRect(&art, 9, 4, 2, 1, C_GOLD_DARK)
+		ArtPixel(&art, 5, 3, C_OUTLINE)
+		ArtPixel(&art, 7, 3, C_OUTLINE)
+		ArtPixel(&art, 5, 5, C_LEAF_DARK)
+		ArtRect(&art, 3, 7, 6, 1, entrailDark)
+		ArtRect(&art, 4, 8, 4, 1, entrail)
+		ArtPixel(&art, 5, 9, C_BONE)
+		return art
+	case .Arm, .Leg:
+		art := ArtInit(14, 8)
+		ArtEllipse(&art, 5, 4, 5, 3, C_OUTLINE)
+		ArtEllipse(&art, 5, 4, 4, 2, C_LEAF_LIGHT)
+		ArtEllipse(&art, 10, 3, 3, 2, C_OUTLINE)
+		ArtEllipse(&art, 10, 3, 2, 1, C_LEAF)
+		ArtPixel(&art, 12, 2, C_LEAF_DARK)
+		ArtPixel(&art, 12, 4, C_LEAF_DARK)
+		ArtPixel(&art, 2, 4, C_LEAF_DARK)
+		ArtEllipse(&art, 1, 4, 2, 1, entrailDark)
+		ArtPixel(&art, 1, 4, C_BONE)
+		ArtPixel(&art, 5, 5, entrailDark)
+		return art
+	case .Torso:
+		art := ArtInit(16, 14)
+		ArtEllipse(&art, 8, 7, 7, 6, C_OUTLINE)
+		ArtEllipse(&art, 8, 7, 6, 5, C_LEAF_DARK)
+		ArtEllipse(&art, 8, 7, 4, 3, C_LEAF)
+		ArtLine(&art, 3, 7, 13, 7, C_LEAF_DARKEST)
+		ArtLine(&art, 8, 3, 8, 12, C_LEAF_DARKEST)
+		ArtPixel(&art, 5, 4, C_LEAF_LIGHT)
+		ArtPixel(&art, 11, 10, C_LEAF)
+		ArtRect(&art, 5, 6, 6, 2, accent)
+		ArtRect(&art, 5, 6, 6, 1, CShade(accent, 1.3))
+		ArtRect(&art, 5, 10, 6, 2, entrailDark)
+		ArtRect(&art, 6, 10, 4, 1, entrail)
+		ArtPixel(&art, 7, 11, C_BONE)
+		ArtPixel(&art, 9, 11, C_BONE)
+		return art
+	case .Hand:
+		art := ArtInit(7, 6)
 		ArtEllipse(&art, 3, 3, 2, 2, C_OUTLINE)
-		ArtEllipse(&art, 3, 3, 1, 1, C_SKIN)
-		ArtRect(&art, 0, 2, 2, 2, C_ENTRAIL_DARK)
+		ArtEllipse(&art, 3, 3, 1, 1, C_LEAF_LIGHT)
+		ArtPixel(&art, 5, 2, C_OUTLINE)
+		ArtPixel(&art, 5, 4, C_OUTLINE)
+		ArtRect(&art, 0, 2, 2, 2, entrailDark)
 		ArtPixel(&art, 0, 2, C_BONE)
 		return art
 	case .Intestine:
-		art := ArtInit(15, 9)
-		for i in 0 ..< 5 {
+		art := ArtInit(17, 10)
+		for i in 0 ..< 6 {
 			x := 2+i*2
-			y := 4+int(math.sin(f32(i)*1.7)*2)
+			y := 5+int(math.sin(f32(i)*1.7)*2)
 			ArtCircle(&art, x, y, 2, C_OUTLINE)
-			ArtCircle(&art, x, y, 1, C_ENTRAIL)
+			ArtCircle(&art, x, y, 1, entrail)
 		}
-		ArtPixel(&art, 4, 3, C_ENTRAIL_DARK)
-		ArtPixel(&art, 10, 5, C_ENTRAIL_DARK)
-		ArtPixel(&art, 7, 6, C_SPLAT_LIGHT)
+		ArtPixel(&art, 5, 3, entrailDark)
+		ArtPixel(&art, 11, 6, entrailDark)
+		ArtPixel(&art, 8, 7, CShade(entrail, 1.4))
 		return art
 	}
-	return ArtInit(4, 4)
+	unreachable()
+}
+
+DrawGorePart :: proc(kind: UnitKind, part: GorePartKind, accent: rl.Color) -> Art {
+	tint := BloodTintForUnitType(UnitTypeFromKind(kind))
+	entrail, entrailDark, entrailLight := GoreBloodColors(tint)
+	switch kind {
+	case .Catapult:
+		return ArtInit(1, 1)
+	case .Turtle:
+		return DrawTurtleGorePart(part, accent, entrail, entrailDark)
+	case .Giant:
+		return DrawGiantGorePart(part, accent, entrail, entrailDark)
+	case .Villager, .Builder, .CombatBuilder, .WaterCollector, .Farmer, .Knight, .Archer, .Mage, .Rogue, .Explorer:
+		look := GoreLookForUnit(kind)
+		switch part {
+		case .Head:
+			return DrawHumanoidGoreHead(look, accent, entrail, entrailDark)
+		case .Arm:
+			return DrawHumanoidGoreArm(look, accent, entrail, entrailDark)
+		case .Leg:
+			return DrawHumanoidGoreLeg(look, entrail, entrailDark)
+		case .Torso:
+			return DrawHumanoidGoreTorso(look, accent, entrail, entrailDark, entrailLight)
+		case .Hand:
+			return DrawHumanoidGoreHand(look, entrail, entrailDark)
+		case .Intestine:
+			return DrawHumanoidGoreIntestine(entrail, entrailDark, entrailLight)
+		}
+	}
+	unreachable()
 }

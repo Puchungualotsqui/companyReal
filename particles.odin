@@ -52,6 +52,7 @@ Particle :: struct {
 	bounce:        f32,
 	kind:          ParticleKind,
 	variant:       u8,
+	goreKind:      u8, // UnitKind that produced a .Gore chunk
 	faction:       u8,
 	settled:       bool,
 	tint:          rl.Color,
@@ -111,6 +112,7 @@ ParticleSpawn :: proc(w: ^World, p: Particle) -> int {
 	w.particles.bounce[slot] = p.bounce
 	w.particles.kind[slot] = p.kind
 	w.particles.variant[slot] = p.variant
+	w.particles.goreKind[slot] = p.goreKind
 	w.particles.faction[slot] = p.faction
 	w.particles.settled[slot] = p.settled
 	w.particles.tint[slot] = rl.Color{p.tint.r, p.tint.g, p.tint.b, alpha}
@@ -124,6 +126,17 @@ ParticleRemove :: proc(w: ^World, slot: int) {
 	if slot < 0 || slot >= PARTICLE_CAPACITY || !w.particleUsed[slot] do return
 	w.particleUsed[slot] = false
 	w.particleCount -= 1
+}
+
+ParticleBloodTint :: proc(w: ^World, slot: int) -> u8 {
+	if w.particles.kind[slot] == .Gore {
+		unitKind := int(w.particles.goreKind[slot])
+		if unitKind < 0 || unitKind >= len(ALL_UNIT_KINDS) do return BLOOD_TINT_RED
+		tint := BloodTintForUnitType(UnitTypeFromKind(UnitKind(unitKind)))
+		if tint == BLOOD_TINT_NONE do return BLOOD_TINT_RED
+		return tint
+	}
+	return BloodTintFromParticle(w.particles.tint[slot])
 }
 
 WorldParticleUpdate :: proc(w: ^World, deltaTime: f32) {
@@ -200,7 +213,7 @@ WorldParticleUpdate :: proc(w: ^World, deltaTime: f32) {
 					w.particles.vy[i] *= 0.55
 					w.particles.spin[i] *= -0.55
 					if kind == .Gib || kind == .Gore {
-						BloodDropLand(w, x, y, BloodTintFromParticle(w.particles.tint[i]), false)
+						BloodDropLand(w, x, y, ParticleBloodTint(w, i), false)
 					}
 				} else {
 					z = 0
@@ -210,7 +223,7 @@ WorldParticleUpdate :: proc(w: ^World, deltaTime: f32) {
 					w.particles.spin[i] = 0
 					w.particles.settled[i] = true
 					if kind == .Gib || kind == .Gore {
-						BloodAddAt(w, x, y, 3, 0.3, BloodTintFromParticle(w.particles.tint[i]))
+						BloodAddAt(w, x, y, 3, 0.3, ParticleBloodTint(w, i))
 					}
 				}
 			}
@@ -226,9 +239,11 @@ ParticleTexture :: proc(set: ^SpriteSet, w: ^World, slot: int) -> rl.Texture2D {
 	kind := w.particles.kind[slot]
 	if kind == .Gore {
 		part := GorePartKind(int(w.particles.variant[slot])%GORE_PART_COUNT)
+		unitKind := int(w.particles.goreKind[slot])
+		if unitKind < 0 || unitKind >= len(ALL_UNIT_KINDS) do unitKind = int(UnitKind.Villager)
 		faction := int(w.particles.faction[slot])
 		if faction < 0 || faction >= SPRITE_FACTION_COUNT do faction = SPRITE_FACTION_COUNT-1
-		return set.gore[faction][part]
+		return set.gore[faction][UnitKind(unitKind)][part]
 	}
 	return set.particle[kind]
 }
@@ -345,11 +360,12 @@ CreateParticleKindTexture :: proc(kind: ParticleKind) -> rl.Texture2D {
 		ArtPixel(&art, 1, 1, rl.Color{255, 255, 255, 255})
 		return ArtTakeTexture(art)
 	case .Gib:
+		// Greyscale so the chunk can be tinted with the victim's blood colour.
 		art := ArtInit(7, 6)
 		ArtEllipse(&art, 3, 3, 3, 2, C_OUTLINE)
-		ArtEllipse(&art, 3, 3, 2, 2, rl.Color{168, 52, 52, 255})
-		ArtEllipse(&art, 2, 2, 1, 1, rl.Color{214, 96, 88, 255})
-		ArtPixel(&art, 5, 2, C_BONE)
+		ArtEllipse(&art, 3, 3, 2, 2, C_SPLAT_MID)
+		ArtEllipse(&art, 2, 2, 1, 1, C_SPLAT_LIGHT)
+		ArtPixel(&art, 5, 2, C_SPLAT_DARK)
 		return ArtTakeTexture(art)
 	case .Bone:
 		art := ArtInit(6, 5)
