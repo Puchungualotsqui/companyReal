@@ -353,7 +353,7 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 		if spawned > 0 {
 			town.growthPending -= spawned
 			if kingdomSlot == w.observerKingdom {
-				WorldAlertAddGrowth(w, kingdomSlot, townSlot, spawned, town.citizens)
+				WorldAlertAddGrowth(w, kingdomSlot, townSlot, spawned)
 			}
 		}
 		if town.growthPending <= 0 {

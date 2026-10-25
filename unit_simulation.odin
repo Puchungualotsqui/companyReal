@@ -1,7 +1,5 @@
 package main
 
-import "core:fmt"
-
 
 // Pacific units drop their work to fight a fire burning inside their town.
 UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
@@ -301,78 +299,17 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		}
 	}
 
-	// Temporary diagnostics: the palette's first color is blue, but its kingdom
-// slot depends on the player's color choice. Keep all collector logs filtered here.
-UnitLogWaterCollector :: proc(w: ^World, unitSlot: int, event: string, previousState: StatePacific, previousX, previousY: f32) {
-	unit := &w.units[unitSlot]
-	if UnitKindOf(unit.type) != .WaterCollector do return
-	if unit.kingdome < 0 || unit.kingdome >= KINGDOMS_CAPACITY do return
-	if !SameColor(w.kingdomColors[unit.kingdome], KINGDOM_COLOR_PALETTE[0]) do return
-	collector := unit.type.(WaterCollector)
-	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
-	x := WorldWrapCoordinate(int(unit.x), worldWidth)
-	y := WorldWrapCoordinate(int(unit.y), worldHeight)
-	targetX := WorldWrapCoordinate(unit.pathTargetX, worldWidth)
-	targetY := WorldWrapCoordinate(unit.pathTargetY, worldHeight)
-	nextX, nextY := -1, -1
-	nextWalkable := false
-	if unit.pathIndex >= 0 && unit.pathIndex < len(unit.path) {
-		nextX, nextY = unit.path[unit.pathIndex]/worldHeight, unit.path[unit.pathIndex]%worldHeight
-		nextWalkable = WorldTileWalkable(w, nextX, nextY, unit.type, unit.kingdome)
-	}
-	fmt.printf(
-		"[water-collector/blue] t=%.2f day=%d hour=%.2f unit=%d kingdom=%d town=%d event=%s state=%v->%v pos=(%.2f,%.2f) moved=(%.3f,%.3f) target=(%d,%d) cargo=%.1f cooldown=%.2f sequence=%d\n",
-		w.simulationTime, w.dayNumber, WorldTimeOfDay(w), unitSlot, unit.kingdome, unit.town, event,
-		previousState, unit.state.(StatePacific), unit.x, unit.y,
-		WorldShortestWrappedDelta(unit.x-previousX, f32(worldWidth)),
-		WorldShortestWrappedDelta(unit.y-previousY, f32(worldHeight)),
-		unit.pathTargetX, unit.pathTargetY, collector.carriedResource, unit.cooldown, collector.taskSequence,
-	)
-	fmt.printf(
-		"[water-collector/blue] unit=%d path=(ready=%v found=%v index=%d length=%d revision=%d world-revision=%d next=(%d,%d) next-walkable=%v) current=(terrain=%v building=%d construction=%v walkable=%v) target=(terrain=%v building=%d construction=%v walkable=%v) fires=%d no-home=%v\n",
-		unitSlot, unit.pathReady, unit.pathFound, unit.pathIndex, len(unit.path), unit.pathRevision, w.navigationRevision,
-		nextX, nextY, nextWalkable,
-		w.ground[x][y].type, w.tileBuilding[x*worldHeight+y], w.tileConstructionBlocked[x*worldHeight+y],
-		WorldTileWalkable(w, x, y, unit.type, unit.kingdome),
-		w.ground[targetX][targetY].type, w.tileBuilding[targetX*worldHeight+targetY],
-		w.tileConstructionBlocked[targetX*worldHeight+targetY],
-		WorldTileWalkable(w, targetX, targetY, unit.type, unit.kingdome), w.fireCount, unit.effects[.NoHome],
-	)
-}
-
 UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	unit := &w.units[unitSlot]
 	kingdomSlot := unit.kingdome
 	townSlot := unit.town
 	collector := &unit.type.(WaterCollector)
 	state := &unit.state.(StatePacific)
-	trace := kingdomSlot >= 0 && kingdomSlot < KINGDOMS_CAPACITY &&
-		SameColor(w.kingdomColors[kingdomSlot], KINGDOM_COLOR_PALETTE[0])
-	previousState := state^
-	previousX, previousY := unit.x, unit.y
-	previousTargetX, previousTargetY := unit.pathTargetX, unit.pathTargetY
-	previousPathFound := unit.pathFound
-	event := "status"
-	logNow := int(w.simulationTime/2) != int((w.simulationTime-deltaTime)/2)
-	defer {
-		if trace && (logNow || state^ != previousState || unit.pathFound != previousPathFound ||
-			unit.pathTargetX != previousTargetX || unit.pathTargetY != previousTargetY) {
-			UnitLogWaterCollector(w, unitSlot, event, previousState, previousX, previousY)
-		}
-	}
-	if !WorldTownExists(w, kingdomSlot, townSlot) {
-		event = "missing-town"
-		return
-	}
+
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return
 	w.kingdoms[kingdomSlot].towns[townSlot].waterCollectors += 1
-	if UnitUpdatePacificSleep(w, unitSlot, deltaTime) {
-		event = "sleep-shelter-or-escape"
-		return
-	}
-	if UnitTryExtinguish(w, unitSlot, deltaTime) {
-		event = "extinguishing-fire"
-		return
-	}
+	if UnitUpdatePacificSleep(w, unitSlot, deltaTime) do return
+	if UnitTryExtinguish(w, unitSlot, deltaTime) do return
 
 	if state^ == .Roaming {
 		if collector.carriedResource > 0 {
@@ -380,16 +317,12 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 				w.units[unitSlot].cooldown = max(0, w.units[unitSlot].cooldown-deltaTime)
 				return
 			}
-			if trace do UnitLogWaterCollector(w, unitSlot, "search-return-loaded", previousState, previousX, previousY)
-			logNow = true
 			if x, y, found := UnitFindTownReturnPoint(w, kingdomSlot, townSlot, unitSlot); found {
-				event = "return-target-found"
 				w.units[unitSlot].pathTargetX = x
 				w.units[unitSlot].pathTargetY = y
 				w.units[unitSlot].pathReady = false
 				state^ = .Returning
 			} else {
-				event = "no-return-target-retry-in-5s"
 				// Keep the load, but do not search or start roaming paths every tick.
 				w.units[unitSlot].cooldown = 5
 				w.units[unitSlot].pathReady = false
@@ -398,16 +331,12 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		} else if w.units[unitSlot].cooldown > 0 {
 			w.units[unitSlot].cooldown -= deltaTime
 		} else {
-			if trace do UnitLogWaterCollector(w, unitSlot, "search-water", previousState, previousX, previousY)
-			logNow = true
 			if x, y, found := UnitFindWaterTarget(w, unitSlot, collector.taskSequence); found {
-				event = "water-target-found"
 				w.units[unitSlot].pathTargetX = x
 				w.units[unitSlot].pathTargetY = y
 				w.units[unitSlot].pathReady = false
 				state^ = .Traveling
 			} else {
-				event = "no-water-target-retry-in-5s"
 				w.units[unitSlot].cooldown = 5
 			}
 		}
@@ -418,13 +347,10 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		UnitUpdateRoaming(w, unitSlot, deltaTime)
 	case .Traveling:
 		if UnitMove(w, unitSlot, unit.pathTargetX, unit.pathTargetY, deltaTime) {
-			event = "water-reached-start-working"
 			state^ = .Working
 			unit.pathReady = false
 			w.units[unitSlot].cooldown = f32(WORLD_DAY_LENGTH_SECONDS)/48
 		} else if !w.units[unitSlot].pathFound {
-			event = "water-path-failed"
-			logNow = true
 			state^ = .Roaming
 			w.units[unitSlot].pathReady = false
 			collector.taskSequence += 1
@@ -433,16 +359,12 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		w.units[unitSlot].cooldown -= deltaTime
 		if w.units[unitSlot].cooldown <= 0 {
 			collector.carriedResource = 1
-			if trace do UnitLogWaterCollector(w, unitSlot, "water-collected-search-return", previousState, previousX, previousY)
-			logNow = true
 			if x, y, found := UnitFindTownReturnPoint(w, kingdomSlot, townSlot, unitSlot); found {
-				event = "return-target-found"
 				w.units[unitSlot].pathTargetX = x
 				w.units[unitSlot].pathTargetY = y
 				w.units[unitSlot].pathReady = false
 				state^ = .Returning
 			} else {
-				event = "no-return-target-discard-load"
 				collector.carriedResource = 0
 				state^ = .Roaming
 			}
@@ -450,8 +372,6 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	case .Returning:
 		reached := UnitMove(w, unitSlot, unit.pathTargetX, unit.pathTargetY, deltaTime)
 		if reached || !w.units[unitSlot].pathFound {
-			event = reached ? "return-arrived" : "return-path-failed-discard-load"
-			logNow = true
 			collector.carriedResource = 0
 			collector.taskSequence += 1
 			state^ = .Roaming
@@ -459,10 +379,10 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			w.units[unitSlot].pathReady = false
 		}
 	case .GoingHome, .Sleeping, .ToConstruction, .Building, .Hiding, .Fleeing:
-		}
 	}
+}
 
-	UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
+UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	kingdomSlot := w.units[unitSlot].kingdome
 	townSlot := w.units[unitSlot].town
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return
@@ -854,6 +774,10 @@ UnitUpdatePacificSleep :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool
 	return true
 }
 
+// Civilian roaming stays a little beyond the town's buildable area instead of
+// drifting across the map.
+TOWN_ROAM_AREA_FACTOR :: 1.25
+
 UnitUpdateRoaming :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	unit := &w.units[unitSlot]
 	atTarget := int(WorldWrapPosition(unit.x, f32(w.maxX))) == unit.pathTargetX &&
@@ -903,16 +827,35 @@ UnitFindRoamingTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int, 
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return 0, 0, false
-	unitX := int(WorldWrapPosition(w.units[unitSlot].x, f32(worldWidth)))
-	unitY := int(WorldWrapPosition(w.units[unitSlot].y, f32(worldHeight)))
+	unit := &w.units[unitSlot]
+	if !WorldTownExists(w, unit.kingdome, unit.town) do return 0, 0, false
+
+	circleCount := TownAreaCircleCount(w, unit.kingdome, unit.town)
+	if circleCount <= 0 do return 0, 0, false
 	seed := u64(unitSlot)+u64(sequence)*101
-	for attempt in 0..<12 {
-		deltaX := int(WorldNoiseHash(unitSlot, sequence*31+attempt*2, seed+11)*17)-8
-		deltaY := int(WorldNoiseHash(unitSlot, sequence*31+attempt*2+1, seed+23)*17)-8
+	circleIndex := int(WorldNoiseHash(unitSlot, sequence*31+7, seed+5)*f32(circleCount))
+	circleIndex = clamp(circleIndex, 0, circleCount-1)
+	circleX, circleY, circleRadius := TownAreaCircle(
+		w,
+		unit.kingdome,
+		unit.town,
+		circleIndex,
+	)
+	radius := int(f32(circleRadius)*TOWN_ROAM_AREA_FACTOR)
+	if radius <= 0 do return 0, 0, false
+
+	hallWidth, hallHeight := BuildingTileSize(TownHall{})
+	centerX := circleX+hallWidth/2
+	centerY := circleY+hallHeight/2
+	radiusSquared := radius*radius
+	for attempt in 0..<16 {
+		deltaX := int(WorldNoiseHash(unitSlot, sequence*31+attempt*2, seed+11)*f32(radius*2+1))-radius
+		deltaY := int(WorldNoiseHash(unitSlot, sequence*31+attempt*2+1, seed+23)*f32(radius*2+1))-radius
 		if deltaX == 0 && deltaY == 0 do continue
-		x := WorldWrapCoordinate(unitX+deltaX, worldWidth)
-		y := WorldWrapCoordinate(unitY+deltaY, worldHeight)
-		if !UnitValidTileType(w.units[unitSlot].type, w.ground[x][y].type) do continue
+		if deltaX*deltaX+deltaY*deltaY > radiusSquared do continue
+		x := WorldWrapCoordinate(centerX+deltaX, worldWidth)
+		y := WorldWrapCoordinate(centerY+deltaY, worldHeight)
+		if !UnitValidTileType(unit.type, w.ground[x][y].type) do continue
 		if WorldTileOccupied(w, x, y) do continue
 		return x, y, true
 	}

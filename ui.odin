@@ -2014,13 +2014,12 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 
 	y := panel.y+UI_GROWTH_Y
 	eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
-	label := fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta)))
-	labelColor := UI_COLOR_DIM
-	if t.foodPotential <= 0 || t.waterPotential <= 0 {
-		label = fmt.ctprintf("Starving  -  next %d in %ds", t.growthBatch, int(math.ceil(eta)))
-		labelColor = UI_COLOR_BAD
-	}
-	UIText(label, panel.x+UI_PAD, y, labelColor)
+	UIText(
+		fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta))),
+		panel.x+UI_PAD,
+		y,
+		UI_COLOR_DIM,
+	)
 
 	bar := rl.Rectangle{
 		panel.x+UI_PAD+164,
@@ -3300,12 +3299,10 @@ UIAlertText :: proc(w: ^World, alert: ^Alert) -> cstring {
 	case .PeaceMade:
 		return fmt.ctprintf("Peace with %s", NameKingdomCString(w, alert.other))
 	case .TownGrowth:
-		return fmt.ctprintf(
-			"%s +%d villagers (%d total)",
-			UIAlertTownName(&alert.townName),
-			alert.amount,
-			alert.total,
-		)
+		if alert.amount == 1 {
+			return fmt.ctprintf("%s +%d villager", UIAlertTownName(&alert.townName), alert.amount)
+		}
+		return fmt.ctprintf("%s +%d villagers", UIAlertTownName(&alert.townName), alert.amount)
 	case .TownFused:
 		return fmt.ctprintf(
 			"%s fused into %s",

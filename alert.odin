@@ -29,7 +29,6 @@ Alert :: struct {
 	time:       f32,
 	realTime:  f64,
 	amount:     int,
-	total:      int,
 }
 
 AlertFeed :: struct {
@@ -89,7 +88,7 @@ WorldAlertAdd :: proc(w: ^World, kind: AlertKind, kingdom, town, other: int, x, 
 
 // Population arrivals are frequent; one refreshing row per town keeps the
 // feed readable without hiding the event.
-WorldAlertAddGrowth :: proc(w: ^World, kingdom, town, amount, total: int) {
+WorldAlertAddGrowth :: proc(w: ^World, kingdom, town, amount: int) {
 	if w.observerKingdom < 0 || kingdom != w.observerKingdom do return
 	now := rl.GetTime()
 
@@ -97,7 +96,6 @@ WorldAlertAddGrowth :: proc(w: ^World, kingdom, town, amount, total: int) {
 		alert := &w.alerts.items[(w.alerts.next-1-i+ALERT_CAPACITY*2)%ALERT_CAPACITY]
 		if alert.kind != .TownGrowth || alert.kingdom != kingdom || alert.town != town do continue
 		alert.amount += amount
-		alert.total = total
 		alert.realTime = now
 		alert.time = w.simulationTime
 		return
@@ -115,7 +113,6 @@ WorldAlertAddGrowth :: proc(w: ^World, kingdom, town, amount, total: int) {
 			y = f32(townRef.y),
 			time = w.simulationTime,
 			amount = amount,
-			total = total,
 		},
 	)
 }
