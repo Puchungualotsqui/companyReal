@@ -450,6 +450,23 @@ NameSet :: proc(name: ^Name, value: string) {
 	copy(name[:length], value[:length])
 }
 
+// A fused town's absorbed hall keeps the old town's identity: "Old <Town>".
+NameDistrictAssign :: proc(name: ^Name, town_name: ^Name) {
+	for i in 0..<NAME_LENGTH do name[i] = 0
+	prefix := "Old "
+	length := 0
+	for i in 0..<len(prefix) {
+		name[length] = prefix[i]
+		length += 1
+	}
+	for i in 0..<NAME_LENGTH-1 {
+		if town_name[i] == 0 do break
+		if length >= NAME_LENGTH-1 do break
+		name[length] = town_name[i]
+		length += 1
+	}
+}
+
 NameEqual :: proc(name: ^Name, value: string) -> bool {
 	length := len(value)
 	if length >= NAME_LENGTH do return false

@@ -28,7 +28,7 @@ CombatBuildingSeconds :: proc(kind: BuildingKind) -> f32 {
 		return 8
 	case .Cannon:
 		return 12
-	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path:
+	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall:
 		return 6
 	}
 	unreachable()

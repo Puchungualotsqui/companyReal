@@ -499,14 +499,16 @@ FogUpdate :: proc(w: ^World) {
 		width, height := BuildingTileSize(TownHall{})
 		for town_slot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-			town := &w.kingdoms[kingdom_slot].towns[town_slot]
-			FogRevealCircle(
-				w,
-				town.x+width/2,
-				town.y+height/2,
-				f32(town.areaRadius)*FOG_TOWN_AREA_VISION_FACTOR,
-				kingdom_slot,
-			)
+			for circle_index in 0..<TownAreaCircleCount(w, kingdom_slot, town_slot) {
+				circle_x, circle_y, circle_radius := TownAreaCircle(w, kingdom_slot, town_slot, circle_index)
+				FogRevealCircle(
+					w,
+					circle_x+width/2,
+					circle_y+height/2,
+					f32(circle_radius)*FOG_TOWN_AREA_VISION_FACTOR,
+					kingdom_slot,
+				)
+			}
 		}
 	}
 

@@ -153,7 +153,9 @@ AIFarmerTarget :: proc(w: ^World, kingdom, town_slot: int) -> int {
 	town := &w.kingdoms[kingdom].towns[town_slot]
 	target := int(math.ceil(f32(town.citizens)*0.25))
 	if town.foodShortage > 0.5 do target += 1
-	return clamp(target, 1, 10)
+	// The old ten-farmer ceiling cannot feed the late growth eras. Let the
+	// target scale with population while keeping the early-game floor.
+	return clamp(target, 1, max(10, town.citizens/4))
 }
 
 AIMilitaryTarget :: proc(w: ^World, kingdom, town_slot: int, brain: ^AIBrain) -> int {
@@ -297,33 +299,32 @@ AITownEconomy :: proc(
 	}
 }
 
+MilestoneOptionWarriorWeight :: proc(option: MilestoneOption) -> int {
+	weight := 0
+	for kind in UnitKind {
+		if kind in option.units && AIKindIsWarrior(kind) do weight += 1
+	}
+	return weight
+}
+
 AIChooseMilestoneOption :: proc(
 	w: ^World,
 	kingdom, town_slot: int,
 	brain: ^AIBrain,
 ) -> int {
 	town := &w.kingdoms[kingdom].towns[town_slot]
-	prefer := 1
+	if town.milestonesChosen >= TOWN_MILESTONE_TIER_COUNT do return 0
+
+	option_a := TOWN_ERA_REWARDS[town.milestonesChosen][0]
+	option_b := TOWN_ERA_REWARDS[town.milestonesChosen][1]
+	weight_a := MilestoneOptionWarriorWeight(option_a)
+	weight_b := MilestoneOptionWarriorWeight(option_b)
+
+	prefer := 0
 	if brain.aggression > 0.55 {
-		switch town.milestonesReached {
-		case 0:
-			prefer = 0
-		case 1:
-			prefer = 1
-		case 2:
-			prefer = 1
-		case:
-		}
+		if weight_b > weight_a do prefer = 1
 	} else {
-		switch town.milestonesReached {
-		case 0:
-			prefer = 1
-		case 1:
-			prefer = 0
-		case 2:
-			prefer = 0
-		case:
-		}
+		if weight_a > weight_b do prefer = 1
 	}
 	if AIRandom(w, kingdom, 211+town_slot*13) < 0.18 do prefer = 1-prefer
 	return prefer

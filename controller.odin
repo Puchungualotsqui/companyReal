@@ -22,6 +22,7 @@ KingdomCommand :: union {
 	CommandRemoveConversion,
 	CommandChooseMilestone,
 	CommandFoundTown,
+	CommandFuseTown,
 	CommandBuildCombat,
 	CommandAttackTown,
 	CommandDefendTown,
@@ -53,6 +54,12 @@ CommandChooseMilestone :: struct {
 CommandFoundTown :: struct {
 	town: int,
 	x, y: int,
+}
+
+CommandFuseTown :: struct {
+	town:           int,
+	target_kingdom: int,
+	target_town:    int,
 }
 
 CommandBuildCombat :: struct {
@@ -105,6 +112,8 @@ KingdomIssueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) ->
 		return TownChooseMilestone(w, kingdom, cmd.town, cmd.option)
 	case CommandFoundTown:
 		return TownStartFounding(w, kingdom, cmd.town, cmd.x, cmd.y)
+	case CommandFuseTown:
+		return TownFuse(w, kingdom, cmd.town, cmd.target_kingdom, cmd.target_town)
 	case CommandBuildCombat:
 		return TownStartCombatConstruction(w, kingdom, cmd.town, cmd.kind, cmd.x, cmd.y)
 	case CommandAttackTown:

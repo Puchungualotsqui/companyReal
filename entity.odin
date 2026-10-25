@@ -25,6 +25,7 @@ BuildingKind :: enum {
 	TurtlePen,
 	ThievesGuild,
 	Path,
+	DistrictHall,
 }
 
 BuildingType :: union {
@@ -42,6 +43,7 @@ BuildingType :: union {
 	TurtlePen,
 	ThievesGuild,
 	Path,
+	DistrictHall,
 }
 
 TownHall :: struct {}
@@ -56,8 +58,9 @@ MagicSchool :: struct {}
 GiantPen :: struct {}
 SiegeWorkshop :: struct {}
 TurtlePen :: struct {}
-ThievesGuild :: struct {}
-Path :: struct {}
+	ThievesGuild :: struct {}
+	Path :: struct {}
+	DistrictHall :: struct {}
 
 BuildingKindOf :: proc(type: BuildingType) -> BuildingKind {
 	switch _ in type {
@@ -89,6 +92,8 @@ BuildingKindOf :: proc(type: BuildingType) -> BuildingKind {
 		return .ThievesGuild
 	case Path:
 		return .Path
+	case DistrictHall:
+		return .DistrictHall
 	}
 	unreachable()
 }
@@ -123,6 +128,8 @@ BuildingTypeFromKind :: proc(kind: BuildingKind) -> BuildingType {
 		return ThievesGuild{}
 	case .Path:
 		return Path{}
+	case .DistrictHall:
+		return DistrictHall{}
 	}
 	unreachable()
 }
@@ -154,6 +161,8 @@ BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
 		return 2, 3
 	case Path:
 		return 1, 1
+	case DistrictHall:
+		return 4, 4
 	}
 	unreachable()
 }
@@ -182,6 +191,8 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 		return 250
 	case Path:
 		return 80
+	case DistrictHall:
+		return 600
 	}
 	unreachable()
 }
@@ -207,6 +218,8 @@ BuildingVision :: proc(kind: BuildingKind) -> f32 {
 		return 3
 	case .Path:
 		return 2
+	case .DistrictHall:
+		return 10
 	}
 	unreachable()
 }
@@ -229,6 +242,8 @@ BuildingDistraction :: proc(kind: BuildingKind) -> f32 {
 		return 5
 	case .Wall, .Bridge, .Path:
 		return 4
+	case .DistrictHall:
+		return 12
 	}
 	unreachable()
 }
@@ -259,6 +274,8 @@ BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
 		return 30
 	case .Path:
 		return 1
+	case .DistrictHall:
+		return 0
 	}
 	unreachable()
 }
@@ -281,7 +298,7 @@ BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 			return false
 		}
 
-	case TownHall, Home, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path:
+	case TownHall, Home, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path, DistrictHall:
 		switch tType {
 		case .Ground, .FertileGround, .Forest, .Hill, .Desert, .Sand:
 			return true
@@ -296,7 +313,7 @@ BuildingWalkable :: proc(type: BuildingType) -> bool {
 	switch _ in type {
 	case Bridge, Path:
 		return true
-	case TownHall, Home, Farmland, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild:
+	case TownHall, Home, Farmland, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, DistrictHall:
 		return false
 	}
 	unreachable()
@@ -308,7 +325,7 @@ BuildingIsCombat :: proc(kind: BuildingKind) -> bool {
 	switch kind {
 	case .Wall, .Bridge, .Cannon, .Watchtower:
 		return true
-	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path:
+	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall:
 		return false
 	}
 	unreachable()
@@ -318,7 +335,7 @@ BuildingIsTraining :: proc(kind: BuildingKind) -> bool {
 	switch kind {
 	case .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
 		return true
-	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Watchtower, .Path:
+	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Watchtower, .Path, .DistrictHall:
 		return false
 	}
 	unreachable()

@@ -66,7 +66,7 @@ BuildingImmuneToFire :: proc(kind: BuildingKind) -> bool {
 	switch kind {
 	case .TownHall, .Wall, .Cannon, .Watchtower, .MagicSchool, .TurtlePen, .Path:
 		return true
-	case .Home, .Farmland, .Bridge, .ArcheryRange, .SiegeWorkshop, .GiantPen, .ThievesGuild:
+	case .Home, .Farmland, .Bridge, .ArcheryRange, .SiegeWorkshop, .GiantPen, .ThievesGuild, .DistrictHall:
 		return false
 	}
 	unreachable()

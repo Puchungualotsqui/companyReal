@@ -673,7 +673,7 @@ BloodBleedTick :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 
 BuildingStoneMaterial :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .TownHall, .Wall, .Watchtower, .Cannon, .Bridge, .Path:
+	case .TownHall, .Wall, .Watchtower, .Cannon, .Bridge, .Path, .DistrictHall:
 		return true
 	case .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
 		return false

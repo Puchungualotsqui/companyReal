@@ -6,11 +6,15 @@ TOWN_SIMULATION_STEP :: 0.25
 TOWN_ALARM_AREA_FACTOR :: 1.25
 WORLD_DAY_LENGTH_SECONDS :: 7*60.0
 
-// Population growth always ticks. Food/water supply and unconverted villagers
-// speed it up; these are fractions of the growth bar per second.
-GROWTH_BASE_PER_SECOND :: 1.0/150
-GROWTH_SUPPLY_PER_SECOND :: 1.0/45
-GROWTH_VILLAGER_PER_SECOND :: 1.0/300
+// Population growth is cohort-based: an era defines how many villagers arrive
+// together and how long the next cohort takes. Supply and unconverted villagers
+// speed up the countdown rather than changing the cohort size.
+GROWTH_FOOD_PER_CITIZEN :: 0.025
+GROWTH_MIN_SPEED :: 0.25
+GROWTH_MAX_SPEED :: 1.25
+GROWTH_VILLAGER_SPEED_BONUS :: 0.005
+GROWTH_VILLAGER_SPEED_CAP :: 0.5
+GROWTH_MAX_SPAWN_PER_TICK :: 32
 
 WorldUpdate :: proc(w: ^World, delta_time: f32) {
 	if delta_time <= 0 do return
@@ -72,27 +76,29 @@ TownHasNearbyEnemy :: proc(w: ^World, kingdom, town_slot: int) -> bool {
 	if !WorldTownExists(w, kingdom, town_slot) do return false
 	chunk_size := w.spatial.chunkSize
 	if chunk_size <= 0 || w.spatial.chunksX <= 0 || w.spatial.chunksY <= 0 do return false
-	town := &w.kingdoms[kingdom].towns[town_slot]
 	width, height := BuildingTileSize(TownHall{})
-	center_x, center_y := f32(town.x)+f32(width-1)*0.5, f32(town.y)+f32(height-1)*0.5
-	radius := f32(town.areaRadius)*TOWN_ALARM_AREA_FACTOR
-	chunk_radius := int((radius+f32(max(width, height)))/f32(chunk_size))+1
-	center_chunk_x, center_chunk_y := int(center_x)/chunk_size, int(center_y)/chunk_size
-	for offset_x in 0..<min(chunk_radius*2+1, w.spatial.chunksX) {
-		chunk_x := WorldWrapCoordinate(center_chunk_x-chunk_radius+offset_x, w.spatial.chunksX)
-		for offset_y in 0..<min(chunk_radius*2+1, w.spatial.chunksY) {
-			chunk_y := WorldWrapCoordinate(center_chunk_y-chunk_radius+offset_y, w.spatial.chunksY)
-			chunk := chunk_x*w.spatial.chunksY+chunk_y
-			for unit := w.spatial.unitHead[chunk]; unit >= 0; unit = w.spatial.unitNext[unit] {
-				if !w.unitUsed[unit] || UnitHiddenInside(w, unit) do continue
-				if !KingdomAtWar(w, kingdom, w.units[unit].kingdome) do continue
-				// Match the town area's distance from the hall footprint, including
-				// the wrapped map edges used by unit movement and proximity queries.
-				dx := math.abs(WorldShortestWrappedDelta(f32(int(w.units.x[unit]))-center_x, f32(w.maxX)))
-				dy := math.abs(WorldShortestWrappedDelta(f32(int(w.units.y[unit]))-center_y, f32(w.maxY)))
-				dx = max(0, dx-f32(width-1)*0.5)
-				dy = max(0, dy-f32(height-1)*0.5)
-				if dx*dx+dy*dy <= radius*radius do return true
+
+	for circle_index in 0..<TownAreaCircleCount(w, kingdom, town_slot) {
+		circle_x, circle_y, circle_radius := TownAreaCircle(w, kingdom, town_slot, circle_index)
+		center_x := f32(circle_x)+f32(width-1)*0.5
+		center_y := f32(circle_y)+f32(height-1)*0.5
+		radius := f32(circle_radius)*TOWN_ALARM_AREA_FACTOR
+		chunk_radius := int((radius+f32(max(width, height)))/f32(chunk_size))+1
+		center_chunk_x, center_chunk_y := int(center_x)/chunk_size, int(center_y)/chunk_size
+		for offset_x in 0..<min(chunk_radius*2+1, w.spatial.chunksX) {
+			chunk_x := WorldWrapCoordinate(center_chunk_x-chunk_radius+offset_x, w.spatial.chunksX)
+			for offset_y in 0..<min(chunk_radius*2+1, w.spatial.chunksY) {
+				chunk_y := WorldWrapCoordinate(center_chunk_y-chunk_radius+offset_y, w.spatial.chunksY)
+				chunk := chunk_x*w.spatial.chunksY+chunk_y
+				for unit := w.spatial.unitHead[chunk]; unit >= 0; unit = w.spatial.unitNext[unit] {
+					if !w.unitUsed[unit] || UnitHiddenInside(w, unit) do continue
+					if !KingdomAtWar(w, kingdom, w.units[unit].kingdome) do continue
+					dx := math.abs(WorldShortestWrappedDelta(f32(int(w.units.x[unit]))-center_x, f32(w.maxX)))
+					dy := math.abs(WorldShortestWrappedDelta(f32(int(w.units.y[unit]))-center_y, f32(w.maxY)))
+					dx = max(0, dx-f32(width-1)*0.5)
+					dy = max(0, dy-f32(height-1)*0.5)
+					if dx*dx+dy*dy <= radius*radius do return true
+				}
 			}
 		}
 	}
@@ -311,23 +317,38 @@ KingdomTownUpdate :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time: f
 	town.foodShortage = TownResourceShortage(town.foodPotential, town.citizens)
 	town.waterShortage = TownResourceShortage(town.waterPotential, town.citizens)
 
-	population_need := f32(town.citizens+1)*0.025
+	era := TownEra(w, kingdom_slot, town_slot)
+	town.growthInterval = TOWN_ERAS[era].interval
+	town.growthBatch = TownEffectiveBatch(w, kingdom_slot, town_slot)
+	town.growthRate = f32(town.growthBatch)/town.growthInterval
+
+	population_need := f32(town.citizens+town.growthBatch)*GROWTH_FOOD_PER_CITIZEN
 	can_grow := town.foodPotential >= population_need && town.waterPotential >= population_need
 	limiting_supply := min(town.foodPotential, town.waterPotential)
-	supply_ratio: f32 = 0
+	coverage: f32 = 1
 	if population_need > 0 {
-		supply_ratio = clamp(limiting_supply/population_need, 0, 2)
+		coverage = clamp(limiting_supply/population_need, 0, 1.5)
 	}
-	town.growthRate =
-		GROWTH_BASE_PER_SECOND+
-		GROWTH_SUPPLY_PER_SECOND*supply_ratio+
-		GROWTH_VILLAGER_PER_SECOND*f32(town.villagers)
-	town.growthProgress += town.growthRate*delta_time
-	if town.growthProgress >= 1 {
-		if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) >= 0 {
-			town.growthProgress -= 1
+	speed := clamp(coverage, GROWTH_MIN_SPEED, GROWTH_MAX_SPEED)
+	speed *= 1+min(GROWTH_VILLAGER_SPEED_CAP, f32(town.villagers)*GROWTH_VILLAGER_SPEED_BONUS)
+	town.growthSpeed = speed
+
+	town.growthCooldown -= delta_time*speed
+	if town.growthCooldown <= 0 {
+		if town.growthPending <= 0 do town.growthPending = town.growthBatch
+		spawn_now := min(town.growthPending, GROWTH_MAX_SPAWN_PER_TICK)
+		spawned := TownSpawnCitizens(w, kingdom_slot, town_slot, spawn_now)
+		if spawned > 0 {
+			town.growthPending -= spawned
+			if kingdom_slot == w.observerKingdom {
+				WorldAlertAddGrowth(w, kingdom_slot, town_slot, spawned, town.citizens)
+			}
+		}
+		if town.growthPending <= 0 {
+			town.growthPending = 0
+			town.growthCooldown = town.growthInterval
 		} else {
-			town.growthProgress = 1
+			town.growthCooldown = 0
 		}
 	}
 
@@ -430,11 +451,39 @@ TownSpawnCitizen :: proc(w: ^World, kingdom_slot, town_slot: int, role: UnitType
 				if unit_slot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdom_slot, town_slot); ok {
 					return unit_slot
 				}
-				return -1
+			}
+		}
+	}
+
+	// A merged town can be much larger than the eight-tile ring above. Sweep the
+	// whole compound area so cohorts are not lost when the old hall is crowded.
+	area_min_x, area_max_x, area_min_y, area_max_y := TownAreaBounds(w, kingdom_slot, town_slot)
+	min_x := max(0, area_min_x)
+	max_x := min(world_width-1, area_max_x)
+	min_y := max(0, area_min_y)
+	max_y := min(world_height-1, area_max_y)
+	for x in min_x..=max_x {
+		for y in min_y..=max_y {
+			if !TownPointInArea(w, kingdom_slot, town_slot, x, y) do continue
+			if !UnitValidTileType(role, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
+			if WorldUnitAtTile(w, x, y) do continue
+			if unit_slot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdom_slot, town_slot); ok {
+				return unit_slot
 			}
 		}
 	}
 	return -1
+}
+
+// Spawns as many villagers as there is room for, returning the number created.
+// A partial batch is carried over by the caller instead of being lost.
+TownSpawnCitizens :: proc(w: ^World, kingdom_slot, town_slot, count: int) -> int {
+	spawned := 0
+	for _ in 0..<count {
+		if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) < 0 do break
+		spawned += 1
+	}
+	return spawned
 }
 
 TOWN_INITIAL_VILLAGERS :: 8

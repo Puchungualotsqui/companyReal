@@ -379,7 +379,7 @@ WarriorFindBreachBuilding :: proc(w: ^World, unit_slot, target_kingdom, target_t
 						best_hall_distance = distance
 						best_hall = building_slot
 					}
-				case .Home, .Farmland, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path:
+				case .Home, .Farmland, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall:
 					if same_town && distance < best_building_distance {
 						best_building_distance = distance
 						best_building = building_slot

@@ -70,7 +70,7 @@ C_ARCANE_GLOW := rl.Color{128, 226, 255, 255}
 C_WHITE := rl.Color{238, 238, 244, 255}
 C_EFFECT_BAD := rl.Color{214, 62, 52, 255}
 
-ALL_BUILDING_KINDS := [14]BuildingKind{
+ALL_BUILDING_KINDS := [15]BuildingKind{
 	.TownHall,
 	.Home,
 	.Farmland,
@@ -85,6 +85,7 @@ ALL_BUILDING_KINDS := [14]BuildingKind{
 	.TurtlePen,
 	.ThievesGuild,
 	.Path,
+	.DistrictHall,
 }
 
 ALL_UNIT_KINDS := [13]UnitKind{
@@ -382,7 +383,7 @@ create_glow_texture :: proc() -> rl.Texture2D {
 // Buildings with lit interiors and windows cast a warm pool of light at night.
 BuildingHasNightLight :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .TownHall, .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .ThievesGuild, .Watchtower:
+	case .TownHall, .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .ThievesGuild, .Watchtower, .DistrictHall:
 		return true
 	case .Farmland, .Wall, .Bridge, .Cannon, .TurtlePen, .Path:
 		return false
@@ -466,6 +467,8 @@ draw_building_sprite :: proc(kind: BuildingKind, accent: rl.Color) -> Art {
 		draw_thieves_guild(&art, accent)
 	case .Path:
 		draw_path(&art, accent)
+	case .DistrictHall:
+		draw_district_hall(&art, accent)
 	}
 	return art
 }
@@ -618,6 +621,51 @@ draw_town_hall :: proc(art: ^Art, accent: rl.Color) {
 	art_rect(art, 41, 52, 2, 5, C_WOOD_DARKEST)
 	art_pixel(art, 22, 51, C_GOLD_LIGHT)
 	art_pixel(art, 42, 51, C_GOLD_LIGHT)
+}
+
+// A smaller twin-towered hall raised where an absorbed town's hall stood.
+// It marks a district of the merged town without competing with the main hall.
+draw_district_hall :: proc(art: ^Art, accent: rl.Color) {
+	draw_shadow(art, 32, 61, 28, 3)
+
+	art_rect(art, 5, 54, 54, 7, C_OUTLINE)
+	art_rect(art, 6, 55, 52, 6, C_STONE_DARK)
+	art_rect(art, 7, 56, 50, 4, C_STONE)
+
+	// Twin towers.
+	for tower_x in ([2]int{11, 43}) {
+		art_rect(art, tower_x, 30, 10, 26, C_OUTLINE)
+		art_rect(art, tower_x+1, 31, 8, 24, C_STONE)
+		art_rect(art, tower_x+1, 31, 8, 2, C_STONE_LIGHT)
+		art_triangle(art, tower_x+5, 19, tower_x, 31, tower_x+10, 31, C_OUTLINE)
+		art_triangle(art, tower_x+5, 21, tower_x+1, 30, tower_x+9, 30, C_ROOF)
+		draw_window(art, tower_x+3, 37, 4, 6, true)
+		art_rect(art, tower_x+3, 47, 4, 9, C_WOOD_DARKEST)
+	}
+
+	// Central connecting hall.
+	art_rect(art, 20, 38, 24, 18, C_OUTLINE)
+	art_rect(art, 21, 39, 22, 16, C_STONE_LIGHT)
+	draw_stone_seams(art, 21, 39, 22, 16, 5, C_STONE)
+	art_rect(art, 18, 35, 28, 4, C_OUTLINE)
+	art_rect(art, 19, 36, 26, 2, C_ROOF_DARK)
+
+	// Arched gate.
+	art_rect(art, 28, 43, 8, 13, C_OUTLINE)
+	art_rect(art, 29, 44, 6, 12, C_WOOD_DARKEST)
+	art_rect(art, 30, 46, 4, 10, C_WOOD_DARK)
+	art_pixel(art, 33, 51, C_GOLD)
+
+	// District banners and a small flag between the towers.
+	draw_banner(art, 4, 34, 6, 14, accent)
+	draw_banner(art, 54, 34, 6, 14, accent)
+	art_rect(art, 31, 24, 2, 11, C_WOOD_DARKEST)
+	draw_flag(art, 33, 24, accent)
+
+	art_rect(art, 24, 52, 2, 5, C_WOOD_DARKEST)
+	art_rect(art, 38, 52, 2, 5, C_WOOD_DARKEST)
+	art_pixel(art, 25, 51, C_GOLD_LIGHT)
+	art_pixel(art, 39, 51, C_GOLD_LIGHT)
 }
 
 draw_farmland :: proc(art: ^Art, accent: rl.Color) {

@@ -6,9 +6,20 @@ TOWN_CAPACITY :: 100
 TOWN_WARRIOR_ORDERS_CAPACITY :: 16
 TOWN_START_AREA_RADIUS :: 12
 TOWN_AREA_EXPANSION :: 6
-TOWN_MILESTONE_COUNT :: 3
 MAX_CONVERSION_JOBS :: 16
 TOWN_WOOD_TARGET :: 60
+
+// A town's area is a union of circles: its primary hall plus one circle for
+// every absorbed town. All circles expand together with town milestones.
+MAX_TOWN_DISTRICTS :: 16
+TOWN_DISTRICT_GROWTH_BONUS :: 0.10
+
+// Fusion is a late-game consolidation sink. Both towns must be in this era.
+TOWN_FUSION_ERA :: 5
+TOWN_FUSION_WOOD_BASE :: 200
+TOWN_FUSION_WOOD_PER_DISTRICT :: 100
+TOWN_FUSION_WOOD_BUFFER :: 50
+TOWN_FUSION_FRONTIER_SLACK :: 1
 
 // Founding a new town is funded by the selected town. The order uses the
 // town's construction queue, so regular builders travel to the site and raise
@@ -21,7 +32,26 @@ TOWN_FOUNDING_SETTLERS :: 5
 // leave the town unable to expand again.
 TOWN_FOUNDING_WOOD_BUFFER :: 12
 
-TOWN_MILESTONES := [TOWN_MILESTONE_COUNT]int{12, 25, 50}
+// Growth eras. Each era gives a larger cohort with a longer interval, so the
+// number of arrival events falls while total throughput keeps rising.
+GrowthEra :: struct {
+	threshold: int,
+	batch:     int,
+	interval:  f32,
+}
+
+TOWN_ERAS := [6]GrowthEra{
+	{threshold = 0, batch = 1, interval = 12},
+	{threshold = 18, batch = 5, interval = 30},
+	{threshold = 45, batch = 20, interval = 60},
+	{threshold = 100, batch = 60, interval = 105},
+	{threshold = 200, batch = 150, interval = 150},
+	{threshold = 380, batch = 300, interval = 180},
+}
+
+// Milestone rewards are chosen per town, one tier at a time. There are five
+// reward tiers, one for every era transition.
+TOWN_MILESTONE_TIER_COUNT :: 5
 
 // Share of a town's warriors that always stays home to defend it. The rest
 // is split between the town's attack and defend orders.
@@ -59,6 +89,10 @@ TownPath :: enum {
 	Siege,
 	Tide,
 	Shadows,
+	Bastion,
+	Logistics,
+	Conquest,
+	Dominion,
 }
 
 MilestoneOption :: struct {
@@ -70,7 +104,7 @@ MilestoneOption :: struct {
 TOWN_BASE_UNLOCKED_BUILDINGS :: bit_set[BuildingKind]{.Home, .Farmland, .Path}
 TOWN_BASE_UNLOCKED_UNITS :: bit_set[UnitKind]{.Villager, .Builder, .WaterCollector, .Farmer, .Explorer, .Knight}
 
-TOWN_MILESTONE_OPTIONS := [TOWN_MILESTONE_COUNT][2]MilestoneOption{
+TOWN_ERA_REWARDS := [TOWN_MILESTONE_TIER_COUNT][2]MilestoneOption{
 	{
 		{
 			path = .Rangers,
@@ -107,6 +141,30 @@ TOWN_MILESTONE_OPTIONS := [TOWN_MILESTONE_COUNT][2]MilestoneOption{
 			unlocks = {.ThievesGuild, .Watchtower},
 		},
 	},
+	{
+		{
+			path = .Bastion,
+			units = {.CombatBuilder},
+			unlocks = {.Wall, .Cannon, .Watchtower},
+		},
+		{
+			path = .Logistics,
+			units = {.Explorer},
+			unlocks = {.Bridge, .Path},
+		},
+	},
+	{
+		{
+			path = .Conquest,
+			units = {.Knight, .Catapult},
+			unlocks = {.SiegeWorkshop},
+		},
+		{
+			path = .Dominion,
+			units = {.Mage, .Giant},
+			unlocks = {.MagicSchool, .Watchtower},
+		},
+	},
 }
 
 ConversionJob :: struct {
@@ -125,13 +183,21 @@ ConstructionSite :: struct {
 	buildWork: f32,
 }
 
+TownDistrict :: struct {
+	x, y:   int,
+	radius: int,
+	name:   Name,
+}
+
 Town :: struct {
 	name: Name,
 	x, y: int,
 	hallSlot: int,
 	citizens: int,
 	wood: f32,
-	growthProgress, growthRate, constructionProgress: f32,
+	growthCooldown, growthInterval, growthRate, growthSpeed: f32,
+	growthBatch, growthBatchBonus, growthPending: int,
+	constructionProgress: f32,
 	construction: ConstructionSite,
 	constructionActive: bool,
 	builders, waterCollectors, farmers, villagers: int,
@@ -143,12 +209,16 @@ Town :: struct {
 	waterAccessCached: bool,
 	foodShortage, waterShortage: f32,
 	areaRadius: int,
+	districts: [MAX_TOWN_DISTRICTS]TownDistrict,
+	districtCount: int,
+	fusionCount: int,
 	alarmActive: bool,
 	unlockedBuildings: bit_set[BuildingKind],
 	unlockedUnits: bit_set[UnitKind],
 	buildingCounts: [BuildingKind]int,
 	buildingSlots: [BuildingKind]int,
-	milestonesReached: int,
+	milestonesEarned: int,
+	milestonesChosen: int,
 	milestonePending: bool,
 	conversions: [MAX_CONVERSION_JOBS]ConversionJob,
 	conversionCount: int,
@@ -194,7 +264,32 @@ TownInitialize :: proc(w: ^World, kingdom_slot, town_slot, hall_slot, x, y: int,
 	for &slot in town.buildingSlots do slot = -1
 	town.buildingSlots[.TownHall] = hall_slot
 	town.buildingCounts[.TownHall] = 1
+	town.growthCooldown = TOWN_ERAS[0].interval
+	town.growthInterval = TOWN_ERAS[0].interval
+	town.growthBatch = TOWN_ERAS[0].batch
+	town.growthRate = f32(town.growthBatch)/town.growthInterval
+	town.growthSpeed = 1
 	NameTownAssign(w, kingdom_slot, town_slot)
+}
+
+TownEra :: proc(w: ^World, kingdom_slot, town_slot: int) -> int {
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	return clamp(town.milestonesEarned, 0, len(TOWN_ERAS)-1)
+}
+
+TownBaseBatch :: proc(w: ^World, kingdom_slot, town_slot: int) -> int {
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	return TOWN_ERAS[TownEra(w, kingdom_slot, town_slot)].batch+town.growthBatchBonus
+}
+
+// Every live District Hall adds a share of the merged base batch. Destroying a
+// hall removes its bonus immediately; the merged population and district area
+// are unaffected.
+TownEffectiveBatch :: proc(w: ^World, kingdom_slot, town_slot: int) -> int {
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	base := f32(TownBaseBatch(w, kingdom_slot, town_slot))
+	halls := f32(town.buildingCounts[.DistrictHall])
+	return max(1, int(math.round(base*(1+TOWN_DISTRICT_GROWTH_BONUS*halls))))
 }
 
 KingdomFreeTownSlot :: proc(w: ^World, kingdom_slot: int) -> int {
@@ -210,9 +305,20 @@ KingdomFreeTownSlot :: proc(w: ^World, kingdom_slot: int) -> int {
 // Builders stop chopping at a routine stockpile, but expansion needs a much
 // larger reserve. While the kingdom still has room for another town, gathering
 // continues until it can pay for a charter plus a small buffer.
-TownWoodGatherTarget :: proc(w: ^World, kingdom_slot: int) -> f32 {
-	if KingdomFreeTownSlot(w, kingdom_slot) < 0 do return TOWN_WOOD_TARGET
-	return max(TOWN_WOOD_TARGET, TOWN_FOUNDING_WOOD+TOWN_FOUNDING_WOOD_BUFFER)
+TownWoodGatherTarget :: proc(w: ^World, kingdom_slot, town_slot: int) -> f32 {
+	target: f32 = TOWN_WOOD_TARGET
+	if KingdomFreeTownSlot(w, kingdom_slot) >= 0 {
+		target = max(target, TOWN_FOUNDING_WOOD+TOWN_FOUNDING_WOOD_BUFFER)
+	}
+
+	// Era-5 towns need a real stockpile to pay the fusion sink. Builders keep
+	// chopping until the next fusion is affordable plus a small buffer.
+	if TownEra(w, kingdom_slot, town_slot) >= TOWN_FUSION_ERA {
+		town := &w.kingdoms[kingdom_slot].towns[town_slot]
+		cost := TOWN_FUSION_WOOD_BASE+TOWN_FUSION_WOOD_PER_DISTRICT*town.districtCount
+		target = max(target, f32(cost+TOWN_FUSION_WOOD_BUFFER))
+	}
+	return target
 }
 
 // A new town is founded when its hall finishes construction. The hall was
@@ -398,34 +504,107 @@ TownStartFounding :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool
 	return true
 }
 
-// Squared distance in tiles from the town hall footprint (0 on the hall). The
-// square is kept for cheap comparisons; callers compare against radius², which
-// makes the buildable area a tile approximation of a circle.
+// Squared distance in tiles from a hall footprint (0 on the hall).
+TownHallDistanceSquared :: proc(hall_x, hall_y, x, y: int) -> int {
+	hall_width, hall_height := BuildingTileSize(TownHall{})
+	delta_x := max(max(hall_x-x, 0), x-(hall_x+hall_width-1))
+	delta_y := max(max(hall_y-y, 0), y-(hall_y+hall_height-1))
+	return delta_x*delta_x+delta_y*delta_y
+}
+
+TownAreaCircleCount :: proc(w: ^World, kingdom_slot, town_slot: int) -> int {
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	return 1+town.districtCount
+}
+
+TownAreaCircle :: proc(w: ^World, kingdom_slot, town_slot, index: int) -> (x, y, radius: int) {
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if index <= 0 do return town.x, town.y, town.areaRadius
+	district := &town.districts[index-1]
+	return district.x, district.y, district.radius
+}
+
+// Squared distance to the nearest circle of the compound town area.
 TownTileAreaDistanceSquared :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> int {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return max(int)
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	hall_width, hall_height := BuildingTileSize(TownHall{})
-	delta_x := max(max(town.x-x, 0), x-(town.x+hall_width-1))
-	delta_y := max(max(town.y-y, 0), y-(town.y+hall_height-1))
-	return delta_x*delta_x+delta_y*delta_y
+	best := TownHallDistanceSquared(town.x, town.y, x, y)
+	for index in 0..<town.districtCount {
+		distance := TownHallDistanceSquared(town.districts[index].x, town.districts[index].y, x, y)
+		if distance < best do best = distance
+	}
+	return best
 }
 
 TownPointInArea :: proc(w: ^World, kingdom_slot, town_slot, x, y: int) -> bool {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
-	radius := w.kingdoms[kingdom_slot].towns[town_slot].areaRadius
-	return TownTileAreaDistanceSquared(w, kingdom_slot, town_slot, x, y) <= radius*radius
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	if TownHallDistanceSquared(town.x, town.y, x, y) <= town.areaRadius*town.areaRadius do return true
+	for index in 0..<town.districtCount {
+		district := &town.districts[index]
+		if TownHallDistanceSquared(district.x, district.y, x, y) <= district.radius*district.radius {
+			return true
+		}
+	}
+	return false
 }
 
 TownBuildingInArea :: proc(w: ^World, kingdom_slot, town_slot, x, y: int, type: BuildingType) -> bool {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
 	width, height := BuildingTileSize(type)
 	if width <= 0 || height <= 0 do return false
-	d0 := TownTileAreaDistanceSquared(w, kingdom_slot, town_slot, x, y)
-	d1 := TownTileAreaDistanceSquared(w, kingdom_slot, town_slot, x+width-1, y)
-	d2 := TownTileAreaDistanceSquared(w, kingdom_slot, town_slot, x, y+height-1)
-	d3 := TownTileAreaDistanceSquared(w, kingdom_slot, town_slot, x+width-1, y+height-1)
-	radius := w.kingdoms[kingdom_slot].towns[town_slot].areaRadius
-	return max(max(d0, d1), max(d2, d3)) <= radius*radius
+	return TownPointInArea(w, kingdom_slot, town_slot, x, y) &&
+		TownPointInArea(w, kingdom_slot, town_slot, x+width-1, y) &&
+		TownPointInArea(w, kingdom_slot, town_slot, x, y+height-1) &&
+		TownPointInArea(w, kingdom_slot, town_slot, x+width-1, y+height-1)
+}
+
+// Milestones grow every circle of a merged town together.
+TownAreaExpand :: proc(w: ^World, kingdom_slot, town_slot, delta: int) {
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	town.areaRadius += delta
+	for index in 0..<town.districtCount {
+		town.districts[index].radius += delta
+	}
+}
+
+TownAreaBounds :: proc(w: ^World, kingdom_slot, town_slot: int) -> (min_x, max_x, min_y, max_y: int) {
+	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	hall_width, hall_height := BuildingTileSize(TownHall{})
+	min_x = town.x-town.areaRadius-1
+	max_x = town.x+hall_width+town.areaRadius
+	min_y = town.y-town.areaRadius-1
+	max_y = town.y+hall_height+town.areaRadius
+	for index in 0..<town.districtCount {
+		district := &town.districts[index]
+		min_x = min(min_x, district.x-district.radius-1)
+		max_x = max(max_x, district.x+hall_width+district.radius)
+		min_y = min(min_y, district.y-district.radius-1)
+		max_y = max(max_y, district.y+hall_height+district.radius)
+	}
+	return
+}
+
+// Frontier test: any circle of either town touches or overlaps any circle of
+// the other, including a one-tile tolerance for odd coastlines.
+TownAreasTouch :: proc(w: ^World, kingdom_slot, town_a, town_b: int) -> bool {
+	if !WorldTownExists(w, kingdom_slot, town_a) || !WorldTownExists(w, kingdom_slot, town_b) {
+		return false
+	}
+	hall_width, _ := BuildingTileSize(TownHall{})
+	for index_a in 0..<TownAreaCircleCount(w, kingdom_slot, town_a) {
+		ax, ay, ar := TownAreaCircle(w, kingdom_slot, town_a, index_a)
+		for index_b in 0..<TownAreaCircleCount(w, kingdom_slot, town_b) {
+			bx, by, br := TownAreaCircle(w, kingdom_slot, town_b, index_b)
+			dx := WorldShortestWrappedDelta(f32(ax-bx), f32(w.maxX))
+			dy := WorldShortestWrappedDelta(f32(ay-by), f32(w.maxY))
+			// Both circles are measured from their hall anchors, so add the two
+			// half-footprints to the frontier tolerance.
+			limit := f32(ar+br+hall_width+TOWN_FUSION_FRONTIER_SLACK)
+			if dx*dx+dy*dy <= limit*limit do return true
+		}
+	}
+	return false
 }
 
 TownFindBuilding :: proc(w: ^World, kingdom_slot, town_slot: int, kind: BuildingKind) -> int {
@@ -521,30 +700,37 @@ TownConversionsClear :: proc(w: ^World, kingdom_slot, town_slot: int) {
 	w.kingdoms[kingdom_slot].towns[town_slot].conversionCount = 0
 }
 
+// Eras advance automatically from population. Rewards are banked: a town can
+// cross several thresholds and choose them later without slowing its growth.
 TownMilestoneCheck :: proc(w: ^World, kingdom_slot, town_slot: int) {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	if town.milestonePending || town.milestonesReached >= TOWN_MILESTONE_COUNT do return
-	if town.citizens >= TOWN_MILESTONES[town.milestonesReached] {
-		town.milestonePending = true
+	for town.milestonesEarned < TOWN_MILESTONE_TIER_COUNT {
+		next := TOWN_ERAS[town.milestonesEarned+1].threshold
+		if town.citizens < next do break
+		town.milestonesEarned += 1
 		if kingdom_slot == w.observerKingdom {
 			WorldAlertAdd(w, .Milestone, kingdom_slot, town_slot, -1, f32(town.x), f32(town.y))
 		}
 	}
+	town.milestonePending = town.milestonesEarned > town.milestonesChosen
 }
 
 TownChooseMilestone :: proc(w: ^World, kingdom_slot, town_slot, option: int) -> bool {
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
 	if option != 0 && option != 1 do return false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	if !town.milestonePending || town.milestonesReached >= TOWN_MILESTONE_COUNT do return false
+	if town.milestonesChosen >= TOWN_MILESTONE_TIER_COUNT ||
+		town.milestonesChosen >= town.milestonesEarned {
+		return false
+	}
 
-	choice := TOWN_MILESTONE_OPTIONS[town.milestonesReached][option]
+	choice := TOWN_ERA_REWARDS[town.milestonesChosen][option]
 	town.unlockedBuildings |= choice.unlocks
 	town.unlockedUnits |= choice.units
-	town.areaRadius += TOWN_AREA_EXPANSION
-	town.milestonesReached += 1
-	town.milestonePending = false
+	TownAreaExpand(w, kingdom_slot, town_slot, TOWN_AREA_EXPANSION)
+	town.milestonesChosen += 1
+	town.milestonePending = town.milestonesEarned > town.milestonesChosen
 	return true
 }
 
@@ -552,8 +738,274 @@ TownMilestoneOption :: proc(w: ^World, kingdom_slot, town_slot, option: int) -> 
 	if !WorldTownExists(w, kingdom_slot, town_slot) do return {}, false
 	if option != 0 && option != 1 do return {}, false
 	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	if !town.milestonePending || town.milestonesReached >= TOWN_MILESTONE_COUNT do return {}, false
-	return TOWN_MILESTONE_OPTIONS[town.milestonesReached][option], true
+	if town.milestonesChosen >= TOWN_MILESTONE_TIER_COUNT ||
+		town.milestonesChosen >= town.milestonesEarned {
+		return {}, false
+	}
+	return TOWN_ERA_REWARDS[town.milestonesChosen][option], true
+}
+
+FusionFailure :: enum {
+	None,
+	NoTown,
+	DifferentKingdom,
+	SameTown,
+	NotEraFive,
+	NoHall,
+	NoFrontier,
+	PendingMilestone,
+	NoWood,
+	DistrictLimit,
+	ConstructionConflict,
+	ConversionLimit,
+}
+
+TownFusionCost :: proc(w: ^World, kingdom_slot, host_slot: int) -> f32 {
+	host := &w.kingdoms[kingdom_slot].towns[host_slot]
+	return f32(TOWN_FUSION_WOOD_BASE+TOWN_FUSION_WOOD_PER_DISTRICT*host.districtCount)
+}
+
+TownFusionNewConversionSlots :: proc(w: ^World, kingdom_slot, host_slot, guest_slot: int) -> int {
+	host := &w.kingdoms[kingdom_slot].towns[host_slot]
+	guest := &w.kingdoms[kingdom_slot].towns[guest_slot]
+	needed := 0
+	for guest_index in 0..<guest.conversionCount {
+		guest_job := guest.conversions[guest_index]
+		found := false
+		for host_index in 0..<host.conversionCount {
+			host_job := host.conversions[host_index]
+			if host_job.from == guest_job.from && host_job.to == guest_job.to {
+				found = true
+				break
+			}
+		}
+		if !found do needed += 1
+	}
+	return needed
+}
+
+TownFusionFailure :: proc(
+	w: ^World,
+	kingdom_slot, host_slot, target_kingdom, guest_slot: int,
+) -> FusionFailure {
+	if !WorldTownExists(w, kingdom_slot, host_slot) do return .NoTown
+	if target_kingdom != kingdom_slot do return .DifferentKingdom
+	if !WorldTownExists(w, target_kingdom, guest_slot) do return .NoTown
+	if host_slot == guest_slot do return .SameTown
+
+	host := &w.kingdoms[kingdom_slot].towns[host_slot]
+	guest := &w.kingdoms[kingdom_slot].towns[guest_slot]
+	if TownEra(w, kingdom_slot, host_slot) < TOWN_FUSION_ERA ||
+		TownEra(w, kingdom_slot, guest_slot) < TOWN_FUSION_ERA {
+		return .NotEraFive
+	}
+	if TownHallSlot(w, kingdom_slot, host_slot) < 0 ||
+		TownHallSlot(w, kingdom_slot, guest_slot) < 0 {
+		return .NoHall
+	}
+	if !TownAreasTouch(w, kingdom_slot, host_slot, guest_slot) do return .NoFrontier
+	if host.milestonesEarned != host.milestonesChosen ||
+		guest.milestonesEarned != guest.milestonesChosen {
+		return .PendingMilestone
+	}
+	if host.districtCount+1+guest.districtCount > MAX_TOWN_DISTRICTS do return .DistrictLimit
+	if host.constructionActive && guest.constructionActive do return .ConstructionConflict
+	if host.conversionCount+TownFusionNewConversionSlots(w, kingdom_slot, host_slot, guest_slot) >
+		MAX_CONVERSION_JOBS {
+		return .ConversionLimit
+	}
+	if host.wood < TownFusionCost(w, kingdom_slot, host_slot) do return .NoWood
+	return .None
+}
+
+// Absorbs a frontier era-5 town into the initiating town. Buildings and units
+// never move; only their town ownership and the compound area change.
+TownFuse :: proc(
+	w: ^World,
+	kingdom_slot, host_slot, target_kingdom, guest_slot: int,
+) -> bool {
+	if TownFusionFailure(w, kingdom_slot, host_slot, target_kingdom, guest_slot) != .None {
+		return false
+	}
+
+	host := &w.kingdoms[kingdom_slot].towns[host_slot]
+	guest := &w.kingdoms[kingdom_slot].towns[guest_slot]
+	cost := TownFusionCost(w, kingdom_slot, host_slot)
+
+	guest_name := guest.name
+	guest_x, guest_y := guest.x, guest.y
+	guest_radius := guest.areaRadius
+	guest_districts := guest.districts
+	guest_district_count := guest.districtCount
+	guest_hall := guest.hallSlot
+
+	// Reassign every guest building. The old hall becomes the district hall in
+	// place, so its footprint and tile indices stay valid.
+	for building_slot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[building_slot] do continue
+		if w.buildings[building_slot].kingdom != kingdom_slot ||
+			w.buildings[building_slot].town != guest_slot {
+			continue
+		}
+		w.buildings[building_slot].town = host_slot
+		if building_slot == guest_hall {
+			w.buildings[building_slot].type = DistrictHall{}
+			w.buildings[building_slot].health = BuildingDefaultHealth(DistrictHall{})
+			w.buildings[building_slot].cooldown = 0
+			w.buildings[building_slot].homeResident = 0
+		}
+	}
+
+	for unit_slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unit_slot] do continue
+		if w.units[unit_slot].kingdome != kingdom_slot || w.units[unit_slot].town != guest_slot {
+			continue
+		}
+		w.units[unit_slot].town = host_slot
+		// Paths were built against the old town's flow field; recompute them
+		// against the merged town on the next update.
+		w.units[unit_slot].pathReady = false
+	}
+	host.citizens += guest.citizens
+	guest.citizens = 0
+
+	for guest_index in 0..<guest.conversionCount {
+		job := guest.conversions[guest_index]
+		merged := false
+		for host_index in 0..<host.conversionCount {
+			host_job := &host.conversions[host_index]
+			if host_job.from != job.from || host_job.to != job.to do continue
+			host_job.remaining += job.remaining
+			host_job.assigned += job.assigned
+			merged = true
+			break
+		}
+		if !merged {
+			host.conversions[host.conversionCount] = job
+			host.conversionCount += 1
+		}
+	}
+
+	if guest.constructionActive {
+		host.construction = guest.construction
+		host.constructionActive = true
+		host.constructionProgress = guest.constructionProgress
+	}
+
+	host.wood += guest.wood
+	host.wood -= cost
+	host.unlockedBuildings |= guest.unlockedBuildings
+	host.unlockedUnits |= guest.unlockedUnits
+
+	// Merged population keeps the combined base batch; each transferred District
+	// Hall adds its 10% share on top.
+	host.growthBatchBonus += TownBaseBatch(w, kingdom_slot, guest_slot)
+	host.growthCooldown = min(host.growthCooldown, guest.growthCooldown)
+	host.growthPending += guest.growthPending
+	host.growthInterval = TOWN_ERAS[TOWN_FUSION_ERA].interval
+	host.growthBatch = TownEffectiveBatch(w, kingdom_slot, host_slot)
+	host.growthRate = f32(host.growthBatch)/host.growthInterval
+
+	district := TownDistrict{x = guest_x, y = guest_y, radius = guest_radius}
+	NameDistrictAssign(&district.name, &guest_name)
+	host.districts[host.districtCount] = district
+	host.districtCount += 1
+	for district_index in 0..<guest_district_count {
+		host.districts[host.districtCount] = guest_districts[district_index]
+		host.districtCount += 1
+	}
+	host.fusionCount += 1
+	host.alarmActive = host.alarmActive || guest.alarmActive
+
+	if w.kingdoms[kingdom_slot].capitalSlot == guest_slot ||
+		w.kingdoms[kingdom_slot].capitalSlot == host_slot {
+		w.kingdoms[kingdom_slot].capitalSlot = host_slot
+	}
+
+	if kingdom_slot == w.observerKingdom {
+		WorldAlertAdd(w, .TownFused, kingdom_slot, host_slot, guest_slot, f32(guest_x), f32(guest_y))
+	}
+
+	TownFusionRedirectOrders(w, kingdom_slot, host_slot, guest_slot)
+	w.kingdoms[kingdom_slot].townUsed[guest_slot] = false
+
+	for other_kingdom in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[other_kingdom] do continue
+		for other_town in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[other_kingdom].townUsed[other_town] do continue
+			TownOrdersRebuild(w, other_kingdom, other_town)
+		}
+	}
+
+	w.kingdoms[kingdom_slot].towns[guest_slot] = Town{}
+	WorldConstructionChanged(w)
+	w.navigationRevision += 1
+	return true
+}
+
+TownFusionRedirectOrders :: proc(w: ^World, kingdom_slot, host_slot, guest_slot: int) {
+	host := &w.kingdoms[kingdom_slot].towns[host_slot]
+	guest := &w.kingdoms[kingdom_slot].towns[guest_slot]
+
+	// Redirect every order that targeted the guest to the host.
+	for other_kingdom in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[other_kingdom] do continue
+		for other_town in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[other_kingdom].townUsed[other_town] do continue
+			// The guest's own orders are merged below; the host never needs an
+			// order pointing at itself.
+			if other_kingdom == kingdom_slot && (other_town == host_slot || other_town == guest_slot) {
+				continue
+			}
+			other := &w.kingdoms[other_kingdom].towns[other_town]
+			if other.attackOrders[kingdom_slot][guest_slot] {
+				other.attackOrders[kingdom_slot][guest_slot] = false
+				other.attackOrders[kingdom_slot][host_slot] = true
+				host.attackedBy[other_kingdom][other_town] = true
+			}
+			if other.defendOrders[kingdom_slot][guest_slot] {
+				other.defendOrders[kingdom_slot][guest_slot] = false
+				other.defendOrders[kingdom_slot][host_slot] = true
+				host.defendedBy[other_kingdom][other_town] = true
+			}
+		}
+	}
+
+	// The guest's own outgoing orders become the host's.
+	for other_kingdom in 0..<KINGDOMS_CAPACITY {
+		for other_town in 0..<TOWN_CAPACITY {
+			if guest.attackOrders[other_kingdom][other_town] {
+				host.attackOrders[other_kingdom][other_town] = true
+				if WorldTownExists(w, other_kingdom, other_town) {
+					w.kingdoms[other_kingdom].towns[other_town].attackedBy[kingdom_slot][host_slot] = true
+				}
+			}
+			if guest.defendOrders[other_kingdom][other_town] {
+				host.defendOrders[other_kingdom][other_town] = true
+				if WorldTownExists(w, other_kingdom, other_town) {
+					w.kingdoms[other_kingdom].towns[other_town].defendedBy[kingdom_slot][host_slot] = true
+				}
+			}
+		}
+	}
+
+	for other_kingdom in 0..<KINGDOMS_CAPACITY {
+		for other_town in 0..<TOWN_CAPACITY {
+			if guest.attackedBy[other_kingdom][other_town] {
+				host.attackedBy[other_kingdom][other_town] = true
+			}
+			if guest.defendedBy[other_kingdom][other_town] {
+				host.defendedBy[other_kingdom][other_town] = true
+			}
+		}
+	}
+
+	guest.attackOrders = {}
+	guest.defendOrders = {}
+	guest.attackedBy = {}
+	guest.defendedBy = {}
+	guest.orderCount = 0
+	guest.orderRevision += 1
 }
 
 // Player order: attacker town -> attack -> any town of another kingdom.

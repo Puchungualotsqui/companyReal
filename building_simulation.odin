@@ -49,7 +49,7 @@ WorldBuildingUpdate :: proc(w: ^World, delta_time: f32) {
 		}
 
 		switch _ in w.buildings[building_slot].type {
-		case TownHall, Wall, Bridge, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path:
+		case TownHall, Wall, Bridge, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path, DistrictHall:
 		case Home:
 			BuildingUpdateHome(w, building_slot, delta_time)
 		case Farmland:
@@ -552,11 +552,11 @@ TownFindBuildingSite :: proc(w: ^World, kingdom_slot, town_slot: int, building_t
 	// Stable per town and building kind, without consuming the effects RNG.
 	seed := w.seed ~ (u64(kingdom_slot*TOWN_CAPACITY+town_slot+1)*0x9E3779B97F4A7C15) ~
 		(u64(kind)+1)*0xBF58476D1CE4E5B9
-	max_radius := max(town.areaRadius, 2)
-	min_x := max(0, town.x-max_radius)
-	max_x := min(world_width-building_width, town.x+3+max_radius)
-	min_y := max(0, town.y-max_radius)
-	max_y := min(world_height-building_height, town.y+3+max_radius)
+	area_min_x, area_max_x, area_min_y, area_max_y := TownAreaBounds(w, kingdom_slot, town_slot)
+	min_x := max(0, area_min_x)
+	max_x := min(world_width-building_width, area_max_x)
+	min_y := max(0, area_min_y)
+	max_y := min(world_height-building_height, area_max_y)
 	best_x, best_y := 0, 0
 	best_score: f32 = -1e30
 	found := false

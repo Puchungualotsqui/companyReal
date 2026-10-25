@@ -345,7 +345,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 				}
 			}
 		}
-	case Bridge, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Wall, Home, Farmland, Path:
+	case Bridge, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Wall, Home, Farmland, Path, DistrictHall:
 	}
 
 	resident := w.buildings.homeResident[slot]-1
