@@ -58,8 +58,8 @@ CommandFoundTown :: struct {
 
 CommandFuseTown :: struct {
 	town:           int,
-	target_kingdom: int,
-	target_town:    int,
+	targetKingdom: int,
+	targetTown:    int,
 }
 
 CommandBuildCombat :: struct {
@@ -70,26 +70,26 @@ CommandBuildCombat :: struct {
 
 CommandAttackTown :: struct {
 	town:            int,
-	target_kingdom:  int,
-	target_town:     int,
+	targetKingdom:  int,
+	targetTown:     int,
 }
 
 CommandDefendTown :: struct {
 	town:            int,
-	target_kingdom:  int,
-	target_town:     int,
+	targetKingdom:  int,
+	targetTown:     int,
 }
 
 CommandStopAttack :: struct {
 	town:            int,
-	target_kingdom:  int,
-	target_town:     int,
+	targetKingdom:  int,
+	targetTown:     int,
 }
 
 CommandStopDefend :: struct {
 	town:            int,
-	target_kingdom:  int,
-	target_town:     int,
+	targetKingdom:  int,
+	targetTown:     int,
 }
 
 CommandDeclareWar :: struct {
@@ -113,22 +113,22 @@ KingdomIssueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) ->
 	case CommandFoundTown:
 		return TownStartFounding(w, kingdom, cmd.town, cmd.x, cmd.y)
 	case CommandFuseTown:
-		return TownFuse(w, kingdom, cmd.town, cmd.target_kingdom, cmd.target_town)
+		return TownFuse(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
 	case CommandBuildCombat:
 		return TownStartCombatConstruction(w, kingdom, cmd.town, cmd.kind, cmd.x, cmd.y)
 	case CommandAttackTown:
-		return TownStartAttack(w, kingdom, cmd.town, cmd.target_kingdom, cmd.target_town)
+		return TownStartAttack(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
 	case CommandDefendTown:
 		if !WorldTownExists(w, kingdom, cmd.town) do return false
-		TownStartDefending(w, kingdom, cmd.town, cmd.target_kingdom, cmd.target_town)
+		TownStartDefending(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
 		return true
 	case CommandStopAttack:
 		if !WorldTownExists(w, kingdom, cmd.town) do return false
-		TownStopAttack(w, kingdom, cmd.town, cmd.target_kingdom, cmd.target_town)
+		TownStopAttack(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
 		return true
 	case CommandStopDefend:
 		if !WorldTownExists(w, kingdom, cmd.town) do return false
-		TownStopDefending(w, kingdom, cmd.town, cmd.target_kingdom, cmd.target_town)
+		TownStopDefending(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
 		return true
 	case CommandDeclareWar:
 		return KingdomDeclareWar(w, kingdom, cmd.other)
@@ -140,9 +140,9 @@ KingdomIssueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) ->
 	return false
 }
 
-// Configures who drives each kingdom. `local_kingdom` is the slot controlled
+// Configures who drives each kingdom. `localKingdom` is the slot controlled
 // by the person at this screen; pass -1 for a pure spectator game.
-WorldConfigureGame :: proc(w: ^World, local_kingdom: int, spectator: bool) {
+WorldConfigureGame :: proc(w: ^World, localKingdom: int, spectator: bool) {
 	w.gameOver = false
 	w.winnerKingdom = -1
 	w.playerKingdom = -1
@@ -153,11 +153,11 @@ WorldConfigureGame :: proc(w: ^World, local_kingdom: int, spectator: bool) {
 		if w.kingdomUsed[kingdom] do AIStateInit(w, kingdom)
 	}
 
-	if !spectator && local_kingdom >= 0 && local_kingdom < KINGDOMS_CAPACITY &&
-		w.kingdomUsed[local_kingdom] {
-		w.controllers[local_kingdom].kind = .Human
-		w.playerKingdom = local_kingdom
-		w.observerKingdom = local_kingdom
+	if !spectator && localKingdom >= 0 && localKingdom < KINGDOMS_CAPACITY &&
+		w.kingdomUsed[localKingdom] {
+		w.controllers[localKingdom].kind = .Human
+		w.playerKingdom = localKingdom
+		w.observerKingdom = localKingdom
 	}
 }
 
@@ -191,14 +191,14 @@ WorldEnterSpectator :: proc(w: ^World) {
 	FogUpdate(w)
 }
 
-WorldControllersUpdate :: proc(w: ^World, delta_time: f32) {
+WorldControllersUpdate :: proc(w: ^World, deltaTime: f32) {
 	for kingdom in 0 ..< KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom] do continue
 		switch w.controllers[kingdom].kind {
 		case .Human:
 			// Local input is translated into KingdomCommands by the UI.
 		case .AI:
-			AIControllerUpdate(w, kingdom, delta_time)
+			AIControllerUpdate(w, kingdom, deltaTime)
 		}
 	}
 }

@@ -90,8 +90,8 @@ ParticleSpawn :: proc(w: ^World, p: Particle) -> int {
 
 	life := p.life
 	if life <= 0 do life = 0.75
-	max_life := p.maxLife
-	if max_life <= 0 do max_life = life
+	maxLife := p.maxLife
+	if maxLife <= 0 do maxLife = life
 	alpha := p.tint.a
 	if alpha == 0 do alpha = 255
 
@@ -102,7 +102,7 @@ ParticleSpawn :: proc(w: ^World, p: Particle) -> int {
 	w.particles.vy[slot] = p.vy
 	w.particles.vz[slot] = p.vz
 	w.particles.life[slot] = life
-	w.particles.maxLife[slot] = max_life
+	w.particles.maxLife[slot] = maxLife
 	w.particles.size[slot] = p.size
 	w.particles.rotation[slot] = p.rotation
 	w.particles.spin[slot] = p.spin
@@ -126,14 +126,14 @@ ParticleRemove :: proc(w: ^World, slot: int) {
 	w.particleCount -= 1
 }
 
-WorldParticleUpdate :: proc(w: ^World, delta_time: f32) {
+WorldParticleUpdate :: proc(w: ^World, deltaTime: f32) {
 	if w.particleCount <= 0 do return
-	dt := clamp(delta_time, 0, PARTICLE_MAX_FRAME_STEP)
+	dt := clamp(deltaTime, 0, PARTICLE_MAX_FRAME_STEP)
 	if dt <= 0 do return
 
-	world_width := f32(w.maxX)
-	world_height := f32(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
 
 	for i in 0 ..< PARTICLE_CAPACITY {
 		if !w.particleUsed[i] do continue
@@ -166,9 +166,9 @@ WorldParticleUpdate :: proc(w: ^World, delta_time: f32) {
 
 		drag := w.particles.drag[i]
 		if drag > 0 {
-			drag_factor := 1/(1+drag*dt)
-			w.particles.vx[i] *= drag_factor
-			w.particles.vy[i] *= drag_factor
+			dragFactor := 1/(1+drag*dt)
+			w.particles.vx[i] *= dragFactor
+			w.particles.vy[i] *= dragFactor
 		}
 		w.particles.vz[i] -= w.particles.gravity[i]*dt
 		w.particles.rotation[i] += w.particles.spin[i]*dt
@@ -192,10 +192,10 @@ WorldParticleUpdate :: proc(w: ^World, delta_time: f32) {
 				w.particles.spin[i] = 0
 				w.particles.settled[i] = true
 			case .Gib, .Bone, .Gore, .WoodChip, .StoneChip:
-				bounce_vz := -w.particles.vz[i]*w.particles.bounce[i]
-				if bounce_vz > 1.2 {
+				bounceVz := -w.particles.vz[i]*w.particles.bounce[i]
+				if bounceVz > 1.2 {
 					z = 0
-					w.particles.vz[i] = bounce_vz
+					w.particles.vz[i] = bounceVz
 					w.particles.vx[i] *= 0.55
 					w.particles.vy[i] *= 0.55
 					w.particles.spin[i] *= -0.55
@@ -216,8 +216,8 @@ WorldParticleUpdate :: proc(w: ^World, delta_time: f32) {
 			}
 		}
 
-		w.particles.x[i] = WorldWrapPosition(x, world_width)
-		w.particles.y[i] = WorldWrapPosition(y, world_height)
+		w.particles.x[i] = WorldWrapPosition(x, worldWidth)
+		w.particles.y[i] = WorldWrapPosition(y, worldHeight)
 		w.particles.z[i] = max(z, 0)
 	}
 }
@@ -236,19 +236,19 @@ ParticleTexture :: proc(set: ^SpriteSet, w: ^World, slot: int) -> rl.Texture2D {
 ParticleDraw :: proc(
 	w: ^World,
 	renderer: ^WorldRenderer,
-	offset_x, offset_y: f32,
-	min_x, max_x, min_y, max_y: f32,
-	settled_pass: bool,
+	offsetX, offsetY: f32,
+	minX, maxX, minY, maxY: f32,
+	settledPass: bool,
 ) {
 	if w.particleCount <= 0 do return
 	if renderer.sprites.particle[.Blood].id == 0 do return
 
 	for i in 0 ..< PARTICLE_CAPACITY {
 		if !w.particleUsed[i] do continue
-		if w.particles.settled[i] != settled_pass do continue
+		if w.particles.settled[i] != settledPass do continue
 
-		px := offset_x+w.particles.x[i]
-		py := offset_y+w.particles.y[i]-w.particles.z[i]
+		px := offsetX+w.particles.x[i]
+		py := offsetY+w.particles.y[i]-w.particles.z[i]
 		size := w.particles.size[i]
 
 		kind := w.particles.kind[i]
@@ -257,8 +257,8 @@ ParticleDraw :: proc(
 			size *= 1+age*1.7
 		}
 		half := size*0.5
-		if w.particles.x[i]+half < min_x || w.particles.x[i]-half > max_x ||
-			w.particles.y[i]+half < min_y || w.particles.y[i]-half > max_y {
+		if w.particles.x[i]+half < minX || w.particles.x[i]-half > maxX ||
+			w.particles.y[i]+half < minY || w.particles.y[i]-half > maxY {
 			continue
 		}
 
@@ -267,9 +267,9 @@ ParticleDraw :: proc(
 
 		// Keep authored proportions: limbs must stay long and thin instead of
 		// being squashed into a square.
-		long_side := f32(max(texture.width, texture.height))
-		draw_width := size*f32(texture.width)/long_side
-		draw_height := size*f32(texture.height)/long_side
+		longSide := f32(max(texture.width, texture.height))
+		drawWidth := size*f32(texture.width)/longSide
+		drawHeight := size*f32(texture.height)/longSide
 
 		fade: f32 = 1
 		#partial switch kind {
@@ -289,8 +289,8 @@ ParticleDraw :: proc(
 		rl.DrawTexturePro(
 			texture,
 			source,
-			rl.Rectangle{px-draw_width*0.5, py-draw_height*0.5, draw_width, draw_height},
-			rl.Vector2{draw_width*0.5, draw_height*0.5},
+			rl.Rectangle{px-drawWidth*0.5, py-drawHeight*0.5, drawWidth, drawHeight},
+			rl.Vector2{drawWidth*0.5, drawHeight*0.5},
 			w.particles.rotation[i]*57.29577951308232,
 			tint,
 		)
@@ -299,20 +299,20 @@ ParticleDraw :: proc(
 
 // --- procedural particle sprites -------------------------------------------
 
-create_soft_cloud_texture :: proc(size: int, color: rl.Color, seed: u64, puffs: int) -> rl.Texture2D {
-	art := art_init(size, size)
+CreateSoftCloudTexture :: proc(size: int, color: rl.Color, seed: u64, puffs: int) -> rl.Texture2D {
+	art := ArtInit(size, size)
 	center := f32(size)*0.5
 	for puff in 0 ..< puffs {
-		puff_angle := WorldNoiseHash(puff, int(seed), 0xC10D)*6.2831853
-		puff_distance := WorldNoiseHash(puff, int(seed)+7, 0xC10E)*f32(size)*0.18
-		puff_x := center+math.cos(puff_angle)*puff_distance
-		puff_y := center+math.sin(puff_angle)*puff_distance
-		puff_radius := f32(size)*(0.24+WorldNoiseHash(puff, int(seed)+13, 0xC10F)*0.16)
+		puffAngle := WorldNoiseHash(puff, int(seed), 0xC10D)*6.2831853
+		puffDistance := WorldNoiseHash(puff, int(seed)+7, 0xC10E)*f32(size)*0.18
+		puffX := center+math.cos(puffAngle)*puffDistance
+		puffY := center+math.sin(puffAngle)*puffDistance
+		puffRadius := f32(size)*(0.24+WorldNoiseHash(puff, int(seed)+13, 0xC10F)*0.16)
 
 		for y in 0 ..< size {
 			for x in 0 ..< size {
-				dx := (f32(x)+0.5-puff_x)/puff_radius
-				dy := (f32(y)+0.5-puff_y)/puff_radius
+				dx := (f32(x)+0.5-puffX)/puffRadius
+				dy := (f32(y)+0.5-puffY)/puffRadius
 				distance := math.sqrt(dx*dx+dy*dy)
 				if distance >= 1 do continue
 				wobble := 0.82+0.28*WorldNoiseHash(x/2, y/2, seed)
@@ -320,90 +320,90 @@ create_soft_cloud_texture :: proc(size: int, color: rl.Color, seed: u64, puffs: 
 				strength = strength*strength
 				alpha := u8(clamp(f32(color.a)*strength, 0, 255))
 				if alpha == 0 do continue
-				art_pixel(&art, x, y, rl.Color{color.r, color.g, color.b, alpha})
+				ArtPixel(&art, x, y, rl.Color{color.r, color.g, color.b, alpha})
 			}
 		}
 	}
-	return art_take_texture(art)
+	return ArtTakeTexture(art)
 }
 
 // Converts generated art and frees the CPU image. SpriteSetInit mostly does
 // this inline, but the procedural effect art is built in batches.
-art_take_texture :: proc(art: Art) -> rl.Texture2D {
-	texture := art_to_texture(art)
+ArtTakeTexture :: proc(art: Art) -> rl.Texture2D {
+	texture := ArtToTexture(art)
 	rl.UnloadImage(art.image)
 	return texture
 }
 
-create_particle_kind_texture :: proc(kind: ParticleKind) -> rl.Texture2D {
+CreateParticleKindTexture :: proc(kind: ParticleKind) -> rl.Texture2D {
 	switch kind {
 	case .Blood:
 		// Greyscale so the same droplet can be tinted with any blood colour.
-		art := art_init(5, 5)
-		art_ellipse(&art, 2, 2, 2, 2, rl.Color{210, 210, 218, 255})
-		art_ellipse(&art, 2, 2, 1, 1, rl.Color{246, 246, 250, 255})
-		art_pixel(&art, 1, 1, rl.Color{255, 255, 255, 255})
-		return art_take_texture(art)
+		art := ArtInit(5, 5)
+		ArtEllipse(&art, 2, 2, 2, 2, rl.Color{210, 210, 218, 255})
+		ArtEllipse(&art, 2, 2, 1, 1, rl.Color{246, 246, 250, 255})
+		ArtPixel(&art, 1, 1, rl.Color{255, 255, 255, 255})
+		return ArtTakeTexture(art)
 	case .Gib:
-		art := art_init(7, 6)
-		art_ellipse(&art, 3, 3, 3, 2, C_OUTLINE)
-		art_ellipse(&art, 3, 3, 2, 2, rl.Color{168, 52, 52, 255})
-		art_ellipse(&art, 2, 2, 1, 1, rl.Color{214, 96, 88, 255})
-		art_pixel(&art, 5, 2, C_BONE)
-		return art_take_texture(art)
+		art := ArtInit(7, 6)
+		ArtEllipse(&art, 3, 3, 3, 2, C_OUTLINE)
+		ArtEllipse(&art, 3, 3, 2, 2, rl.Color{168, 52, 52, 255})
+		ArtEllipse(&art, 2, 2, 1, 1, rl.Color{214, 96, 88, 255})
+		ArtPixel(&art, 5, 2, C_BONE)
+		return ArtTakeTexture(art)
 	case .Bone:
-		art := art_init(6, 5)
-		art_line(&art, 1, 3, 4, 1, C_OUTLINE)
-		art_line(&art, 1, 2, 4, 0, C_BONE)
-		art_circle(&art, 1, 3, 1, C_OUTLINE)
-		art_circle(&art, 4, 1, 1, C_OUTLINE)
-		art_pixel(&art, 1, 3, C_BONE)
-		art_pixel(&art, 4, 1, C_BONE)
-		return art_take_texture(art)
+		art := ArtInit(6, 5)
+		ArtLine(&art, 1, 3, 4, 1, C_OUTLINE)
+		ArtLine(&art, 1, 2, 4, 0, C_BONE)
+		ArtCircle(&art, 1, 3, 1, C_OUTLINE)
+		ArtCircle(&art, 4, 1, 1, C_OUTLINE)
+		ArtPixel(&art, 1, 3, C_BONE)
+		ArtPixel(&art, 4, 1, C_BONE)
+		return ArtTakeTexture(art)
 	case .Gore:
 		return {}
 	case .Dust:
-		return create_soft_cloud_texture(16, rl.Color{148, 138, 120, 210}, 0xD057, 3)
+		return CreateSoftCloudTexture(16, rl.Color{148, 138, 120, 210}, 0xD057, 3)
 	case .Smoke:
-		return create_soft_cloud_texture(20, rl.Color{64, 62, 68, 210}, 0x5A0C, 4)
+		return CreateSoftCloudTexture(20, rl.Color{64, 62, 68, 210}, 0x5A0C, 4)
 	case .Ember:
-		art := art_init(4, 4)
-		art_ellipse(&art, 1, 1, 2, 2, rl.Color{232, 92, 36, 255})
-		art_ellipse(&art, 1, 1, 1, 1, rl.Color{255, 206, 118, 255})
-		art_pixel(&art, 0, 0, rl.Color{255, 246, 196, 255})
-		return art_take_texture(art)
+		art := ArtInit(4, 4)
+		ArtEllipse(&art, 1, 1, 2, 2, rl.Color{232, 92, 36, 255})
+		ArtEllipse(&art, 1, 1, 1, 1, rl.Color{255, 206, 118, 255})
+		ArtPixel(&art, 0, 0, rl.Color{255, 246, 196, 255})
+		return ArtTakeTexture(art)
 	case .Spark:
-		art := art_init(4, 4)
-		art_pixel(&art, 1, 1, rl.Color{255, 246, 198, 255})
-		art_pixel(&art, 2, 1, rl.Color{255, 214, 120, 255})
-		art_pixel(&art, 1, 2, rl.Color{255, 214, 120, 255})
-		art_pixel(&art, 2, 2, rl.Color{255, 168, 78, 255})
-		return art_take_texture(art)
+		art := ArtInit(4, 4)
+		ArtPixel(&art, 1, 1, rl.Color{255, 246, 198, 255})
+		ArtPixel(&art, 2, 1, rl.Color{255, 214, 120, 255})
+		ArtPixel(&art, 1, 2, rl.Color{255, 214, 120, 255})
+		ArtPixel(&art, 2, 2, rl.Color{255, 168, 78, 255})
+		return ArtTakeTexture(art)
 	case .WoodChip:
-		art := art_init(6, 4)
-		art_rect(&art, 1, 1, 4, 2, C_OUTLINE)
-		art_rect(&art, 2, 1, 3, 1, C_WOOD)
-		art_pixel(&art, 1, 2, C_WOOD_LIGHT)
-		return art_take_texture(art)
+		art := ArtInit(6, 4)
+		ArtRect(&art, 1, 1, 4, 2, C_OUTLINE)
+		ArtRect(&art, 2, 1, 3, 1, C_WOOD)
+		ArtPixel(&art, 1, 2, C_WOOD_LIGHT)
+		return ArtTakeTexture(art)
 	case .StoneChip:
-		art := art_init(6, 6)
-		art_triangle(&art, 1, 3, 3, 0, 5, 3, C_OUTLINE)
-		art_triangle(&art, 2, 3, 3, 1, 4, 3, C_STONE)
-		art_pixel(&art, 3, 2, C_STONE_LIGHT)
-		return art_take_texture(art)
+		art := ArtInit(6, 6)
+		ArtTriangle(&art, 1, 3, 3, 0, 5, 3, C_OUTLINE)
+		ArtTriangle(&art, 2, 3, 3, 1, 4, 3, C_STONE)
+		ArtPixel(&art, 3, 2, C_STONE_LIGHT)
+		return ArtTakeTexture(art)
 	case .Leaf:
-		art := art_init(5, 5)
-		art_ellipse(&art, 2, 2, 2, 1, C_LEAF_DARK)
-		art_pixel(&art, 1, 2, C_LEAF)
-		art_pixel(&art, 2, 1, C_LEAF_LIGHT)
-		art_pixel(&art, 3, 3, C_LEAF_DARKEST)
-		return art_take_texture(art)
+		art := ArtInit(5, 5)
+		ArtEllipse(&art, 2, 2, 2, 1, C_LEAF_DARK)
+		ArtPixel(&art, 1, 2, C_LEAF)
+		ArtPixel(&art, 2, 1, C_LEAF_LIGHT)
+		ArtPixel(&art, 3, 3, C_LEAF_DARKEST)
+		return ArtTakeTexture(art)
 	case .Ash:
-		art := art_init(4, 4)
-		art_rect(&art, 1, 1, 2, 2, rl.Color{54, 52, 52, 255})
-		art_pixel(&art, 1, 1, rl.Color{94, 90, 88, 255})
-		art_pixel(&art, 2, 2, rl.Color{32, 30, 30, 255})
-		return art_take_texture(art)
+		art := ArtInit(4, 4)
+		ArtRect(&art, 1, 1, 2, 2, rl.Color{54, 52, 52, 255})
+		ArtPixel(&art, 1, 1, rl.Color{94, 90, 88, 255})
+		ArtPixel(&art, 2, 2, rl.Color{32, 30, 30, 255})
+		return ArtTakeTexture(art)
 	}
 	return {}
 }

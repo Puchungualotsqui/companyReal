@@ -105,9 +105,9 @@ FogTileIndex :: proc(w: ^World, x, y: int) -> int {
 	width := int(w.maxX)
 	height := int(w.maxY)
 	if width <= 0 || height <= 0 do return -1
-	wrapped_x := WorldWrapCoordinate(x, width)
-	wrapped_y := WorldWrapCoordinate(y, height)
-	return wrapped_x*height+wrapped_y
+	wrappedX := WorldWrapCoordinate(x, width)
+	wrappedY := WorldWrapCoordinate(y, height)
+	return wrappedX*height+wrappedY
 }
 
 FogTileVisible :: proc(w: ^World, x, y: int) -> bool {
@@ -127,90 +127,90 @@ FogTileExplored :: proc(w: ^World, x, y: int) -> bool {
 }
 
 FogRectVisible :: proc(w: ^World, x, y, width, height: int) -> bool {
-	for tile_x in x ..< x+width {
-		for tile_y in y ..< y+height {
-			if FogTileVisible(w, tile_x, tile_y) do return true
+	for tileX in x ..< x+width {
+		for tileY in y ..< y+height {
+			if FogTileVisible(w, tileX, tileY) do return true
 		}
 	}
 	return false
 }
 
 FogRectExplored :: proc(w: ^World, x, y, width, height: int) -> bool {
-	for tile_x in x ..< x+width {
-		for tile_y in y ..< y+height {
-			if !FogTileExplored(w, tile_x, tile_y) do return false
+	for tileX in x ..< x+width {
+		for tileY in y ..< y+height {
+			if !FogTileExplored(w, tileX, tileY) do return false
 		}
 	}
 	return true
 }
 
-FogUnitVisible :: proc(w: ^World, unit_slot: int) -> bool {
-	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return false
-	if UnitHiddenInside(w, unit_slot) do return false
+FogUnitVisible :: proc(w: ^World, unitSlot: int) -> bool {
+	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return false
+	if UnitHiddenInside(w, unitSlot) do return false
 	if w.observerKingdom < 0 do return true
-	if w.units[unit_slot].kingdome == w.observerKingdom do return true
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return false
-	x := int(WorldWrapPosition(w.units.x[unit_slot], f32(world_width)))
-	y := int(WorldWrapPosition(w.units.y[unit_slot], f32(world_height)))
+	if w.units[unitSlot].kingdome == w.observerKingdom do return true
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return false
+	x := int(WorldWrapPosition(w.units.x[unitSlot], f32(worldWidth)))
+	y := int(WorldWrapPosition(w.units.y[unitSlot], f32(worldHeight)))
 	return FogTileVisible(w, x, y)
 }
 
-FogBuildingVisible :: proc(w: ^World, building_slot: int) -> bool {
-	if building_slot < 0 || building_slot >= BUILDING_CAPACITY || !w.buildingUsed[building_slot] {
+FogBuildingVisible :: proc(w: ^World, buildingSlot: int) -> bool {
+	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] {
 		return false
 	}
 	if w.observerKingdom < 0 do return true
-	if w.buildings[building_slot].kingdom == w.observerKingdom do return true
-	width, height := BuildingTileSize(w.buildings[building_slot].type)
+	if w.buildings[buildingSlot].kingdom == w.observerKingdom do return true
+	width, height := BuildingTileSize(w.buildings[buildingSlot].type)
 	return FogRectVisible(
 		w,
-		w.buildings[building_slot].x,
-		w.buildings[building_slot].y,
+		w.buildings[buildingSlot].x,
+		w.buildings[buildingSlot].y,
 		width,
 		height,
 	)
 }
 
-FogTownDiscovered :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
-	hall := TownHallSlot(w, kingdom_slot, town_slot)
+FogTownDiscovered :: proc(w: ^World, kingdomSlot, townSlot: int) -> bool {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return false
+	hall := TownHallSlot(w, kingdomSlot, townSlot)
 	if hall < 0 do return false
 	return FogTileExplored(w, w.buildings[hall].x, w.buildings[hall].y)
 }
 
-FogTownVisible :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
-	hall := TownHallSlot(w, kingdom_slot, town_slot)
+FogTownVisible :: proc(w: ^World, kingdomSlot, townSlot: int) -> bool {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return false
+	hall := TownHallSlot(w, kingdomSlot, townSlot)
 	if hall < 0 do return false
 	return FogBuildingVisible(w, hall)
 }
 
-KingdomDiscovered :: proc(w: ^World, kingdom_slot: int) -> bool {
-	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
+KingdomDiscovered :: proc(w: ^World, kingdomSlot: int) -> bool {
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdomSlot] {
 		return false
 	}
 	if w.observerKingdom < 0 do return true
-	if kingdom_slot == w.observerKingdom do return true
-	return KingdomsMet(w, w.observerKingdom, kingdom_slot)
+	if kingdomSlot == w.observerKingdom do return true
+	return KingdomsMet(w, w.observerKingdom, kingdomSlot)
 }
 
-FogFirstDiscoveredTown :: proc(w: ^World, kingdom_slot: int) -> (int, bool) {
-	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
+FogFirstDiscoveredTown :: proc(w: ^World, kingdomSlot: int) -> (int, bool) {
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdomSlot] {
 		return -1, false
 	}
-	for town_slot in 0..<TOWN_CAPACITY {
-		if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-		if FogTownDiscovered(w, kingdom_slot, town_slot) do return town_slot, true
+	for townSlot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+		if FogTownDiscovered(w, kingdomSlot, townSlot) do return townSlot, true
 	}
 	return -1, false
 }
 
 // Resolves a remembered town hall under the cursor. Used by attack/defend
 // orders so discovered-but-fogged towns remain valid targets.
-FogFindTownAt :: proc(w: ^World, tile_x, tile_y: int) -> (kingdom, town: int, found: bool) {
-	index := FogTileIndex(w, tile_x, tile_y)
+FogFindTownAt :: proc(w: ^World, tileX, tileY: int) -> (kingdom, town: int, found: bool) {
+	index := FogTileIndex(w, tileX, tileY)
 	if index < 0 || index >= len(w.fog.buildingAnchor) do return -1, -1, false
 	anchor := w.fog.buildingAnchor[index]
 	if anchor < 0 || anchor >= len(w.fog.buildingKind) do return -1, -1, false
@@ -238,30 +238,30 @@ FogMarkVisible :: proc(w: ^World, x, y: int) {
 
 // A kingdom source stamps contact vision and, only for the observer, fog.
 // The default remains useful for observer-only footprint revelation.
-FogRevealCircle :: proc(w: ^World, center_x, center_y: int, radius: f32, kingdom: int = -1) {
+FogRevealCircle :: proc(w: ^World, centerX, centerY: int, radius: f32, kingdom: int = -1) {
 	if radius <= 0 do return
 	if kingdom >= 0 && (kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom]) do return
-	needs_contact := false
+	needsContact := false
 	if kingdom >= 0 {
 		for other in 0..<KINGDOMS_CAPACITY {
 			if other != kingdom && w.kingdomUsed[other] && !KingdomsMet(w, kingdom, other) {
-				needs_contact = true
+				needsContact = true
 				break
 			}
 		}
 		// Once introduced to every living kingdom, only observer fog needs
 		// updating. Large AI armies need not stamp redundant contact circles.
-		if !needs_contact && kingdom != w.observerKingdom do return
+		if !needsContact && kingdom != w.observerKingdom do return
 	}
-	radius_squared := radius*radius
+	radiusSquared := radius*radius
 	extent := int(radius)+1
-	for offset_y in -extent..=extent {
-		distance_squared := f32(offset_y*offset_y)
-		if distance_squared > radius_squared do continue
-		half_width := int(math.sqrt(radius_squared-distance_squared))
-		for offset_x in -half_width..=half_width {
-			x, y := center_x+offset_x, center_y+offset_y
-			if needs_contact {
+	for offsetY in -extent..=extent {
+		distanceSquared := f32(offsetY*offsetY)
+		if distanceSquared > radiusSquared do continue
+		halfWidth := int(math.sqrt(radiusSquared-distanceSquared))
+		for offsetX in -halfWidth..=halfWidth {
+			x, y := centerX+offsetX, centerY+offsetY
+			if needsContact {
 				index := FogTileIndex(w, x, y)
 				if index >= 0 && index < len(w.fog.contactVision) {
 					w.fog.contactVision[index] |= u8(1) << u8(kingdom)
@@ -273,9 +273,9 @@ FogRevealCircle :: proc(w: ^World, center_x, center_y: int, radius: f32, kingdom
 }
 
 FogRevealRect :: proc(w: ^World, x, y, width, height: int) {
-	for tile_x in x ..< x+width {
-		for tile_y in y ..< y+height {
-			FogMarkVisible(w, tile_x, tile_y)
+	for tileX in x ..< x+width {
+		for tileY in y ..< y+height {
+			FogMarkVisible(w, tileX, tileY)
 		}
 	}
 }
@@ -317,20 +317,20 @@ FogGhostRemove :: proc(w: ^World, anchor: int) {
 	w.fog.buildingGhostIndex[anchor] = -1
 }
 
-FogBuildingDespawn :: proc(w: ^World, building_slot: int) {
-	if building_slot < 0 || building_slot >= BUILDING_CAPACITY || !w.buildingUsed[building_slot] {
+FogBuildingDespawn :: proc(w: ^World, buildingSlot: int) {
+	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] {
 		return
 	}
-	building := &w.buildings[building_slot]
+	building := &w.buildings[buildingSlot]
 	width, height := BuildingTileSize(building.type)
 	anchor := FogTileIndex(w, building.x, building.y)
 	if anchor < 0 do return
 
 	if FogRectVisible(w, building.x, building.y, width, height) ||
 		building.kingdom == w.observerKingdom {
-		for tile_x in building.x ..< building.x+width {
-			for tile_y in building.y ..< building.y+height {
-				index := FogTileIndex(w, tile_x, tile_y)
+		for tileX in building.x ..< building.x+width {
+			for tileY in building.y ..< building.y+height {
+				index := FogTileIndex(w, tileX, tileY)
 				if index >= 0 do w.fog.buildingAnchor[index] = -1
 			}
 		}
@@ -341,12 +341,12 @@ FogBuildingDespawn :: proc(w: ^World, building_slot: int) {
 	}
 }
 
-FogDecorationDespawn :: proc(w: ^World, decoration_slot: int) {
-	if decoration_slot < 0 || decoration_slot >= DECORATION_CAPACITY ||
-		!w.decorationUsed[decoration_slot] {
+FogDecorationDespawn :: proc(w: ^World, decorationSlot: int) {
+	if decorationSlot < 0 || decorationSlot >= DECORATION_CAPACITY ||
+		!w.decorationUsed[decorationSlot] {
 		return
 	}
-	index := FogTileIndex(w, int(w.decorations.x[decoration_slot]), int(w.decorations.y[decoration_slot]))
+	index := FogTileIndex(w, int(w.decorations.x[decorationSlot]), int(w.decorations.y[decorationSlot]))
 	if index < 0 || index >= len(w.fog.decorationKind) do return
 	if w.fog.visible[index] {
 		w.fog.decorationKind[index] = FOG_NONE
@@ -354,26 +354,26 @@ FogDecorationDespawn :: proc(w: ^World, decoration_slot: int) {
 	}
 }
 
-FogBuildingBurning :: proc(w: ^World, building_slot: int) -> bool {
-	building := &w.buildings[building_slot]
+FogBuildingBurning :: proc(w: ^World, buildingSlot: int) -> bool {
+	building := &w.buildings[buildingSlot]
 	width, height := BuildingTileSize(building.type)
-	for tile_x in building.x ..< building.x+width {
-		for tile_y in building.y ..< building.y+height {
-			if WorldFireAt(w, tile_x, tile_y) do return true
+	for tileX in building.x ..< building.x+width {
+		for tileY in building.y ..< building.y+height {
+			if WorldFireAt(w, tileX, tileY) do return true
 		}
 	}
 	return false
 }
 
-FogSnapshotBuilding :: proc(w: ^World, building_slot: int) {
-	building := &w.buildings[building_slot]
+FogSnapshotBuilding :: proc(w: ^World, buildingSlot: int) {
+	building := &w.buildings[buildingSlot]
 	width, height := BuildingTileSize(building.type)
 	anchor := FogTileIndex(w, building.x, building.y)
 	if anchor < 0 do return
 
 	w.fog.buildingKind[anchor] = u8(BuildingKindOf(building.type))
 	w.fog.buildingFlags[anchor] = 0
-	if FogBuildingBurning(w, building_slot) do w.fog.buildingFlags[anchor] |= FOG_FLAG_BURNING
+	if FogBuildingBurning(w, buildingSlot) do w.fog.buildingFlags[anchor] |= FOG_FLAG_BURNING
 	if building.kingdom >= 0 && building.kingdom < KINGDOMS_CAPACITY {
 		w.fog.buildingKingdom[anchor] = u8(building.kingdom)
 	} else {
@@ -384,18 +384,18 @@ FogSnapshotBuilding :: proc(w: ^World, building_slot: int) {
 	} else {
 		w.fog.buildingTown[anchor] = FOG_NONE
 	}
-	for tile_x in building.x ..< building.x+width {
-		for tile_y in building.y ..< building.y+height {
-			index := FogTileIndex(w, tile_x, tile_y)
+	for tileX in building.x ..< building.x+width {
+		for tileY in building.y ..< building.y+height {
+			index := FogTileIndex(w, tileX, tileY)
 			if index >= 0 do w.fog.buildingAnchor[index] = anchor
 		}
 	}
 	FogGhostRemove(w, anchor)
 }
 
-FogSnapshotConstruction :: proc(w: ^World, kingdom_slot, town_slot: int) {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+FogSnapshotConstruction :: proc(w: ^World, kingdomSlot, townSlot: int) {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	if !town.constructionActive do return
 	site := town.construction
 	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
@@ -404,31 +404,31 @@ FogSnapshotConstruction :: proc(w: ^World, kingdom_slot, town_slot: int) {
 
 	w.fog.buildingKind[anchor] = u8(site.kind)
 	w.fog.buildingFlags[anchor] = FOG_FLAG_CONSTRUCTION
-	w.fog.buildingKingdom[anchor] = u8(clamp(kingdom_slot, 0, 254))
-	w.fog.buildingTown[anchor] = u8(clamp(town_slot, 0, 254))
-	for tile_x in site.x ..< site.x+width {
-		for tile_y in site.y ..< site.y+height {
-			index := FogTileIndex(w, tile_x, tile_y)
+	w.fog.buildingKingdom[anchor] = u8(clamp(kingdomSlot, 0, 254))
+	w.fog.buildingTown[anchor] = u8(clamp(townSlot, 0, 254))
+	for tileX in site.x ..< site.x+width {
+		for tileY in site.y ..< site.y+height {
+			index := FogTileIndex(w, tileX, tileY)
 			if index >= 0 do w.fog.buildingAnchor[index] = anchor
 		}
 	}
 	FogGhostRemove(w, anchor)
 }
 
-FogSnapshotDecoration :: proc(w: ^World, decoration_slot: int) {
-	decoration := &w.decorations[decoration_slot]
-	tile_x := int(decoration.x)
-	tile_y := int(decoration.y)
-	if !FogTileVisible(w, tile_x, tile_y) do return
-	index := FogTileIndex(w, tile_x, tile_y)
+FogSnapshotDecoration :: proc(w: ^World, decorationSlot: int) {
+	decoration := &w.decorations[decorationSlot]
+	tileX := int(decoration.x)
+	tileY := int(decoration.y)
+	if !FogTileVisible(w, tileX, tileY) do return
+	index := FogTileIndex(w, tileX, tileY)
 	if index < 0 do return
 
-	fraction_x := clamp(decoration.x-f32(tile_x), 0, 1)
-	fraction_y := clamp(decoration.y-f32(tile_y), 0, 1)
+	fractionX := clamp(decoration.x-f32(tileX), 0, 1)
+	fractionY := clamp(decoration.y-f32(tileY), 0, 1)
 	w.fog.decorationKind[index] = u8(decoration.kind)
 	w.fog.decorationVariant[index] = decoration.variant
-	w.fog.decorationOffsetX[index] = u8(fraction_x*255)
-	w.fog.decorationOffsetY[index] = u8(fraction_y*255)
+	w.fog.decorationOffsetX[index] = u8(fractionX*255)
+	w.fog.decorationOffsetY[index] = u8(fractionY*255)
 }
 
 // Any visible footprint tile is enough to meet a building's owner; neither
@@ -436,9 +436,9 @@ FogSnapshotDecoration :: proc(w: ^World, decoration_slot: int) {
 FogContactRect :: proc(w: ^World, kingdom, x, y, width, height: int) {
 	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do return
 	viewers: u8
-	for tile_x in x..<x+width {
-		for tile_y in y..<y+height {
-			index := FogTileIndex(w, tile_x, tile_y)
+	for tileX in x..<x+width {
+		for tileY in y..<y+height {
+			index := FogTileIndex(w, tileX, tileY)
 			if index >= 0 && index < len(w.fog.contactVision) do viewers |= w.fog.contactVision[index]
 		}
 	}
@@ -458,30 +458,31 @@ FogUpdate :: proc(w: ^World) {
 	}
 	clear(&w.fog.visibleTiles)
 
-	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil || UnitHiddenInside(w, unit_slot) do continue
-		kingdom := w.units[unit_slot].kingdome
+	isNight := WorldIsNight(w)
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil || UnitHiddenInside(w, unitSlot) do continue
+		kingdom := w.units[unitSlot].kingdome
 		if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do continue
-		vision := UnitDefaultVision(w.units[unit_slot].type)
-		x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
-		y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
+		vision := UnitDefaultVision(w.units[unitSlot].type, isNight)
+		x := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
+		y := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
 		FogRevealCircle(w, x, y, vision, kingdom)
 	}
 
-	for building_slot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[building_slot] do continue
-		building := &w.buildings[building_slot]
+	for buildingSlot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[buildingSlot] do continue
+		building := &w.buildings[buildingSlot]
 		if building.kingdom < 0 || building.kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[building.kingdom] do continue
 		width, height := BuildingTileSize(building.type)
 		vision := BuildingVision(BuildingKindOf(building.type))
 		FogRevealCircle(w, building.x+width/2, building.y+height/2, vision, building.kingdom)
 	}
 
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] do continue
-		for town_slot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-			site := &w.kingdoms[kingdom_slot].towns[town_slot]
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			site := &w.kingdoms[kingdomSlot].towns[townSlot]
 			if !site.constructionActive do continue
 			width, height := BuildingTileSize(BuildingTypeFromKind(site.construction.kind))
 			FogRevealCircle(
@@ -489,49 +490,49 @@ FogUpdate :: proc(w: ^World) {
 				site.construction.x+width/2,
 				site.construction.y+height/2,
 				BuildingVision(site.construction.kind),
-				kingdom_slot,
+				kingdomSlot,
 			)
 		}
 	}
 
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] do continue
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
 		width, height := BuildingTileSize(TownHall{})
-		for town_slot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-			for circle_index in 0..<TownAreaCircleCount(w, kingdom_slot, town_slot) {
-				circle_x, circle_y, circle_radius := TownAreaCircle(w, kingdom_slot, town_slot, circle_index)
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			for circleIndex in 0..<TownAreaCircleCount(w, kingdomSlot, townSlot) {
+				circleX, circleY, circleRadius := TownAreaCircle(w, kingdomSlot, townSlot, circleIndex)
 				FogRevealCircle(
 					w,
-					circle_x+width/2,
-					circle_y+height/2,
-					f32(circle_radius)*FOG_TOWN_AREA_VISION_FACTOR,
-					kingdom_slot,
+					circleX+width/2,
+					circleY+height/2,
+					f32(circleRadius)*FOG_TOWN_AREA_VISION_FACTOR,
+					kingdomSlot,
 				)
 			}
 		}
 	}
 
-	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil || UnitHiddenInside(w, unit_slot) do continue
-		x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
-		y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
-		FogContactRect(w, w.units[unit_slot].kingdome, x, y, 1, 1)
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil || UnitHiddenInside(w, unitSlot) do continue
+		x := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
+		y := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+		FogContactRect(w, w.units[unitSlot].kingdome, x, y, 1, 1)
 	}
-	for building_slot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[building_slot] do continue
-		building := &w.buildings[building_slot]
+	for buildingSlot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[buildingSlot] do continue
+		building := &w.buildings[buildingSlot]
 		width, height := BuildingTileSize(building.type)
 		FogContactRect(w, building.kingdom, building.x, building.y, width, height)
 	}
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] do continue
-		for town_slot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-			town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			town := &w.kingdoms[kingdomSlot].towns[townSlot]
 			if !town.constructionActive do continue
 			width, height := BuildingTileSize(BuildingTypeFromKind(town.construction.kind))
-			FogContactRect(w, kingdom_slot, town.construction.x, town.construction.y, width, height)
+			FogContactRect(w, kingdomSlot, town.construction.x, town.construction.y, width, height)
 		}
 	}
 
@@ -550,19 +551,19 @@ FogUpdate :: proc(w: ^World) {
 
 	// A building seen at all reveals its whole footprint. This keeps sprites
 	// and memory snapshots all-or-nothing instead of half fogged.
-	for building_slot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[building_slot] do continue
-		building := &w.buildings[building_slot]
+	for buildingSlot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[buildingSlot] do continue
+		building := &w.buildings[buildingSlot]
 		width, height := BuildingTileSize(building.type)
 		if FogRectVisible(w, building.x, building.y, width, height) {
 			FogRevealRect(w, building.x, building.y, width, height)
 		}
 	}
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] do continue
-		for town_slot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-			town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			town := &w.kingdoms[kingdomSlot].towns[townSlot]
 			if !town.constructionActive do continue
 			width, height := BuildingTileSize(BuildingTypeFromKind(town.construction.kind))
 			if FogRectVisible(w, town.construction.x, town.construction.y, width, height) {
@@ -575,52 +576,52 @@ FogUpdate :: proc(w: ^World) {
 		FogClearTileMemory(w, index)
 	}
 
-	for building_slot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[building_slot] do continue
-		building := &w.buildings[building_slot]
+	for buildingSlot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[buildingSlot] do continue
+		building := &w.buildings[buildingSlot]
 		width, height := BuildingTileSize(building.type)
 		if FogRectVisible(w, building.x, building.y, width, height) {
 			KingdomMeet(w, observer, building.kingdom)
-			FogSnapshotBuilding(w, building_slot)
+			FogSnapshotBuilding(w, buildingSlot)
 		}
 	}
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] do continue
-		for town_slot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-			town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			town := &w.kingdoms[kingdomSlot].towns[townSlot]
 			if !town.constructionActive do continue
 			width, height := BuildingTileSize(BuildingTypeFromKind(town.construction.kind))
 			if !FogRectVisible(w, town.construction.x, town.construction.y, width, height) do continue
-			KingdomMeet(w, observer, kingdom_slot)
-			FogSnapshotConstruction(w, kingdom_slot, town_slot)
+			KingdomMeet(w, observer, kingdomSlot)
+			FogSnapshotConstruction(w, kingdomSlot, townSlot)
 		}
 	}
 
-	for decoration_slot in 0..<DECORATION_CAPACITY {
-		if !w.decorationUsed[decoration_slot] do continue
-		FogSnapshotDecoration(w, decoration_slot)
+	for decorationSlot in 0..<DECORATION_CAPACITY {
+		if !w.decorationUsed[decorationSlot] do continue
+		FogSnapshotDecoration(w, decorationSlot)
 	}
 
-	visible_enemy: [KINGDOMS_CAPACITY]bool
-	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil || UnitHiddenInside(w, unit_slot) do continue
-		kingdom_slot := w.units[unit_slot].kingdome
-		if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || kingdom_slot == observer {
+	visibleEnemy: [KINGDOMS_CAPACITY]bool
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil || UnitHiddenInside(w, unitSlot) do continue
+		kingdomSlot := w.units[unitSlot].kingdome
+		if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY || kingdomSlot == observer {
 			continue
 		}
-		x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
-		y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
+		x := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
+		y := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
 		if !FogTileVisible(w, x, y) do continue
-		KingdomMeet(w, observer, kingdom_slot)
-		visible_enemy[kingdom_slot] = true
-		if !w.fog.enemyAlerted[kingdom_slot] {
-			w.fog.enemyAlerted[kingdom_slot] = true
-			WorldAlertAdd(w, .EnemySpotted, observer, -1, kingdom_slot, w.units.x[unit_slot], w.units.y[unit_slot])
+		KingdomMeet(w, observer, kingdomSlot)
+		visibleEnemy[kingdomSlot] = true
+		if !w.fog.enemyAlerted[kingdomSlot] {
+			w.fog.enemyAlerted[kingdomSlot] = true
+			WorldAlertAdd(w, .EnemySpotted, observer, -1, kingdomSlot, w.units.x[unitSlot], w.units.y[unitSlot])
 		}
 	}
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !visible_enemy[kingdom_slot] do w.fog.enemyAlerted[kingdom_slot] = false
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !visibleEnemy[kingdomSlot] do w.fog.enemyAlerted[kingdomSlot] = false
 	}
 
 	for index := 0; index < len(w.fog.ghosts); {
@@ -692,21 +693,21 @@ FogRenderUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
 	renderer.fogRevision = w.fog.revision
 }
 
-FogRenderDraw :: proc(w: ^World, renderer: ^WorldRenderer, first_copy_x, last_copy_x, first_copy_y, last_copy_y: int) {
+FogRenderDraw :: proc(w: ^World, renderer: ^WorldRenderer, firstCopyX, lastCopyX, firstCopyY, lastCopyY: int) {
 	if renderer.fogTexture.id == 0 do return
-	world_width := f32(w.maxX)
-	world_height := f32(w.maxY)
-	source := rl.Rectangle{0, 0, world_width, world_height}
-	for copy_x in first_copy_x ..< last_copy_x+1 {
-		for copy_y in first_copy_y ..< last_copy_y+1 {
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	source := rl.Rectangle{0, 0, worldWidth, worldHeight}
+	for copyX in firstCopyX ..< lastCopyX+1 {
+		for copyY in firstCopyY ..< lastCopyY+1 {
 			rl.DrawTexturePro(
 				renderer.fogTexture,
 				source,
 				rl.Rectangle{
-					f32(copy_x)*world_width,
-					f32(copy_y)*world_height,
-					world_width,
-					world_height,
+					f32(copyX)*worldWidth,
+					f32(copyY)*worldHeight,
+					worldWidth,
+					worldHeight,
 				},
 				rl.Vector2{0, 0},
 				0,

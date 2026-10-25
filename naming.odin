@@ -327,24 +327,24 @@ KINGDOM_ENDINGS := [TownCulture][]string {
 
 // Town names are rolled from the kingdom's language pool. Names already used
 // anywhere in the match are skipped, so every town is unique.
-NameTownAssign :: proc(w: ^World, kingdom_slot, town_slot: int) {
-	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY ||
-		town_slot < 0 || town_slot >= TOWN_CAPACITY {
+NameTownAssign :: proc(w: ^World, kingdomSlot, townSlot: int) {
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY ||
+		townSlot < 0 || townSlot >= TOWN_CAPACITY {
 		return
 	}
 
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	culture := w.kingdoms[kingdom_slot].culture
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	culture := w.kingdoms[kingdomSlot].culture
 	pool := TOWN_NAMES[culture]
 	if len(pool) == 0 {
-		NameTownFallback(w, kingdom_slot, town_slot)
+		NameTownFallback(w, kingdomSlot, townSlot)
 		return
 	}
 
 	roll := WorldNoiseHash(
 		town.x*73856093 ~ town.y*19349663,
-		town_slot*83492791,
-		w.seed ~ u64(kingdom_slot)*0x9E3779B97F4A7C15,
+		townSlot*83492791,
+		w.seed ~ u64(kingdomSlot)*0x9E3779B97F4A7C15,
 	)
 	start := int(roll*f32(len(pool)))
 	for offset in 0..<len(pool) {
@@ -358,24 +358,24 @@ NameTownAssign :: proc(w: ^World, kingdom_slot, town_slot: int) {
 		}
 	}
 
-	NameTownFallback(w, kingdom_slot, town_slot)
+	NameTownFallback(w, kingdomSlot, townSlot)
 }
 
 // Composes a name from the culture's syllables. Used only as a last resort;
 // the probe still guarantees that no existing town gets a duplicate name.
-NameTownFallback :: proc(w: ^World, kingdom_slot, town_slot: int) {
-	culture := w.kingdoms[kingdom_slot].culture
+NameTownFallback :: proc(w: ^World, kingdomSlot, townSlot: int) {
+	culture := w.kingdoms[kingdomSlot].culture
 	roots := KINGDOM_ROOTS[culture]
 	endings := KINGDOM_ENDINGS[culture]
 	if len(roots) == 0 || len(endings) == 0 do return
 
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	buffer: Name
 	for attempt in 0..<256 {
-		root_roll := WorldNoiseHash(town.x+attempt*17, town.y, w.seed ~ u64(kingdom_slot+1)*7919)
-		ending_roll := WorldNoiseHash(town_slot+attempt, town.x ~ town.y, w.seed ~ u64(kingdom_slot+1)*104729)
-		root := roots[int(root_roll*f32(len(roots)))%len(roots)]
-		ending := endings[int(ending_roll*f32(len(endings)))%len(endings)]
+		rootRoll := WorldNoiseHash(town.x+attempt*17, town.y, w.seed ~ u64(kingdomSlot+1)*7919)
+		endingRoll := WorldNoiseHash(townSlot+attempt, town.x ~ town.y, w.seed ~ u64(kingdomSlot+1)*104729)
+		root := roots[int(rootRoll*f32(len(roots)))%len(roots)]
+		ending := endings[int(endingRoll*f32(len(endings)))%len(endings)]
 
 		length := 0
 		for i in 0..<len(root) {
@@ -397,17 +397,17 @@ NameTownFallback :: proc(w: ^World, kingdom_slot, town_slot: int) {
 
 // The kingdom name is curated per language and selected in slot order, so it
 // is coherent with the town names and is not a random roll.
-NameKingdomAssign :: proc(w: ^World, kingdom_slot: int) {
-	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY do return
-	culture := w.kingdoms[kingdom_slot].culture
+NameKingdomAssign :: proc(w: ^World, kingdomSlot: int) {
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY do return
+	culture := w.kingdoms[kingdomSlot].culture
 	pool := KINGDOM_NAMES[culture]
 	if len(pool) == 0 do return
 
-	start := kingdom_slot%len(pool)
+	start := kingdomSlot%len(pool)
 	for offset in 0..<len(pool) {
 		candidate := pool[(start+offset)%len(pool)]
-		if !NameKingdomTaken(w, candidate, kingdom_slot) {
-			NameSet(&w.kingdoms[kingdom_slot].name, candidate)
+		if !NameKingdomTaken(w, candidate, kingdomSlot) {
+			NameSet(&w.kingdoms[kingdomSlot].name, candidate)
 			return
 		}
 	}
@@ -417,8 +417,8 @@ NameKingdomAssign :: proc(w: ^World, kingdom_slot: int) {
 	if len(roots) == 0 || len(endings) == 0 do return
 	buffer: Name
 	for attempt in 0..<256 {
-		root := roots[(kingdom_slot+attempt)%len(roots)]
-		ending := endings[(kingdom_slot*3+attempt)%len(endings)]
+		root := roots[(kingdomSlot+attempt)%len(roots)]
+		ending := endings[(kingdomSlot*3+attempt)%len(endings)]
 		length := 0
 		for i in 0..<len(root) {
 			buffer[length] = root[i]
@@ -430,18 +430,18 @@ NameKingdomAssign :: proc(w: ^World, kingdom_slot: int) {
 			length += 1
 		}
 		candidate := string(buffer[:length])
-		if !NameKingdomTaken(w, candidate, kingdom_slot) {
-			NameSet(&w.kingdoms[kingdom_slot].name, candidate)
+		if !NameKingdomTaken(w, candidate, kingdomSlot) {
+			NameSet(&w.kingdoms[kingdomSlot].name, candidate)
 			return
 		}
 	}
 }
 
-NameKingdomCulture :: proc(w: ^World, kingdom_slot: int) -> TownCulture {
+NameKingdomCulture :: proc(w: ^World, kingdomSlot: int) -> TownCulture {
 	count := len(TownCulture)
 	if count <= 0 do return .Spanish
 	base := int(w.seed%u64(count))
-	return TownCulture((base+kingdom_slot)%count)
+	return TownCulture((base+kingdomSlot)%count)
 }
 
 NameSet :: proc(name: ^Name, value: string) {
@@ -451,7 +451,7 @@ NameSet :: proc(name: ^Name, value: string) {
 }
 
 // A fused town's absorbed hall keeps the old town's identity: "Old <Town>".
-NameDistrictAssign :: proc(name: ^Name, town_name: ^Name) {
+NameDistrictAssign :: proc(name: ^Name, townName: ^Name) {
 	for i in 0..<NAME_LENGTH do name[i] = 0
 	prefix := "Old "
 	length := 0
@@ -460,9 +460,9 @@ NameDistrictAssign :: proc(name: ^Name, town_name: ^Name) {
 		length += 1
 	}
 	for i in 0..<NAME_LENGTH-1 {
-		if town_name[i] == 0 do break
+		if townName[i] == 0 do break
 		if length >= NAME_LENGTH-1 do break
-		name[length] = town_name[i]
+		name[length] = townName[i]
 		length += 1
 	}
 }
@@ -477,32 +477,32 @@ NameEqual :: proc(name: ^Name, value: string) -> bool {
 }
 
 NameTownTaken :: proc(w: ^World, value: string) -> bool {
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] do continue
-		for town_slot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-			if NameEqual(&w.kingdoms[kingdom_slot].towns[town_slot].name, value) do return true
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			if NameEqual(&w.kingdoms[kingdomSlot].towns[townSlot].name, value) do return true
 		}
 	}
 	return false
 }
 
-NameKingdomTaken :: proc(w: ^World, value: string, ignore_kingdom: int) -> bool {
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if kingdom_slot == ignore_kingdom || !w.kingdomUsed[kingdom_slot] do continue
-		if NameEqual(&w.kingdoms[kingdom_slot].name, value) do return true
+NameKingdomTaken :: proc(w: ^World, value: string, ignoreKingdom: int) -> bool {
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if kingdomSlot == ignoreKingdom || !w.kingdomUsed[kingdomSlot] do continue
+		if NameEqual(&w.kingdoms[kingdomSlot].name, value) do return true
 	}
 	return false
 }
 
-NameKingdomCString :: proc(w: ^World, kingdom_slot: int) -> cstring {
-	if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom_slot] {
+NameKingdomCString :: proc(w: ^World, kingdomSlot: int) -> cstring {
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdomSlot] {
 		return "Unknown"
 	}
-	return cstring(&w.kingdoms[kingdom_slot].name[0])
+	return cstring(&w.kingdoms[kingdomSlot].name[0])
 }
 
-NameTownCString :: proc(w: ^World, kingdom_slot, town_slot: int) -> cstring {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return "Unknown"
-	return cstring(&w.kingdoms[kingdom_slot].towns[town_slot].name[0])
+NameTownCString :: proc(w: ^World, kingdomSlot, townSlot: int) -> cstring {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return "Unknown"
+	return cstring(&w.kingdoms[kingdomSlot].towns[townSlot].name[0])
 }

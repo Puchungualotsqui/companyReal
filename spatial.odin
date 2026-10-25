@@ -30,12 +30,12 @@ SpatialIndexInit :: proc(w: ^World) -> bool {
 	w.spatial.chunkSize = SPATIAL_CHUNK_SIZE
 	w.spatial.chunksX = (int(w.maxX)+SPATIAL_CHUNK_SIZE-1)/SPATIAL_CHUNK_SIZE
 	w.spatial.chunksY = (int(w.maxY)+SPATIAL_CHUNK_SIZE-1)/SPATIAL_CHUNK_SIZE
-	chunk_count := w.spatial.chunksX*w.spatial.chunksY
-	w.spatial.unitHead = make([]int, chunk_count)
-	w.spatial.buildingHead = make([]int, chunk_count)
-	w.spatial.decorationHead = make([]int, chunk_count)
-	w.spatial.fireHead = make([]int, chunk_count)
-	for i in 0..<chunk_count {
+	chunkCount := w.spatial.chunksX*w.spatial.chunksY
+	w.spatial.unitHead = make([]int, chunkCount)
+	w.spatial.buildingHead = make([]int, chunkCount)
+	w.spatial.decorationHead = make([]int, chunkCount)
+	w.spatial.fireHead = make([]int, chunkCount)
+	for i in 0..<chunkCount {
 		w.spatial.unitHead[i] = -1
 		w.spatial.buildingHead[i] = -1
 		w.spatial.decorationHead[i] = -1
@@ -74,160 +74,160 @@ SpatialChunkIndex :: proc(w: ^World, x, y: int) -> int {
 	if w.spatial.chunkSize <= 0 || w.spatial.chunksX <= 0 || w.spatial.chunksY <= 0 {
 		return -1
 	}
-	wrapped_x := WorldWrapCoordinate(x, int(w.maxX))
-	wrapped_y := WorldWrapCoordinate(y, int(w.maxY))
-	chunk_x := wrapped_x/w.spatial.chunkSize
-	chunk_y := wrapped_y/w.spatial.chunkSize
-	return chunk_x*w.spatial.chunksY+chunk_y
+	wrappedX := WorldWrapCoordinate(x, int(w.maxX))
+	wrappedY := WorldWrapCoordinate(y, int(w.maxY))
+	chunkX := wrappedX/w.spatial.chunkSize
+	chunkY := wrappedY/w.spatial.chunkSize
+	return chunkX*w.spatial.chunksY+chunkY
 }
 
-SpatialUnitChunk :: proc(w: ^World, unit_slot: int) -> int {
-	x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
-	y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
+SpatialUnitChunk :: proc(w: ^World, unitSlot: int) -> int {
+	x := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
+	y := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
 	return SpatialChunkIndex(w, x, y)
 }
 
-SpatialUnitLink :: proc(w: ^World, unit_slot, chunk: int) {
+SpatialUnitLink :: proc(w: ^World, unitSlot, chunk: int) {
 	head := w.spatial.unitHead[chunk]
-	w.spatial.unitNext[unit_slot] = head
-	w.spatial.unitPrev[unit_slot] = -1
-	if head >= 0 do w.spatial.unitPrev[head] = unit_slot
-	w.spatial.unitHead[chunk] = unit_slot
-	w.spatial.unitChunk[unit_slot] = chunk
+	w.spatial.unitNext[unitSlot] = head
+	w.spatial.unitPrev[unitSlot] = -1
+	if head >= 0 do w.spatial.unitPrev[head] = unitSlot
+	w.spatial.unitHead[chunk] = unitSlot
+	w.spatial.unitChunk[unitSlot] = chunk
 }
 
-SpatialUnitUnlink :: proc(w: ^World, unit_slot: int) {
-	chunk := w.spatial.unitChunk[unit_slot]
+SpatialUnitUnlink :: proc(w: ^World, unitSlot: int) {
+	chunk := w.spatial.unitChunk[unitSlot]
 	if chunk < 0 do return
-	previous := w.spatial.unitPrev[unit_slot]
-	next := w.spatial.unitNext[unit_slot]
+	previous := w.spatial.unitPrev[unitSlot]
+	next := w.spatial.unitNext[unitSlot]
 	if previous >= 0 {
 		w.spatial.unitNext[previous] = next
 	} else {
 		w.spatial.unitHead[chunk] = next
 	}
 	if next >= 0 do w.spatial.unitPrev[next] = previous
-	w.spatial.unitNext[unit_slot] = -1
-	w.spatial.unitPrev[unit_slot] = -1
-	w.spatial.unitChunk[unit_slot] = -1
+	w.spatial.unitNext[unitSlot] = -1
+	w.spatial.unitPrev[unitSlot] = -1
+	w.spatial.unitChunk[unitSlot] = -1
 }
 
-SpatialUnitInsert :: proc(w: ^World, unit_slot: int) {
-	chunk := SpatialUnitChunk(w, unit_slot)
+SpatialUnitInsert :: proc(w: ^World, unitSlot: int) {
+	chunk := SpatialUnitChunk(w, unitSlot)
 	if chunk < 0 do return
-	SpatialUnitLink(w, unit_slot, chunk)
+	SpatialUnitLink(w, unitSlot, chunk)
 }
 
-SpatialUnitRemove :: proc(w: ^World, unit_slot: int) {
-	SpatialUnitUnlink(w, unit_slot)
+SpatialUnitRemove :: proc(w: ^World, unitSlot: int) {
+	SpatialUnitUnlink(w, unitSlot)
 }
 
-SpatialUnitMove :: proc(w: ^World, unit_slot: int) {
-	chunk := SpatialUnitChunk(w, unit_slot)
-	if chunk < 0 || chunk == w.spatial.unitChunk[unit_slot] do return
-	SpatialUnitUnlink(w, unit_slot)
-	SpatialUnitLink(w, unit_slot, chunk)
+SpatialUnitMove :: proc(w: ^World, unitSlot: int) {
+	chunk := SpatialUnitChunk(w, unitSlot)
+	if chunk < 0 || chunk == w.spatial.unitChunk[unitSlot] do return
+	SpatialUnitUnlink(w, unitSlot)
+	SpatialUnitLink(w, unitSlot, chunk)
 }
 
 // Buildings are linked by their top-left tile. Queries widen the chunk range
 // by one, which covers every possible footprint (buildings are at most 4x4).
-SpatialBuildingInsert :: proc(w: ^World, building_slot: int) {
-	chunk := SpatialChunkIndex(w, w.buildings.x[building_slot], w.buildings.y[building_slot])
+SpatialBuildingInsert :: proc(w: ^World, buildingSlot: int) {
+	chunk := SpatialChunkIndex(w, w.buildings.x[buildingSlot], w.buildings.y[buildingSlot])
 	if chunk < 0 do return
-	w.spatial.buildingChunk[building_slot] = chunk
-	w.spatial.buildingNext[building_slot] = w.spatial.buildingHead[chunk]
-	w.spatial.buildingHead[chunk] = building_slot
+	w.spatial.buildingChunk[buildingSlot] = chunk
+	w.spatial.buildingNext[buildingSlot] = w.spatial.buildingHead[chunk]
+	w.spatial.buildingHead[chunk] = buildingSlot
 }
 
-SpatialBuildingRemove :: proc(w: ^World, building_slot: int) {
-	chunk := w.spatial.buildingChunk[building_slot]
+SpatialBuildingRemove :: proc(w: ^World, buildingSlot: int) {
+	chunk := w.spatial.buildingChunk[buildingSlot]
 	if chunk < 0 do return
 	head := w.spatial.buildingHead[chunk]
-	if head == building_slot {
-		w.spatial.buildingHead[chunk] = w.spatial.buildingNext[building_slot]
+	if head == buildingSlot {
+		w.spatial.buildingHead[chunk] = w.spatial.buildingNext[buildingSlot]
 	} else {
 		cursor := head
 		for cursor >= 0 {
 			next := w.spatial.buildingNext[cursor]
-			if next == building_slot {
-				w.spatial.buildingNext[cursor] = w.spatial.buildingNext[building_slot]
+			if next == buildingSlot {
+				w.spatial.buildingNext[cursor] = w.spatial.buildingNext[buildingSlot]
 				break
 			}
 			cursor = next
 		}
 	}
-	w.spatial.buildingNext[building_slot] = -1
-	w.spatial.buildingChunk[building_slot] = -1
+	w.spatial.buildingNext[buildingSlot] = -1
+	w.spatial.buildingChunk[buildingSlot] = -1
 }
 
 // Decorations are static, so they are linked by their base tile and are never
 // moved between chunks.
-SpatialDecorationInsert :: proc(w: ^World, decoration_slot: int) {
+SpatialDecorationInsert :: proc(w: ^World, decorationSlot: int) {
 	chunk := SpatialChunkIndex(
 		w,
-		int(w.decorations.x[decoration_slot]),
-		int(w.decorations.y[decoration_slot]),
+		int(w.decorations.x[decorationSlot]),
+		int(w.decorations.y[decorationSlot]),
 	)
 	if chunk < 0 do return
 	head := w.spatial.decorationHead[chunk]
-	w.spatial.decorationNext[decoration_slot] = head
-	w.spatial.decorationPrev[decoration_slot] = -1
-	if head >= 0 do w.spatial.decorationPrev[head] = decoration_slot
-	w.spatial.decorationHead[chunk] = decoration_slot
-	w.spatial.decorationChunk[decoration_slot] = chunk
+	w.spatial.decorationNext[decorationSlot] = head
+	w.spatial.decorationPrev[decorationSlot] = -1
+	if head >= 0 do w.spatial.decorationPrev[head] = decorationSlot
+	w.spatial.decorationHead[chunk] = decorationSlot
+	w.spatial.decorationChunk[decorationSlot] = chunk
 }
 
-SpatialDecorationRemove :: proc(w: ^World, decoration_slot: int) {
-	chunk := w.spatial.decorationChunk[decoration_slot]
+SpatialDecorationRemove :: proc(w: ^World, decorationSlot: int) {
+	chunk := w.spatial.decorationChunk[decorationSlot]
 	if chunk < 0 do return
-	previous := w.spatial.decorationPrev[decoration_slot]
-	next := w.spatial.decorationNext[decoration_slot]
+	previous := w.spatial.decorationPrev[decorationSlot]
+	next := w.spatial.decorationNext[decorationSlot]
 	if previous >= 0 {
 		w.spatial.decorationNext[previous] = next
 	} else {
 		w.spatial.decorationHead[chunk] = next
 	}
 	if next >= 0 do w.spatial.decorationPrev[next] = previous
-	w.spatial.decorationNext[decoration_slot] = -1
-	w.spatial.decorationPrev[decoration_slot] = -1
-	w.spatial.decorationChunk[decoration_slot] = -1
+	w.spatial.decorationNext[decorationSlot] = -1
+	w.spatial.decorationPrev[decorationSlot] = -1
+	w.spatial.decorationChunk[decorationSlot] = -1
 }
 
-SpatialFireInsert :: proc(w: ^World, fire_slot: int) {
-	chunk := SpatialChunkIndex(w, int(w.fires.x[fire_slot]), int(w.fires.y[fire_slot]))
+SpatialFireInsert :: proc(w: ^World, fireSlot: int) {
+	chunk := SpatialChunkIndex(w, int(w.fires.x[fireSlot]), int(w.fires.y[fireSlot]))
 	if chunk < 0 do return
 	head := w.spatial.fireHead[chunk]
-	w.spatial.fireNext[fire_slot] = head
-	w.spatial.firePrev[fire_slot] = -1
-	if head >= 0 do w.spatial.firePrev[head] = fire_slot
-	w.spatial.fireHead[chunk] = fire_slot
-	w.spatial.fireChunk[fire_slot] = chunk
+	w.spatial.fireNext[fireSlot] = head
+	w.spatial.firePrev[fireSlot] = -1
+	if head >= 0 do w.spatial.firePrev[head] = fireSlot
+	w.spatial.fireHead[chunk] = fireSlot
+	w.spatial.fireChunk[fireSlot] = chunk
 }
 
-SpatialFireRemove :: proc(w: ^World, fire_slot: int) {
-	chunk := w.spatial.fireChunk[fire_slot]
+SpatialFireRemove :: proc(w: ^World, fireSlot: int) {
+	chunk := w.spatial.fireChunk[fireSlot]
 	if chunk < 0 do return
-	previous := w.spatial.firePrev[fire_slot]
-	next := w.spatial.fireNext[fire_slot]
+	previous := w.spatial.firePrev[fireSlot]
+	next := w.spatial.fireNext[fireSlot]
 	if previous >= 0 {
 		w.spatial.fireNext[previous] = next
 	} else {
 		w.spatial.fireHead[chunk] = next
 	}
 	if next >= 0 do w.spatial.firePrev[next] = previous
-	w.spatial.fireNext[fire_slot] = -1
-	w.spatial.firePrev[fire_slot] = -1
-	w.spatial.fireChunk[fire_slot] = -1
+	w.spatial.fireNext[fireSlot] = -1
+	w.spatial.firePrev[fireSlot] = -1
+	w.spatial.fireChunk[fireSlot] = -1
 }
 
 WorldUnitAtTile :: proc(w: ^World, x, y: int) -> bool {
 	chunk := SpatialChunkIndex(w, x, y)
 	if chunk < 0 do return false
-	for unit_slot := w.spatial.unitHead[chunk]; unit_slot >= 0;
-		unit_slot = w.spatial.unitNext[unit_slot] {
-		unit_x := int(WorldWrapPosition(w.units.x[unit_slot], f32(w.maxX)))
-		unit_y := int(WorldWrapPosition(w.units.y[unit_slot], f32(w.maxY)))
-		if unit_x == x && unit_y == y do return true
+	for unitSlot := w.spatial.unitHead[chunk]; unitSlot >= 0;
+		unitSlot = w.spatial.unitNext[unitSlot] {
+		unitX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
+		unitY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+		if unitX == x && unitY == y do return true
 	}
 	return false
 }

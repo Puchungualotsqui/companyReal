@@ -108,9 +108,9 @@ BloodInit :: proc(w: ^World) -> bool {
 	w.blood.active = make([dynamic]int, 0, 4096)
 	w.blood.pending = make([dynamic]int, 0, 512)
 	w.blood.decals = make([]BloodDecal, BLOOD_DECAL_CAPACITY)
-	blocks_x := (int(w.maxX)+BLOOD_DIRTY_BLOCK-1)/BLOOD_DIRTY_BLOCK
-	blocks_y := (int(w.maxY)+BLOOD_DIRTY_BLOCK-1)/BLOOD_DIRTY_BLOCK
-	w.blood.dirtyMarker = make([]bool, max(blocks_x*blocks_y, 1))
+	blocksX := (int(w.maxX)+BLOOD_DIRTY_BLOCK-1)/BLOOD_DIRTY_BLOCK
+	blocksY := (int(w.maxY)+BLOOD_DIRTY_BLOCK-1)/BLOOD_DIRTY_BLOCK
+	w.blood.dirtyMarker = make([]bool, max(blocksX*blocksY, 1))
 	w.blood.dirtyList = make([dynamic]int, 0, 256)
 	return true
 }
@@ -145,15 +145,15 @@ BloodTintForUnitType :: proc(type: UnitType) -> u8 {
 BloodTintFromParticle :: proc(color: rl.Color) -> u8 {
 	if color.r > 200 && color.g > 200 && color.b > 200 do return BLOOD_TINT_RED
 	best := BLOOD_TINT_RED
-	best_distance := 1 << 30
+	bestDistance := 1 << 30
 	for i in 0 ..< BLOOD_TINT_COUNT {
 		base := BLOOD_PALETTE[i]
 		dr := int(color.r)-int(base.r)
 		dg := int(color.g)-int(base.g)
 		db := int(color.b)-int(base.b)
 		distance := dr*dr+dg*dg+db*db
-		if distance < best_distance {
-			best_distance = distance
+		if distance < bestDistance {
+			bestDistance = distance
 			best = u8(i)
 		}
 	}
@@ -166,9 +166,9 @@ BloodPaletteColor :: proc(tint: u8) -> rl.Color {
 }
 
 BloodMarkDirty :: proc(w: ^World, x, y: int) {
-	blocks_y := (int(w.maxY)+BLOOD_DIRTY_BLOCK-1)/BLOOD_DIRTY_BLOCK
-	if blocks_y <= 0 do return
-	block := (x/BLOOD_DIRTY_BLOCK)*blocks_y+y/BLOOD_DIRTY_BLOCK
+	blocksY := (int(w.maxY)+BLOOD_DIRTY_BLOCK-1)/BLOOD_DIRTY_BLOCK
+	if blocksY <= 0 do return
+	block := (x/BLOOD_DIRTY_BLOCK)*blocksY+y/BLOOD_DIRTY_BLOCK
 	if block < 0 || block >= len(w.blood.dirtyMarker) do return
 	if w.blood.dirtyMarker[block] do return
 	w.blood.dirtyMarker[block] = true
@@ -176,8 +176,8 @@ BloodMarkDirty :: proc(w: ^World, x, y: int) {
 }
 
 BloodAddTile :: proc(w: ^World, x, y, amount: int, tint: u8, pending: bool) {
-	world_height := int(w.maxY)
-	index := x*world_height+y
+	worldHeight := int(w.maxY)
+	index := x*worldHeight+y
 	if index < 0 || index >= len(w.blood.amount) do return
 	current := int(w.blood.amount[index])
 	next := min(255, current+amount)
@@ -200,44 +200,44 @@ BloodAddTile :: proc(w: ^World, x, y, amount: int, tint: u8, pending: bool) {
 }
 
 BloodAddAt :: proc(w: ^World, x, y: f32, amount: f32, radius: f32, tint: u8) {
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 || amount <= 0 || radius <= 0 do return
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || amount <= 0 || radius <= 0 do return
 
-	first_x := int(math.floor(x-radius))
-	last_x := int(math.ceil(x+radius))
-	first_y := int(math.floor(y-radius))
-	last_y := int(math.ceil(y+radius))
-	radius_squared := radius*radius
+	firstX := int(math.floor(x-radius))
+	lastX := int(math.ceil(x+radius))
+	firstY := int(math.floor(y-radius))
+	lastY := int(math.ceil(y+radius))
+	radiusSquared := radius*radius
 
-	for tile_x in first_x ..= last_x {
-		for tile_y in first_y ..= last_y {
-			delta_x := f32(tile_x)+0.5-x
-			delta_y := f32(tile_y)+0.5-y
-			distance_squared := delta_x*delta_x+delta_y*delta_y
-			if distance_squared > radius_squared do continue
+	for tileX in firstX ..= lastX {
+		for tileY in firstY ..= lastY {
+			deltaX := f32(tileX)+0.5-x
+			deltaY := f32(tileY)+0.5-y
+			distanceSquared := deltaX*deltaX+deltaY*deltaY
+			if distanceSquared > radiusSquared do continue
 
-			wrapped_x := WorldWrapCoordinate(tile_x, world_width)
-			wrapped_y := WorldWrapCoordinate(tile_y, world_height)
-			if TileTypeAntiFire(w.ground[wrapped_x][wrapped_y].type) do continue
+			wrappedX := WorldWrapCoordinate(tileX, worldWidth)
+			wrappedY := WorldWrapCoordinate(tileY, worldHeight)
+			if TileTypeAntiFire(w.ground[wrappedX][wrappedY].type) do continue
 
-			distance := math.sqrt(distance_squared)
+			distance := math.sqrt(distanceSquared)
 			falloff := 1-distance/radius
 			add := int(amount*falloff+PRandom(w)*1.4)
 			if add <= 0 do continue
-			BloodAddTile(w, wrapped_x, wrapped_y, add, tint, false)
+			BloodAddTile(w, wrappedX, wrappedY, add, tint, false)
 		}
 	}
 }
 
 BloodDropLand :: proc(w: ^World, x, y: f32, tint: u8, strong: bool) {
-	blood_tint := clamp(tint, 0, u8(BLOOD_TINT_COUNT-1))
+	bloodTint := clamp(tint, 0, u8(BLOOD_TINT_COUNT-1))
 	amount: f32 = 1.4
 	if strong do amount = 2.8
-	BloodAddAt(w, x, y, amount, 0.18+PRandom(w)*0.14, blood_tint)
+	BloodAddAt(w, x, y, amount, 0.18+PRandom(w)*0.14, bloodTint)
 	// A tiny fraction of drops leave a crisp little splash behind.
 	if strong && PRandom(w) < 0.10 {
-		BloodDecalAdd(w, x, y, 0.28+PRandom(w)*0.38, blood_tint, false)
+		BloodDecalAdd(w, x, y, 0.28+PRandom(w)*0.38, bloodTint, false)
 	}
 }
 
@@ -266,13 +266,13 @@ BloodDecalAdd :: proc(w: ^World, x, y, size: f32, tint: u8, pool: bool) {
 	w.blood.decalCursor = (slot+1)%BLOOD_DECAL_CAPACITY
 }
 
-BloodUpdate :: proc(w: ^World, delta_time: f32) {
+BloodUpdate :: proc(w: ^World, deltaTime: f32) {
 	// Decals dry out and fade, revealing the permanent stain underneath.
 	if w.blood.decalCount > 0 {
 		for i in 0 ..< BLOOD_DECAL_CAPACITY {
 			decal := &w.blood.decals[i]
 			if decal.life <= 0 do continue
-			decal.life -= delta_time
+			decal.life -= deltaTime
 			if decal.life <= 0 {
 				decal.life = 0
 				w.blood.decalCount -= 1
@@ -282,9 +282,9 @@ BloodUpdate :: proc(w: ^World, delta_time: f32) {
 
 	if len(w.blood.active) == 0 do return
 
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
 
 	// Blood creeps towards dry neighbours, which turns dense slaughter sites
 	// into spreading pools instead of evenly stamped circles.
@@ -302,33 +302,33 @@ BloodUpdate :: proc(w: ^World, delta_time: f32) {
 		write += 1
 
 		if amount < BLOOD_SPREAD_THRESHOLD do continue
-		tile_x := index/world_height
-		tile_y := index%world_height
+		tileX := index/worldHeight
+		tileY := index%worldHeight
 		transfer := clamp(amount/28, 1, 6)
 
 		offsets := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
 		for offset in offsets {
-			neighbour_x := WorldWrapCoordinate(tile_x+offset[0], world_width)
-			neighbour_y := WorldWrapCoordinate(tile_y+offset[1], world_height)
-			if TileTypeAntiFire(w.ground[neighbour_x][neighbour_y].type) do continue
-			neighbour_index := neighbour_x*world_height+neighbour_y
-			neighbour_amount := int(w.blood.amount[neighbour_index])
-			if neighbour_amount+transfer > amount-1 do continue
-			if WorldNoiseHash(neighbour_index, index, 0xB100D) > 0.70 do continue
+			neighbourX := WorldWrapCoordinate(tileX+offset[0], worldWidth)
+			neighbourY := WorldWrapCoordinate(tileY+offset[1], worldHeight)
+			if TileTypeAntiFire(w.ground[neighbourX][neighbourY].type) do continue
+			neighbourIndex := neighbourX*worldHeight+neighbourY
+			neighbourAmount := int(w.blood.amount[neighbourIndex])
+			if neighbourAmount+transfer > amount-1 do continue
+			if WorldNoiseHash(neighbourIndex, index, 0xB100D) > 0.70 do continue
 
-			w.blood.amount[neighbour_index] = u8(neighbour_amount+transfer)
-			w.blood.tint[neighbour_index] = w.blood.tint[index]
+			w.blood.amount[neighbourIndex] = u8(neighbourAmount+transfer)
+			w.blood.tint[neighbourIndex] = w.blood.tint[index]
 			w.blood.amount[index] = u8(amount-transfer)
 			amount -= transfer
-			BloodMarkDirty(w, neighbour_x, neighbour_y)
-			if int(w.blood.amount[neighbour_index]) >= BLOOD_SPREAD_THRESHOLD &&
-				!w.blood.wet[neighbour_index] {
-				w.blood.wet[neighbour_index] = true
-				append(&w.blood.pending, neighbour_index)
+			BloodMarkDirty(w, neighbourX, neighbourY)
+			if int(w.blood.amount[neighbourIndex]) >= BLOOD_SPREAD_THRESHOLD &&
+				!w.blood.wet[neighbourIndex] {
+				w.blood.wet[neighbourIndex] = true
+				append(&w.blood.pending, neighbourIndex)
 			}
 			if amount < BLOOD_SPREAD_THRESHOLD do break
 		}
-		BloodMarkDirty(w, tile_x, tile_y)
+		BloodMarkDirty(w, tileX, tileY)
 	}
 	resize(&w.blood.active, write)
 	for index in w.blood.pending {
@@ -341,7 +341,7 @@ BloodUpdate :: proc(w: ^World, delta_time: f32) {
 
 BloodParticleColor :: proc(w: ^World, tint: u8) -> rl.Color {
 	base := BloodPaletteColor(tint)
-	return c_shade(base, 0.84+PRandom(w)*0.32)
+	return CShade(base, 0.84+PRandom(w)*0.32)
 }
 
 BloodDropSpawn :: proc(w: ^World, x, y, z, angle, speed: f32, tint: u8, size: f32) {
@@ -364,15 +364,15 @@ BloodDropSpawn :: proc(w: ^World, x, y, z, angle, speed: f32, tint: u8, size: f3
 
 BloodSpray :: proc(
 	w: ^World,
-	x, y, dir_x, dir_y: f32,
+	x, y, dirX, dirY: f32,
 	severity: f32,
 	tint: u8,
 	count: int,
 ) {
-	base_angle := math.atan2(dir_y, dir_x)
-	if dir_x == 0 && dir_y == 0 do base_angle = PRandom(w)*6.2831853
+	baseAngle := math.atan2(dirY, dirX)
+	if dirX == 0 && dirY == 0 do baseAngle = PRandom(w)*6.2831853
 	for _ in 0 ..< count {
-		angle := base_angle+(PRandom(w)-0.5)*(1.2+severity*0.9)
+		angle := baseAngle+(PRandom(w)-0.5)*(1.2+severity*0.9)
 		speed := PRandomRange(w, 1.4, 2.6+severity*3.2)
 		BloodDropSpawn(
 			w,
@@ -389,7 +389,7 @@ BloodSpray :: proc(
 
 BloodHit :: proc(
 	w: ^World,
-	x, y, dir_x, dir_y: f32,
+	x, y, dirX, dirY: f32,
 	damage: f32,
 	type: UnitType,
 ) {
@@ -398,7 +398,7 @@ BloodHit :: proc(
 
 	severity := clamp(damage/13, 0.35, 2.5)
 	count := int(3+severity*5)+int(PRandom(w)*3)
-	BloodSpray(w, x, y, dir_x, dir_y, severity, tint, count)
+	BloodSpray(w, x, y, dirX, dirY, severity, tint, count)
 	BloodAddAt(w, x, y, 2+damage*0.45, 0.30+severity*0.18, tint)
 
 	if PRandom(w) < 0.22 {
@@ -419,20 +419,20 @@ SpawnGorePart :: proc(
 	faction: int,
 	part: GorePartKind,
 ) {
-	part_size: f32 = 0.7
+	partSize: f32 = 0.7
 	switch part {
 	case .Head:
-		part_size = 0.62
+		partSize = 0.62
 	case .Arm:
-		part_size = 0.80
+		partSize = 0.80
 	case .Leg:
-		part_size = 0.82
+		partSize = 0.82
 	case .Torso:
-		part_size = 0.98
+		partSize = 0.98
 	case .Hand:
-		part_size = 0.42
+		partSize = 0.42
 	case .Intestine:
-		part_size = 0.90
+		partSize = 0.90
 	}
 
 	angle := PRandom(w)*6.2831853
@@ -445,7 +445,7 @@ SpawnGorePart :: proc(
 		vy = math.sin(angle)*speed,
 		vz = PRandomRange(w, 2.4, 6.6),
 		life = PRandomRange(w, 45, 150),
-		size = part_size*scale*(0.86+PRandom(w)*0.28),
+		size = partSize*scale*(0.86+PRandom(w)*0.28),
 		rotation = PRandom(w)*360,
 		spin = PRandomRange(w, -420, 420),
 		drag = 0.5,
@@ -460,7 +460,7 @@ SpawnGorePart :: proc(
 
 BloodDeath :: proc(
 	w: ^World,
-	x, y, dir_x, dir_y: f32,
+	x, y, dirX, dirY: f32,
 	damage: f32,
 	type: UnitType,
 	faction: int,
@@ -487,14 +487,14 @@ BloodDeath :: proc(
 	)
 
 	severity := 1.5+scale*0.9
-	BloodSpray(w, x, y, dir_x, dir_y, severity, tint, int(13*scale)+int(PRandom(w)*8))
+	BloodSpray(w, x, y, dirX, dirY, severity, tint, int(13*scale)+int(PRandom(w)*8))
 
 	// Flesh chunks and bone splinters accompany the main spray.
-	gib_count := 2+int(PRandom(w)*4)
-	for _ in 0 ..< gib_count {
+	gibCount := 2+int(PRandom(w)*4)
+	for _ in 0 ..< gibCount {
 		angle := PRandom(w)*6.2831853
 		speed := PRandomRange(w, 1.2, 4.8)
-		is_bone := PRandom(w) < 0.22
+		isBone := PRandom(w) < 0.22
 		ParticleSpawn(w, Particle{
 			x = x,
 			y = y,
@@ -509,7 +509,7 @@ BloodDeath :: proc(
 			drag = 0.6,
 			gravity = 25,
 			bounce = 0.3,
-			kind = is_bone ? .Bone : .Gib,
+			kind = isBone ? .Bone : .Gib,
 			tint = rl.Color{255, 255, 255, 255},
 		})
 	}
@@ -585,32 +585,32 @@ BloodCharredDeath :: proc(w: ^World, x, y: f32, type: UnitType) {
 
 UnitApplyDamage :: proc(
 	w: ^World,
-	victim_slot: int,
+	victimSlot: int,
 	damage: f32,
-	source_x, source_y: f32,
+	sourceX, sourceY: f32,
 	kind: DamageKind,
 ) -> bool {
-	if victim_slot < 0 || victim_slot >= UNIT_CAPACITY || !w.unitUsed[victim_slot] do return false
+	if victimSlot < 0 || victimSlot >= UNIT_CAPACITY || !w.unitUsed[victimSlot] do return false
 	if damage <= 0 do return false
 
-	x := w.units.x[victim_slot]
-	y := w.units.y[victim_slot]
-	type := w.units.type[victim_slot]
-	faction := w.units.kingdome[victim_slot]
+	x := w.units.x[victimSlot]
+	y := w.units.y[victimSlot]
+	type := w.units.type[victimSlot]
+	faction := w.units.kingdome[victimSlot]
 
-	w.units.health[victim_slot] -= damage
-	dead := w.units.health[victim_slot] <= 0
+	w.units.health[victimSlot] -= damage
+	dead := w.units.health[victimSlot] <= 0
 
-	dir_x := WorldShortestWrappedDelta(x-source_x, f32(w.maxX))
-	dir_y := WorldShortestWrappedDelta(y-source_y, f32(w.maxY))
-	length := math.sqrt(dir_x*dir_x+dir_y*dir_y)
+	dirX := WorldShortestWrappedDelta(x-sourceX, f32(w.maxX))
+	dirY := WorldShortestWrappedDelta(y-sourceY, f32(w.maxY))
+	length := math.sqrt(dirX*dirX+dirY*dirY)
 	if length > 0.001 {
-		dir_x /= length
-		dir_y /= length
+		dirX /= length
+		dirY /= length
 	} else {
 		angle := PRandom(w)*6.2831853
-		dir_x = math.cos(angle)
-		dir_y = math.sin(angle)
+		dirX = math.cos(angle)
+		dirY = math.sin(angle)
 	}
 
 	switch kind {
@@ -634,37 +634,37 @@ UnitApplyDamage :: proc(
 			})
 		}
 	case .Melee, .Projectile, .Area:
-		BloodHit(w, x, y, dir_x, dir_y, damage, type)
-		if dead do BloodDeath(w, x, y, dir_x, dir_y, damage, type, faction)
+		BloodHit(w, x, y, dirX, dirY, damage, type)
+		if dead do BloodDeath(w, x, y, dirX, dirY, damage, type, faction)
 	}
 
 	if dead {
-		UnitDespawn(w, victim_slot)
+		UnitDespawn(w, victimSlot)
 		return true
 	}
 	return false
 }
 
 // Wounded units keep painting the ground as they stagger around.
-BloodBleedTick :: proc(w: ^World, unit_slot: int, delta_time: f32) {
-	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
-	type := w.units.type[unit_slot]
+BloodBleedTick :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
+	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return
+	type := w.units.type[unitSlot]
 	kind := UnitKindOf(type)
 	if kind == .Catapult do return
 
 	tint := BloodTintForUnitType(type)
 	if tint == BLOOD_TINT_NONE do return
 
-	max_health := UnitDefaultHealth(type)
-	if max_health <= 0 do return
-	ratio := w.units.health[unit_slot]/max_health
+	maxHealth := UnitDefaultHealth(type)
+	if maxHealth <= 0 do return
+	ratio := w.units.health[unitSlot]/maxHealth
 	if ratio > 0.55 do return
 
 	rate := 0.12+(0.55-ratio)*1.2
-	if PRandom(w) >= rate*delta_time do return
+	if PRandom(w) >= rate*deltaTime do return
 
-	x := w.units.x[unit_slot]
-	y := w.units.y[unit_slot]
+	x := w.units.x[unitSlot]
+	y := w.units.y[unitSlot]
 	BloodDropSpawn(w, x, y, 0.22, PRandom(w)*6.2831853, PRandomRange(w, 0.1, 0.5), tint, PRandomRange(w, 0.12, 0.2))
 	BloodAddAt(w, x, y, 1.2, 0.16, tint)
 }
@@ -681,15 +681,15 @@ BuildingStoneMaterial :: proc(kind: BuildingKind) -> bool {
 	unreachable()
 }
 
-BuildingHitBurst :: proc(w: ^World, building_slot: int, impact_x, impact_y: f32) {
-	if building_slot < 0 || building_slot >= BUILDING_CAPACITY || !w.buildingUsed[building_slot] do return
-	kind := BuildingKindOf(w.buildings[building_slot].type)
+BuildingHitBurst :: proc(w: ^World, buildingSlot: int, impactX, impactY: f32) {
+	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] do return
+	kind := BuildingKindOf(w.buildings[buildingSlot].type)
 	stone := BuildingStoneMaterial(kind)
 	for _ in 0 ..< 1+int(PRandom(w)*2) {
 		angle := PRandom(w)*6.2831853
 		ParticleSpawn(w, Particle{
-			x = impact_x,
-			y = impact_y,
+			x = impactX,
+			y = impactY,
 			z = PRandomRange(w, 0.3, 0.9),
 			vx = math.cos(angle)*PRandomRange(w, 0.6, 2.4),
 			vy = math.sin(angle)*PRandomRange(w, 0.6, 2.4),
@@ -707,19 +707,19 @@ BuildingHitBurst :: proc(w: ^World, building_slot: int, impact_x, impact_y: f32)
 	}
 }
 
-BuildingDestroyedBurst :: proc(w: ^World, building_slot: int) {
-	if building_slot < 0 || building_slot >= BUILDING_CAPACITY || !w.buildingUsed[building_slot] do return
-	kind := BuildingKindOf(w.buildings[building_slot].type)
+BuildingDestroyedBurst :: proc(w: ^World, buildingSlot: int) {
+	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] do return
+	kind := BuildingKindOf(w.buildings[buildingSlot].type)
 	stone := BuildingStoneMaterial(kind)
-	width, height := BuildingTileSize(w.buildings[building_slot].type)
-	center_x := f32(w.buildings[building_slot].x)+f32(width)*0.5
-	center_y := f32(w.buildings[building_slot].y)+f32(height)*0.5
+	width, height := BuildingTileSize(w.buildings[buildingSlot].type)
+	centerX := f32(w.buildings[buildingSlot].x)+f32(width)*0.5
+	centerY := f32(w.buildings[buildingSlot].y)+f32(height)*0.5
 
 	for _ in 0 ..< 16+int(PRandom(w)*12) {
 		angle := PRandom(w)*6.2831853
 		ParticleSpawn(w, Particle{
-			x = center_x+(PRandom(w)-0.5)*f32(width)*0.7,
-			y = center_y+(PRandom(w)-0.5)*f32(height)*0.5,
+			x = centerX+(PRandom(w)-0.5)*f32(width)*0.7,
+			y = centerY+(PRandom(w)-0.5)*f32(height)*0.5,
 			z = PRandomRange(w, 0.3, 1.8),
 			vx = math.cos(angle)*PRandomRange(w, 1.2, 5.5),
 			vy = math.sin(angle)*PRandomRange(w, 1.2, 5.5),
@@ -737,8 +737,8 @@ BuildingDestroyedBurst :: proc(w: ^World, building_slot: int) {
 	}
 	for _ in 0 ..< 8+int(PRandom(w)*8) {
 		ParticleSpawn(w, Particle{
-			x = center_x+(PRandom(w)-0.5)*f32(width)*0.8,
-			y = center_y+(PRandom(w)-0.5)*f32(height)*0.7,
+			x = centerX+(PRandom(w)-0.5)*f32(width)*0.8,
+			y = centerY+(PRandom(w)-0.5)*f32(height)*0.7,
 			z = PRandomRange(w, 0.2, 1.2),
 			vx = (PRandom(w)-0.5)*1.4,
 			vy = (PRandom(w)-0.5)*1.4,
@@ -870,12 +870,12 @@ DecorationDebris :: proc(w: ^World, x, y: f32, kind: DecorationKind) {
 
 // --- fire ambience ----------------------------------------------------------
 
-FireParticleTick :: proc(w: ^World, fire_slot: int, delta_time: f32) {
-	intensity := w.fires.intensity[fire_slot]
-	x := w.fires.x[fire_slot]
-	y := w.fires.y[fire_slot]
+FireParticleTick :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
+	intensity := w.fires.intensity[fireSlot]
+	x := w.fires.x[fireSlot]
+	y := w.fires.y[fireSlot]
 
-	if PRandom(w) < 0.42*delta_time*intensity {
+	if PRandom(w) < 0.42*deltaTime*intensity {
 		ParticleSpawn(w, Particle{
 			x = x+(PRandom(w)-0.5)*0.4,
 			y = y+(PRandom(w)-0.5)*0.4,
@@ -891,7 +891,7 @@ FireParticleTick :: proc(w: ^World, fire_slot: int, delta_time: f32) {
 			tint = rl.Color{86, 82, 84, 190},
 		})
 	}
-	if PRandom(w) < 0.30*delta_time*intensity {
+	if PRandom(w) < 0.30*deltaTime*intensity {
 		ParticleSpawn(w, Particle{
 			x = x+(PRandom(w)-0.5)*0.35,
 			y = y+(PRandom(w)-0.5)*0.35,
@@ -967,38 +967,38 @@ BloodRenderDeinit :: proc(renderer: ^WorldRenderer) {
 BloodRenderUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
 	if renderer.bloodTexture.id == 0 || len(w.blood.dirtyList) == 0 do return
 
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return
-	blocks_y := (world_height+BLOOD_DIRTY_BLOCK-1)/BLOOD_DIRTY_BLOCK
-	if blocks_y <= 0 do return
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
+	blocksY := (worldHeight+BLOOD_DIRTY_BLOCK-1)/BLOOD_DIRTY_BLOCK
+	if blocksY <= 0 do return
 
 	// Upload a bounded number of dirty blocks per frame. Two battles on
 	// opposite sides of the map therefore cost two small uploads instead of
 	// re-uploading the whole stain texture every frame.
-	process_count := min(len(w.blood.dirtyList), BLOOD_BLOCK_UPLOADS_PER_FRAME)
-	for block_index in 0 ..< process_count {
-		block := w.blood.dirtyList[block_index]
-		block_x := block/blocks_y
-		block_y := block%blocks_y
-		min_x := block_x*BLOOD_DIRTY_BLOCK
-		min_y := block_y*BLOOD_DIRTY_BLOCK
-		max_x := min(min_x+BLOOD_DIRTY_BLOCK-1, world_width-1)
-		max_y := min(min_y+BLOOD_DIRTY_BLOCK-1, world_height-1)
-		width := max_x-min_x+1
-		height := max_y-min_y+1
+	processCount := min(len(w.blood.dirtyList), BLOOD_BLOCK_UPLOADS_PER_FRAME)
+	for blockIndex in 0 ..< processCount {
+		block := w.blood.dirtyList[blockIndex]
+		blockX := block/blocksY
+		blockY := block%blocksY
+		minX := blockX*BLOOD_DIRTY_BLOCK
+		minY := blockY*BLOOD_DIRTY_BLOCK
+		maxX := min(minX+BLOOD_DIRTY_BLOCK-1, worldWidth-1)
+		maxY := min(minY+BLOOD_DIRTY_BLOCK-1, worldHeight-1)
+		width := maxX-minX+1
+		height := maxY-minY+1
 		if width <= 0 || height <= 0 do continue
 
 		needed := width*height*4
 		if len(renderer.bloodPixels) < needed do resize(&renderer.bloodPixels, needed)
 		pixels := renderer.bloodPixels[:needed]
 
-		for tile_y in 0 ..< height {
-			for tile_x in 0 ..< width {
-				x := min_x+tile_x
-				y := min_y+tile_y
-				index := x*world_height+y
-				pixel := (tile_y*width+tile_x)*4
+		for tileY in 0 ..< height {
+			for tileX in 0 ..< width {
+				x := minX+tileX
+				y := minY+tileY
+				index := x*worldHeight+y
+				pixel := (tileY*width+tileX)*4
 				amount := int(w.blood.amount[index])
 
 				if amount == 0 {
@@ -1015,9 +1015,9 @@ BloodRenderUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
 				samples := 3
 				offsets := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
 				for offset in offsets {
-					neighbour_x := WorldWrapCoordinate(x+offset[0], world_width)
-					neighbour_y := WorldWrapCoordinate(y+offset[1], world_height)
-					total += int(w.blood.amount[neighbour_x*world_height+neighbour_y])
+					neighbourX := WorldWrapCoordinate(x+offset[0], worldWidth)
+					neighbourY := WorldWrapCoordinate(y+offset[1], worldHeight)
+					total += int(w.blood.amount[neighbourX*worldHeight+neighbourY])
 					samples += 1
 				}
 				smooth := f32(total)/f32(samples)
@@ -1042,15 +1042,15 @@ BloodRenderUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
 
 		rl.UpdateTextureRec(
 			renderer.bloodTexture,
-			rl.Rectangle{f32(min_x), f32(min_y), f32(width), f32(height)},
+			rl.Rectangle{f32(minX), f32(minY), f32(width), f32(height)},
 			raw_data(pixels),
 		)
 		w.blood.dirtyMarker[block] = false
 	}
 
-	remaining := len(w.blood.dirtyList)-process_count
+	remaining := len(w.blood.dirtyList)-processCount
 	if remaining > 0 {
-		copy(w.blood.dirtyList[:remaining], w.blood.dirtyList[process_count:])
+		copy(w.blood.dirtyList[:remaining], w.blood.dirtyList[processCount:])
 	}
 	resize(&w.blood.dirtyList, remaining)
 }
@@ -1062,75 +1062,75 @@ BloodRenderTileSplats :: proc(
 	w: ^World,
 	renderer: ^WorldRenderer,
 	camera: rl.Camera2D,
-	first_copy_x, last_copy_x, first_copy_y, last_copy_y: int,
+	firstCopyX, lastCopyX, firstCopyY, lastCopyY: int,
 ) {
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
 
-	half_view_width := f32(rl.GetScreenWidth())/(2*camera.zoom)
-	half_view_height := f32(rl.GetScreenHeight())/(2*camera.zoom)
+	halfViewWidth := f32(rl.GetScreenWidth())/(2*camera.zoom)
+	halfViewHeight := f32(rl.GetScreenHeight())/(2*camera.zoom)
 
-	for copy_x in first_copy_x ..< last_copy_x+1 {
-		offset_x := f32(copy_x)*f32(world_width)
-		for copy_y in first_copy_y ..< last_copy_y+1 {
-			offset_y := f32(copy_y)*f32(world_height)
-			min_x := camera.target.x-half_view_width-offset_x
-			max_x := camera.target.x+half_view_width-offset_x
-			min_y := camera.target.y-half_view_height-offset_y
-			max_y := camera.target.y+half_view_height-offset_y
+	for copyX in firstCopyX ..< lastCopyX+1 {
+		offsetX := f32(copyX)*f32(worldWidth)
+		for copyY in firstCopyY ..< lastCopyY+1 {
+			offsetY := f32(copyY)*f32(worldHeight)
+			minX := camera.target.x-halfViewWidth-offsetX
+			maxX := camera.target.x+halfViewWidth-offsetX
+			minY := camera.target.y-halfViewHeight-offsetY
+			maxY := camera.target.y+halfViewHeight-offsetY
 
-			first_x := WorldFloor(min_x)-1
-			last_x := WorldFloor(max_x)+1
-			first_y := WorldFloor(min_y)-1
-			last_y := WorldFloor(max_y)+1
-			if last_x-first_x >= world_width {
-				first_x = 0
-				last_x = world_width-1
+			firstX := WorldFloor(minX)-1
+			lastX := WorldFloor(maxX)+1
+			firstY := WorldFloor(minY)-1
+			lastY := WorldFloor(maxY)+1
+			if lastX-firstX >= worldWidth {
+				firstX = 0
+				lastX = worldWidth-1
 			}
-			if last_y-first_y >= world_height {
-				first_y = 0
-				last_y = world_height-1
+			if lastY-firstY >= worldHeight {
+				firstY = 0
+				lastY = worldHeight-1
 			}
 
-			for tile_y in first_y ..= last_y {
-				wrapped_y := WorldWrapCoordinate(tile_y, world_height)
-				for tile_x in first_x ..= last_x {
-					wrapped_x := WorldWrapCoordinate(tile_x, world_width)
-					index := wrapped_x*world_height+wrapped_y
+			for tileY in firstY ..= lastY {
+				wrappedY := WorldWrapCoordinate(tileY, worldHeight)
+				for tileX in firstX ..= lastX {
+					wrappedX := WorldWrapCoordinate(tileX, worldWidth)
+					index := wrappedX*worldHeight+wrappedY
 					amount := int(w.blood.amount[index])
 					if amount < 6 do continue
-					if !FogTileVisible(w, wrapped_x, wrapped_y) do continue
+					if !FogTileVisible(w, wrappedX, wrappedY) do continue
 
-					hash_a := WorldNoiseHash(wrapped_x, wrapped_y, 0xB100D51)
-					hash_b := WorldNoiseHash(wrapped_y, wrapped_x, 0xB100D52)
-					hash_c := WorldNoiseHash(wrapped_x+7, wrapped_y+3, 0xB100D53)
-					hash_d := WorldNoiseHash(wrapped_x+11, wrapped_y+17, 0xB100D54)
+					hashA := WorldNoiseHash(wrappedX, wrappedY, 0xB100D51)
+					hashB := WorldNoiseHash(wrappedY, wrappedX, 0xB100D52)
+					hashC := WorldNoiseHash(wrappedX+7, wrappedY+3, 0xB100D53)
+					hashD := WorldNoiseHash(wrappedX+11, wrappedY+17, 0xB100D54)
 					// Dense pools overlap heavily; skipping part of them keeps the
 					// draw count sane without opening holes in the stain.
-					if amount > 110 && hash_d < 0.42 do continue
-					variant := int(hash_a*BLOOD_SPLAT_VARIANTS)%BLOOD_SPLAT_VARIANTS
+					if amount > 110 && hashD < 0.42 do continue
+					variant := int(hashA*BLOOD_SPLAT_VARIANTS)%BLOOD_SPLAT_VARIANTS
 					texture := renderer.sprites.bloodSplat[variant]
 					if texture.id == 0 do continue
 
-					size := 1.25+hash_b*1.25+clamp(f32(amount)/255, 0, 1)*0.5
+					size := 1.25+hashB*1.25+clamp(f32(amount)/255, 0, 1)*0.5
 					if amount > 110 do size += 0.6
-					jitter_x := (hash_c-0.5)*0.5
-					jitter_y := (hash_a-0.5)*0.5
-					tint := c_shade(BloodPaletteColor(w.blood.tint[index]), 0.72+0.34*hash_b)
+					jitterX := (hashC-0.5)*0.5
+					jitterY := (hashA-0.5)*0.5
+					tint := CShade(BloodPaletteColor(w.blood.tint[index]), 0.72+0.34*hashB)
 					tint.a = u8(clamp(f32(amount)*1.15+55, 0, 210))
 					source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 					rl.DrawTexturePro(
 						texture,
 						source,
 						rl.Rectangle{
-							offset_x+f32(wrapped_x)+0.5+jitter_x-size*0.5,
-							offset_y+f32(wrapped_y)+0.5+jitter_y-size*0.5,
+							offsetX+f32(wrappedX)+0.5+jitterX-size*0.5,
+							offsetY+f32(wrappedY)+0.5+jitterY-size*0.5,
 							size,
 							size,
 						},
 						rl.Vector2{size*0.5, size*0.5},
-						hash_c*360,
+						hashC*360,
 						tint,
 					)
 				}
@@ -1143,24 +1143,24 @@ BloodRenderGround :: proc(
 	w: ^World,
 	renderer: ^WorldRenderer,
 	camera: rl.Camera2D,
-	first_copy_x, last_copy_x, first_copy_y, last_copy_y: int,
+	firstCopyX, lastCopyX, firstCopyY, lastCopyY: int,
 ) {
-	world_width := f32(w.maxX)
-	world_height := f32(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
 
 	if renderer.bloodTexture.id != 0 {
-		source := rl.Rectangle{0, 0, world_width, world_height}
-		for copy_x in first_copy_x ..< last_copy_x+1 {
-			for copy_y in first_copy_y ..< last_copy_y+1 {
+		source := rl.Rectangle{0, 0, worldWidth, worldHeight}
+		for copyX in firstCopyX ..< lastCopyX+1 {
+			for copyY in firstCopyY ..< lastCopyY+1 {
 				rl.DrawTexturePro(
 					renderer.bloodTexture,
 					source,
 					rl.Rectangle{
-						f32(copy_x)*world_width,
-						f32(copy_y)*world_height,
-						world_width,
-						world_height,
+						f32(copyX)*worldWidth,
+						f32(copyY)*worldHeight,
+						worldWidth,
+						worldHeight,
 					},
 					rl.Vector2{0, 0},
 					0,
@@ -1171,30 +1171,30 @@ BloodRenderGround :: proc(
 	}
 
 	if camera.zoom >= BLOOD_TILE_SPLAT_MIN_ZOOM && renderer.sprites.bloodSplat[0].id != 0 {
-		BloodRenderTileSplats(w, renderer, camera, first_copy_x, last_copy_x, first_copy_y, last_copy_y)
+		BloodRenderTileSplats(w, renderer, camera, firstCopyX, lastCopyX, firstCopyY, lastCopyY)
 	}
 
 	if camera.zoom < BLOOD_DECAL_MIN_ZOOM do return
 	if renderer.sprites.bloodSplat[0].id == 0 || w.blood.decalCount <= 0 do return
 
-	half_view_width := f32(rl.GetScreenWidth())/(2*camera.zoom)
-	half_view_height := f32(rl.GetScreenHeight())/(2*camera.zoom)
+	halfViewWidth := f32(rl.GetScreenWidth())/(2*camera.zoom)
+	halfViewHeight := f32(rl.GetScreenHeight())/(2*camera.zoom)
 
-	for copy_x in first_copy_x ..< last_copy_x+1 {
-		offset_x := f32(copy_x)*world_width
-		for copy_y in first_copy_y ..< last_copy_y+1 {
-			offset_y := f32(copy_y)*world_height
-			min_x := camera.target.x-half_view_width-offset_x
-			max_x := camera.target.x+half_view_width-offset_x
-			min_y := camera.target.y-half_view_height-offset_y
-			max_y := camera.target.y+half_view_height-offset_y
+	for copyX in firstCopyX ..< lastCopyX+1 {
+		offsetX := f32(copyX)*worldWidth
+		for copyY in firstCopyY ..< lastCopyY+1 {
+			offsetY := f32(copyY)*worldHeight
+			minX := camera.target.x-halfViewWidth-offsetX
+			maxX := camera.target.x+halfViewWidth-offsetX
+			minY := camera.target.y-halfViewHeight-offsetY
+			maxY := camera.target.y+halfViewHeight-offsetY
 
 			for i in 0 ..< BLOOD_DECAL_CAPACITY {
 				decal := w.blood.decals[i]
 				if decal.life <= 0 do continue
 				half := decal.size*0.5
-				if decal.x+half < min_x || decal.x-half > max_x ||
-					decal.y+half < min_y || decal.y-half > max_y {
+				if decal.x+half < minX || decal.x-half > maxX ||
+					decal.y+half < minY || decal.y-half > maxY {
 					continue
 				}
 				if !FogTileVisible(w, int(decal.x), int(decal.y)) do continue
@@ -1207,7 +1207,7 @@ BloodRenderGround :: proc(
 				}
 				if texture.id == 0 do continue
 
-				tint := c_shade(BloodPaletteColor(decal.tint), f32(decal.brightness)/100)
+				tint := CShade(BloodPaletteColor(decal.tint), f32(decal.brightness)/100)
 				fade := clamp(decal.life/6, 0, 1)
 				tint.a = u8(235*fade)
 				source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
@@ -1215,8 +1215,8 @@ BloodRenderGround :: proc(
 					texture,
 					source,
 					rl.Rectangle{
-						offset_x+decal.x-half,
-						offset_y+decal.y-half,
+						offsetX+decal.x-half,
+						offsetY+decal.y-half,
 						decal.size,
 						decal.size,
 					},
@@ -1231,46 +1231,46 @@ BloodRenderGround :: proc(
 
 // --- procedural blood art ---------------------------------------------------
 
-create_blood_splat_texture :: proc(seed: u64, size: int, pool: bool) -> rl.Texture2D {
-	art := art_init(size, size)
-	center_x := f32(size)*0.5
-	center_y := f32(size)*0.5
+CreateBloodSplatTexture :: proc(seed: u64, size: int, pool: bool) -> rl.Texture2D {
+	art := ArtInit(size, size)
+	centerX := f32(size)*0.5
+	centerY := f32(size)*0.5
 	base := f32(size)*(pool ? 0.255 : 0.215)
-	core_color := C_SPLAT_DARK
-	mid_color := C_SPLAT_MID
+	coreColor := C_SPLAT_DARK
+	midColor := C_SPLAT_MID
 	if pool {
-		core_color = C_SPLAT_DEEP
-		mid_color = C_SPLAT_DARK
+		coreColor = C_SPLAT_DEEP
+		midColor = C_SPLAT_DARK
 	}
 
 	lobes := 6+int(WorldNoiseHash(int(seed), 1, 0xB10)*3)
 	for i in 0 ..< lobes {
 		angle := 6.2831853*f32(i)/f32(lobes)+WorldNoiseHash(i, int(seed), 0xB11)*0.9
 		distance := base*WorldNoiseHash(i, int(seed)+3, 0xB12)*0.55
-		radius_x := int(base*(0.52+0.46*WorldNoiseHash(i, int(seed)+5, 0xB13)))
-		radius_y := int(base*(0.46+0.46*WorldNoiseHash(i, int(seed)+7, 0xB14)))
-		px := int(center_x+math.cos(angle)*distance)
-		py := int(center_y+math.sin(angle)*distance)
-		art_ellipse(&art, px, py, max(radius_x, 1), max(radius_y, 1), core_color)
+		radiusX := int(base*(0.52+0.46*WorldNoiseHash(i, int(seed)+5, 0xB13)))
+		radiusY := int(base*(0.46+0.46*WorldNoiseHash(i, int(seed)+7, 0xB14)))
+		px := int(centerX+math.cos(angle)*distance)
+		py := int(centerY+math.sin(angle)*distance)
+		ArtEllipse(&art, px, py, max(radiusX, 1), max(radiusY, 1), coreColor)
 	}
 
 	for i in 0 ..< lobes {
 		angle := 6.2831853*f32(i)/f32(lobes)+WorldNoiseHash(i, int(seed)+11, 0xB15)*1.2
 		distance := base*WorldNoiseHash(i, int(seed)+13, 0xB16)*0.42
-		radius_x := int(base*(0.26+0.30*WorldNoiseHash(i, int(seed)+17, 0xB17)))
-		radius_y := int(base*(0.24+0.30*WorldNoiseHash(i, int(seed)+19, 0xB18)))
-		px := int(center_x+math.cos(angle)*distance)
-		py := int(center_y+math.sin(angle)*distance)
-		art_ellipse(&art, px, py, max(radius_x, 1), max(radius_y, 1), mid_color)
+		radiusX := int(base*(0.26+0.30*WorldNoiseHash(i, int(seed)+17, 0xB17)))
+		radiusY := int(base*(0.24+0.30*WorldNoiseHash(i, int(seed)+19, 0xB18)))
+		px := int(centerX+math.cos(angle)*distance)
+		py := int(centerY+math.sin(angle)*distance)
+		ArtEllipse(&art, px, py, max(radiusX, 1), max(radiusY, 1), midColor)
 	}
 
 	if !pool {
 		for i in 0 ..< 3 {
 			angle := WorldNoiseHash(i, int(seed)+23, 0xB19)*6.2831853
 			distance := base*WorldNoiseHash(i, int(seed)+29, 0xB1A)*0.30
-			px := int(center_x+math.cos(angle)*distance)
-			py := int(center_y+math.sin(angle)*distance)
-			art_ellipse(&art, px, py, 1+int(base*0.12), 1+int(base*0.10), C_SPLAT_LIGHT)
+			px := int(centerX+math.cos(angle)*distance)
+			py := int(centerY+math.sin(angle)*distance)
+			ArtEllipse(&art, px, py, 1+int(base*0.12), 1+int(base*0.10), C_SPLAT_LIGHT)
 		}
 	}
 
@@ -1281,11 +1281,11 @@ create_blood_splat_texture :: proc(seed: u64, size: int, pool: bool) -> rl.Textu
 		angle := WorldNoiseHash(i, int(seed)+33, 0xB1C)*6.2831853
 		distance := base*(0.82+WorldNoiseHash(i, int(seed)+37, 0xB1D)*1.35)
 		radius := 1+int(WorldNoiseHash(i, int(seed)+41, 0xB1E)*(pool ? 3.4 : 2.4))
-		px := int(center_x+math.cos(angle)*distance)
-		py := int(center_y+math.sin(angle)*distance)
-		art_circle(&art, px, py, radius, core_color)
+		px := int(centerX+math.cos(angle)*distance)
+		py := int(centerY+math.sin(angle)*distance)
+		ArtCircle(&art, px, py, radius, coreColor)
 		if radius > 2 {
-			art_pixel(&art, px-1, py-1, mid_color)
+			ArtPixel(&art, px-1, py-1, midColor)
 		}
 	}
 
@@ -1293,11 +1293,11 @@ create_blood_splat_texture :: proc(seed: u64, size: int, pool: bool) -> rl.Textu
 	streaks := 3+int(WorldNoiseHash(int(seed), 43, 0xB1F)*4)
 	for i in 0 ..< streaks {
 		angle := WorldNoiseHash(i, int(seed)+47, 0xB20)*6.2831853
-		start_x := int(center_x+math.cos(angle)*base*0.65)
-		start_y := int(center_y+math.sin(angle)*base*0.65)
-		end_x := int(center_x+math.cos(angle)*base*1.45)
-		end_y := int(center_y+math.sin(angle)*base*1.45)
-		art_line(&art, start_x, start_y, end_x, end_y, core_color)
+		startX := int(centerX+math.cos(angle)*base*0.65)
+		startY := int(centerY+math.sin(angle)*base*0.65)
+		endX := int(centerX+math.cos(angle)*base*1.45)
+		endY := int(centerY+math.sin(angle)*base*1.45)
+		ArtLine(&art, startX, startY, endX, endY, coreColor)
 	}
 
 	// Punch small holes so the terrain shows through and the edge is not solid.
@@ -1305,112 +1305,112 @@ create_blood_splat_texture :: proc(seed: u64, size: int, pool: bool) -> rl.Textu
 	for i in 0 ..< holes {
 		angle := WorldNoiseHash(i, int(seed)+59, 0xB22)*6.2831853
 		distance := base*WorldNoiseHash(i, int(seed)+61, 0xB23)*0.75
-		px := int(center_x+math.cos(angle)*distance)
-		py := int(center_y+math.sin(angle)*distance)
+		px := int(centerX+math.cos(angle)*distance)
+		py := int(centerY+math.sin(angle)*distance)
 		radius := 1+int(WorldNoiseHash(i, int(seed)+67, 0xB24)*2.2)
-		art_circle(&art, px, py, radius, C_CLEAR)
+		ArtCircle(&art, px, py, radius, C_CLEAR)
 	}
 
-	return art_take_texture(art)
+	return ArtTakeTexture(art)
 }
 
-draw_gore_part :: proc(part: GorePartKind, accent: rl.Color) -> Art {
+DrawGorePart :: proc(part: GorePartKind, accent: rl.Color) -> Art {
 	switch part {
 	case .Head:
-		art := art_init(10, 10)
-		art_ellipse(&art, 5, 4, 4, 4, C_OUTLINE)
-		art_ellipse(&art, 5, 4, 3, 3, C_SKIN)
-		art_rect(&art, 3, 1, 5, 2, C_HAIR)
-		art_pixel(&art, 3, 4, C_OUTLINE)
-		art_pixel(&art, 6, 4, C_OUTLINE)
-		art_pixel(&art, 4, 5, C_SKIN_DARK)
-		art_rect(&art, 4, 6, 3, 1, C_ENTRAIL_DARK)
-		art_line(&art, 2, 5, 3, 8, C_ENTRAIL)
-		art_rect(&art, 4, 8, 3, 1, C_ENTRAIL_DARK)
-		art_pixel(&art, 5, 9, C_BONE)
+		art := ArtInit(10, 10)
+		ArtEllipse(&art, 5, 4, 4, 4, C_OUTLINE)
+		ArtEllipse(&art, 5, 4, 3, 3, C_SKIN)
+		ArtRect(&art, 3, 1, 5, 2, C_HAIR)
+		ArtPixel(&art, 3, 4, C_OUTLINE)
+		ArtPixel(&art, 6, 4, C_OUTLINE)
+		ArtPixel(&art, 4, 5, C_SKIN_DARK)
+		ArtRect(&art, 4, 6, 3, 1, C_ENTRAIL_DARK)
+		ArtLine(&art, 2, 5, 3, 8, C_ENTRAIL)
+		ArtRect(&art, 4, 8, 3, 1, C_ENTRAIL_DARK)
+		ArtPixel(&art, 5, 9, C_BONE)
 		return art
 	case .Arm:
-		art := art_init(13, 6)
-		art_ellipse(&art, 3, 3, 3, 2, C_OUTLINE)
-		art_ellipse(&art, 6, 3, 3, 2, C_OUTLINE)
-		art_ellipse(&art, 9, 2, 2, 2, C_OUTLINE)
-		art_ellipse(&art, 11, 2, 2, 2, C_OUTLINE)
-		art_ellipse(&art, 3, 3, 2, 1, C_SKIN)
-		art_ellipse(&art, 6, 3, 2, 1, C_SKIN)
-		art_ellipse(&art, 9, 2, 1, 1, C_SKIN)
-		art_ellipse(&art, 11, 2, 1, 1, C_SKIN)
-		art_rect(&art, 9, 0, 4, 4, C_OUTLINE)
-		art_rect(&art, 10, 1, 2, 2, accent)
-		art_ellipse(&art, 1, 3, 2, 1, C_ENTRAIL_DARK)
-		art_pixel(&art, 1, 3, C_BONE)
-		art_pixel(&art, 4, 4, C_ENTRAIL_DARK)
-		art_pixel(&art, 6, 2, C_ENTRAIL)
+		art := ArtInit(13, 6)
+		ArtEllipse(&art, 3, 3, 3, 2, C_OUTLINE)
+		ArtEllipse(&art, 6, 3, 3, 2, C_OUTLINE)
+		ArtEllipse(&art, 9, 2, 2, 2, C_OUTLINE)
+		ArtEllipse(&art, 11, 2, 2, 2, C_OUTLINE)
+		ArtEllipse(&art, 3, 3, 2, 1, C_SKIN)
+		ArtEllipse(&art, 6, 3, 2, 1, C_SKIN)
+		ArtEllipse(&art, 9, 2, 1, 1, C_SKIN)
+		ArtEllipse(&art, 11, 2, 1, 1, C_SKIN)
+		ArtRect(&art, 9, 0, 4, 4, C_OUTLINE)
+		ArtRect(&art, 10, 1, 2, 2, accent)
+		ArtEllipse(&art, 1, 3, 2, 1, C_ENTRAIL_DARK)
+		ArtPixel(&art, 1, 3, C_BONE)
+		ArtPixel(&art, 4, 4, C_ENTRAIL_DARK)
+		ArtPixel(&art, 6, 2, C_ENTRAIL)
 		return art
 	case .Leg:
-		art := art_init(8, 13)
-		art_ellipse(&art, 4, 3, 3, 3, C_OUTLINE)
-		art_ellipse(&art, 4, 6, 3, 3, C_OUTLINE)
-		art_ellipse(&art, 4, 9, 2, 2, C_OUTLINE)
-		art_ellipse(&art, 4, 11, 2, 2, C_OUTLINE)
-		art_ellipse(&art, 4, 3, 2, 2, C_SKIN)
-		art_ellipse(&art, 4, 6, 2, 2, C_SKIN)
-		art_ellipse(&art, 4, 9, 1, 1, C_SKIN)
-		art_rect(&art, 2, 10, 4, 3, C_OUTLINE)
-		art_rect(&art, 2, 10, 4, 2, C_WOOD_DARKEST)
-		art_pixel(&art, 3, 10, C_WOOD)
-		art_ellipse(&art, 4, 1, 2, 1, C_ENTRAIL_DARK)
-		art_pixel(&art, 4, 1, C_BONE)
-		art_pixel(&art, 5, 5, C_ENTRAIL_DARK)
+		art := ArtInit(8, 13)
+		ArtEllipse(&art, 4, 3, 3, 3, C_OUTLINE)
+		ArtEllipse(&art, 4, 6, 3, 3, C_OUTLINE)
+		ArtEllipse(&art, 4, 9, 2, 2, C_OUTLINE)
+		ArtEllipse(&art, 4, 11, 2, 2, C_OUTLINE)
+		ArtEllipse(&art, 4, 3, 2, 2, C_SKIN)
+		ArtEllipse(&art, 4, 6, 2, 2, C_SKIN)
+		ArtEllipse(&art, 4, 9, 1, 1, C_SKIN)
+		ArtRect(&art, 2, 10, 4, 3, C_OUTLINE)
+		ArtRect(&art, 2, 10, 4, 2, C_WOOD_DARKEST)
+		ArtPixel(&art, 3, 10, C_WOOD)
+		ArtEllipse(&art, 4, 1, 2, 1, C_ENTRAIL_DARK)
+		ArtPixel(&art, 4, 1, C_BONE)
+		ArtPixel(&art, 5, 5, C_ENTRAIL_DARK)
 		return art
 	case .Torso:
-		art := art_init(15, 13)
+		art := ArtInit(15, 13)
 		spans := [12]int{4, 7, 9, 10, 11, 11, 11, 10, 9, 8, 7, 6}
 		for y in 0 ..< len(spans) {
 			width := spans[y]
 			x := 7-width/2
-			art_rect(&art, x, y, width, 1, C_OUTLINE)
+			ArtRect(&art, x, y, width, 1, C_OUTLINE)
 		}
 		for y in 1 ..< len(spans)-1 {
 			width := spans[y]-2
 			x := 7-width/2
-			art_rect(&art, x, y, width, 1, C_SKIN)
+			ArtRect(&art, x, y, width, 1, C_SKIN)
 		}
 		for y in 2 ..< 7 {
 			width := spans[y]-4
 			x := 7-width/2
-			art_rect(&art, x, y, width, 1, accent)
+			ArtRect(&art, x, y, width, 1, accent)
 		}
-		art_rect(&art, 5, 0, 3, 2, C_ENTRAIL_DARK)
-		art_rect(&art, 4, 8, 6, 2, C_ENTRAIL_DARK)
-		art_rect(&art, 5, 9, 4, 1, C_ENTRAIL)
-		art_pixel(&art, 5, 10, C_BONE)
-		art_pixel(&art, 7, 10, C_BONE)
-		art_pixel(&art, 9, 10, C_BONE)
-		art_line(&art, 5, 3, 9, 7, C_ENTRAIL_DARK)
-		art_pixel(&art, 9, 4, C_ENTRAIL)
-		art_pixel(&art, 4, 6, C_ENTRAIL_DARK)
-		art_pixel(&art, 10, 7, C_ENTRAIL)
-		art_pixel(&art, 2, 4, C_ENTRAIL_DARK)
+		ArtRect(&art, 5, 0, 3, 2, C_ENTRAIL_DARK)
+		ArtRect(&art, 4, 8, 6, 2, C_ENTRAIL_DARK)
+		ArtRect(&art, 5, 9, 4, 1, C_ENTRAIL)
+		ArtPixel(&art, 5, 10, C_BONE)
+		ArtPixel(&art, 7, 10, C_BONE)
+		ArtPixel(&art, 9, 10, C_BONE)
+		ArtLine(&art, 5, 3, 9, 7, C_ENTRAIL_DARK)
+		ArtPixel(&art, 9, 4, C_ENTRAIL)
+		ArtPixel(&art, 4, 6, C_ENTRAIL_DARK)
+		ArtPixel(&art, 10, 7, C_ENTRAIL)
+		ArtPixel(&art, 2, 4, C_ENTRAIL_DARK)
 		return art
 	case .Hand:
-		art := art_init(6, 6)
-		art_ellipse(&art, 3, 3, 2, 2, C_OUTLINE)
-		art_ellipse(&art, 3, 3, 1, 1, C_SKIN)
-		art_rect(&art, 0, 2, 2, 2, C_ENTRAIL_DARK)
-		art_pixel(&art, 0, 2, C_BONE)
+		art := ArtInit(6, 6)
+		ArtEllipse(&art, 3, 3, 2, 2, C_OUTLINE)
+		ArtEllipse(&art, 3, 3, 1, 1, C_SKIN)
+		ArtRect(&art, 0, 2, 2, 2, C_ENTRAIL_DARK)
+		ArtPixel(&art, 0, 2, C_BONE)
 		return art
 	case .Intestine:
-		art := art_init(15, 9)
+		art := ArtInit(15, 9)
 		for i in 0 ..< 5 {
 			x := 2+i*2
 			y := 4+int(math.sin(f32(i)*1.7)*2)
-			art_circle(&art, x, y, 2, C_OUTLINE)
-			art_circle(&art, x, y, 1, C_ENTRAIL)
+			ArtCircle(&art, x, y, 2, C_OUTLINE)
+			ArtCircle(&art, x, y, 1, C_ENTRAIL)
 		}
-		art_pixel(&art, 4, 3, C_ENTRAIL_DARK)
-		art_pixel(&art, 10, 5, C_ENTRAIL_DARK)
-		art_pixel(&art, 7, 6, C_SPLAT_LIGHT)
+		ArtPixel(&art, 4, 3, C_ENTRAIL_DARK)
+		ArtPixel(&art, 10, 5, C_ENTRAIL_DARK)
+		ArtPixel(&art, 7, 6, C_SPLAT_LIGHT)
 		return art
 	}
-	return art_init(4, 4)
+	return ArtInit(4, 4)
 }

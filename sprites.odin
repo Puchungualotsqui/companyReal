@@ -122,8 +122,8 @@ SameColor :: proc(a, b: rl.Color) -> bool {
 // Assigns the chosen local colour and gives every other kingdom a distinct
 // palette colour. Called before sprites are generated so accents match.
 AssignKingdomColors :: proc(
-	local_kingdom: int,
-	local_color: rl.Color,
+	localKingdom: int,
+	localColor: rl.Color,
 	colors: ^[KINGDOMS_CAPACITY]rl.Color,
 ) {
 	used: [len(KINGDOM_COLOR_PALETTE)]bool
@@ -132,18 +132,18 @@ AssignKingdomColors :: proc(
 		colors[kingdom] = KINGDOM_COLOR_PALETTE[kingdom%len(KINGDOM_COLOR_PALETTE)]
 	}
 
-	if local_kingdom < 0 || local_kingdom >= KINGDOMS_CAPACITY {
+	if localKingdom < 0 || localKingdom >= KINGDOMS_CAPACITY {
 		return
 	}
 
-	colors[local_kingdom] = local_color
+	colors[localKingdom] = localColor
 	for color, index in KINGDOM_COLOR_PALETTE {
-		if SameColor(color, local_color) do used[index] = true
+		if SameColor(color, localColor) do used[index] = true
 	}
 
 	next := 0
 	for kingdom in 0 ..< KINGDOMS_CAPACITY {
-		if kingdom == local_kingdom do continue
+		if kingdom == localKingdom do continue
 		for next < len(used) && used[next] do next += 1
 		if next < len(used) {
 			colors[kingdom] = KINGDOM_COLOR_PALETTE[next]
@@ -179,7 +179,7 @@ UnitSpriteScale :: proc(kind: UnitKind) -> f32 {
 	return 1
 }
 
-c_shade :: proc(color: rl.Color, factor: f32) -> rl.Color {
+CShade :: proc(color: rl.Color, factor: f32) -> rl.Color {
 	return rl.Color{
 		u8(clamp(f32(color[0])*factor, 0.0, 255.0)),
 		u8(clamp(f32(color[1])*factor, 0.0, 255.0)),
@@ -188,7 +188,7 @@ c_shade :: proc(color: rl.Color, factor: f32) -> rl.Color {
 	}
 }
 
-art_init :: proc(width, height: int) -> Art {
+ArtInit :: proc(width, height: int) -> Art {
 	return Art{
 		image = rl.GenImageColor(i32(width), i32(height), C_CLEAR),
 		width = width,
@@ -196,33 +196,33 @@ art_init :: proc(width, height: int) -> Art {
 	}
 }
 
-art_pixel :: proc(art: ^Art, x, y: int, color: rl.Color) {
+ArtPixel :: proc(art: ^Art, x, y: int, color: rl.Color) {
 	if x < 0 || y < 0 || x >= art.width || y >= art.height do return
 	rl.ImageDrawPixel(&art.image, i32(x), i32(y), color)
 }
 
-art_rect :: proc(art: ^Art, x, y, width, height: int, color: rl.Color) {
+ArtRect :: proc(art: ^Art, x, y, width, height: int, color: rl.Color) {
 	if width <= 0 || height <= 0 do return
 	for py in y ..< y+height {
 		for px in x ..< x+width {
-			art_pixel(art, px, py, color)
+			ArtPixel(art, px, py, color)
 		}
 	}
 }
 
-art_rect_outline :: proc(art: ^Art, x, y, width, height: int, color: rl.Color) {
+ArtRectOutline :: proc(art: ^Art, x, y, width, height: int, color: rl.Color) {
 	if width <= 0 || height <= 0 do return
 	for px in x ..< x+width {
-		art_pixel(art, px, y, color)
-		art_pixel(art, px, y+height-1, color)
+		ArtPixel(art, px, y, color)
+		ArtPixel(art, px, y+height-1, color)
 	}
 	for py in y ..< y+height {
-		art_pixel(art, x, py, color)
-		art_pixel(art, x+width-1, py, color)
+		ArtPixel(art, x, py, color)
+		ArtPixel(art, x+width-1, py, color)
 	}
 }
 
-art_line :: proc(art: ^Art, x0, y0, x1, y1: int, color: rl.Color) {
+ArtLine :: proc(art: ^Art, x0, y0, x1, y1: int, color: rl.Color) {
 	x := x0
 	y := y0
 	dx := x1-x0
@@ -236,7 +236,7 @@ art_line :: proc(art: ^Art, x0, y0, x1, y1: int, color: rl.Color) {
 	if y0 > y1 do sy = -1
 	err := dx+dy
 	for {
-		art_pixel(art, x, y, color)
+		ArtPixel(art, x, y, color)
 		if x == x1 && y == y1 do break
 		e2 := 2*err
 		if e2 >= dy {
@@ -250,31 +250,31 @@ art_line :: proc(art: ^Art, x0, y0, x1, y1: int, color: rl.Color) {
 	}
 }
 
-art_ellipse :: proc(art: ^Art, cx, cy, rx, ry: int, color: rl.Color) {
+ArtEllipse :: proc(art: ^Art, cx, cy, rx, ry: int, color: rl.Color) {
 	if rx <= 0 || ry <= 0 do return
 	for y in -ry ..= ry {
 		for x in -rx ..= rx {
 			if x*x*ry*ry+y*y*rx*rx <= rx*rx*ry*ry {
-				art_pixel(art, cx+x, cy+y, color)
+				ArtPixel(art, cx+x, cy+y, color)
 			}
 		}
 	}
 }
 
-art_circle :: proc(art: ^Art, cx, cy, radius: int, color: rl.Color) {
-	art_ellipse(art, cx, cy, radius, radius, color)
+ArtCircle :: proc(art: ^Art, cx, cy, radius: int, color: rl.Color) {
+	ArtEllipse(art, cx, cy, radius, radius, color)
 }
 
-art_polygon :: proc(art: ^Art, points: []Point, color: rl.Color) {
+ArtPolygon :: proc(art: ^Art, points: []Point, color: rl.Color) {
 	if len(points) < 3 do return
-	min_y := points[0][1]
-	max_y := points[0][1]
+	minY := points[0][1]
+	maxY := points[0][1]
 	for point in points {
-		min_y = min(min_y, point[1])
-		max_y = max(max_y, point[1])
+		minY = min(minY, point[1])
+		maxY = max(maxY, point[1])
 	}
 	intersections: [64]f32
-	for y in min_y ..= max_y {
+	for y in minY ..= maxY {
 		count := 0
 		for i in 0 ..< len(points) {
 			a := points[i]
@@ -300,18 +300,18 @@ art_polygon :: proc(art: ^Art, points: []Point, color: rl.Color) {
 			x0 := int(intersections[i*2])
 			x1 := int(intersections[i*2+1])
 			for x in x0 ..= x1 {
-				art_pixel(art, x, y, color)
+				ArtPixel(art, x, y, color)
 			}
 		}
 	}
 }
 
-art_triangle :: proc(art: ^Art, x0, y0, x1, y1, x2, y2: int, color: rl.Color) {
+ArtTriangle :: proc(art: ^Art, x0, y0, x1, y1, x2, y2: int, color: rl.Color) {
 	points := [3]Point{{x0, y0}, {x1, y1}, {x2, y2}}
-	art_polygon(art, points[:], color)
+	ArtPolygon(art, points[:], color)
 }
 
-art_to_texture :: proc(art: Art) -> rl.Texture2D {
+ArtToTexture :: proc(art: Art) -> rl.Texture2D {
 	texture := rl.LoadTextureFromImage(art.image)
 	rl.SetTextureFilter(texture, .POINT)
 	return texture
@@ -319,7 +319,7 @@ art_to_texture :: proc(art: Art) -> rl.Texture2D {
 
 // Sparse weathering so large flat surfaces (stone, timber, roof shingles) pick up
 // the same grain as the ground instead of reading as clean vector shapes.
-art_grain :: proc(art: ^Art, seed: u64) {
+ArtGrain :: proc(art: ^Art, seed: u64) {
 	for y in 0..<art.height {
 		for x in 0..<art.width {
 			color := rl.GetImageColor(art.image, i32(x), i32(y))
@@ -329,12 +329,12 @@ art_grain :: proc(art: ^Art, seed: u64) {
 			factor: f32 = 0.9
 			if WorldNoiseHash(y, x, seed+1) < 0.5 do factor = 1.1
 			if y > art.height-art.height/6 && WorldNoiseHash(x, y, seed+2) < 0.35 do factor = 0.84
-			art_pixel(art, x, y, c_shade(color, factor))
+			ArtPixel(art, x, y, CShade(color, factor))
 		}
 	}
 }
 
-create_shadow_texture :: proc() -> rl.Texture2D {
+CreateShadowTexture :: proc() -> rl.Texture2D {
 	width := 64
 	height := 64
 	image := rl.GenImageColor(i32(width), i32(height), C_CLEAR)
@@ -359,7 +359,7 @@ create_shadow_texture :: proc() -> rl.Texture2D {
 	return texture
 }
 
-create_glow_texture :: proc() -> rl.Texture2D {
+CreateGlowTexture :: proc() -> rl.Texture2D {
 	width := 64
 	height := 64
 	image := rl.GenImageColor(i32(width), i32(height), C_CLEAR)
@@ -391,1003 +391,1003 @@ BuildingHasNightLight :: proc(kind: BuildingKind) -> bool {
 	unreachable()
 }
 
-draw_shadow :: proc(art: ^Art, cx, cy, rx, ry: int) {
-	art_ellipse(art, cx, cy, rx, ry, C_SHADOW)
+DrawShadow :: proc(art: ^Art, cx, cy, rx, ry: int) {
+	ArtEllipse(art, cx, cy, rx, ry, C_SHADOW)
 }
 
-draw_stone_seams :: proc(art: ^Art, x, y, width, height, step: int, color: rl.Color) {
+DrawStoneSeams :: proc(art: ^Art, x, y, width, height, step: int, color: rl.Color) {
 	for px := x+step; px < x+width; px += step {
-		art_line(art, px, y, px, y+height-1, color)
+		ArtLine(art, px, y, px, y+height-1, color)
 	}
 	for py := y+step; py < y+height; py += step {
-		art_line(art, x, py, x+width-1, py, color)
+		ArtLine(art, x, py, x+width-1, py, color)
 	}
 }
 
-draw_window :: proc(art: ^Art, x, y, width, height: int, lit: bool) {
-	art_rect(art, x, y, width, height, C_OUTLINE)
+DrawWindow :: proc(art: ^Art, x, y, width, height: int, lit: bool) {
+	ArtRect(art, x, y, width, height, C_OUTLINE)
 	fill := C_STONE_DARKEST
 	if lit do fill = C_GOLD_LIGHT
-	art_rect(art, x+1, y+1, width-2, height-2, fill)
+	ArtRect(art, x+1, y+1, width-2, height-2, fill)
 	if width > 3 && height > 3 {
-		art_line(art, x+width/2, y+1, x+width/2, y+height-2, C_OUTLINE)
-		art_line(art, x+1, y+height/2, x+width-2, y+height/2, C_OUTLINE)
+		ArtLine(art, x+width/2, y+1, x+width/2, y+height-2, C_OUTLINE)
+		ArtLine(art, x+1, y+height/2, x+width-2, y+height/2, C_OUTLINE)
 	}
 }
 
-draw_banner :: proc(art: ^Art, x, y, width, height: int, accent: rl.Color) {
-	art_rect(art, x, y, width, height, C_OUTLINE)
-	art_rect(art, x+1, y+1, width-2, height-2, c_shade(accent, 0.9))
-	art_rect(art, x+1, y+1, width-2, 1, c_shade(accent, 1.25))
+DrawBanner :: proc(art: ^Art, x, y, width, height: int, accent: rl.Color) {
+	ArtRect(art, x, y, width, height, C_OUTLINE)
+	ArtRect(art, x+1, y+1, width-2, height-2, CShade(accent, 0.9))
+	ArtRect(art, x+1, y+1, width-2, 1, CShade(accent, 1.25))
 	if width >= 4 && height >= 6 {
-		art_rect(art, x+width/2-1, y+height/2-1, 2, 2, C_GOLD_LIGHT)
+		ArtRect(art, x+width/2-1, y+height/2-1, 2, 2, C_GOLD_LIGHT)
 	}
 }
 
-draw_flag :: proc(art: ^Art, x, y: int, accent: rl.Color) {
-	art_line(art, x, y, x, y+6, C_OUTLINE)
-	art_rect(art, x+1, y, 4, 3, accent)
-	art_rect_outline(art, x+1, y, 4, 3, C_OUTLINE)
-	art_pixel(art, x+2, y+1, c_shade(accent, 1.3))
+DrawFlag :: proc(art: ^Art, x, y: int, accent: rl.Color) {
+	ArtLine(art, x, y, x, y+6, C_OUTLINE)
+	ArtRect(art, x+1, y, 4, 3, accent)
+	ArtRectOutline(art, x+1, y, 4, 3, C_OUTLINE)
+	ArtPixel(art, x+2, y+1, CShade(accent, 1.3))
 }
 
 // ---------------------------------------------------------------------------
 // Buildings
 // ---------------------------------------------------------------------------
 
-draw_building_sprite :: proc(kind: BuildingKind, accent: rl.Color) -> Art {
+DrawBuildingSprite :: proc(kind: BuildingKind, accent: rl.Color) -> Art {
 	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
-	art := art_init(width*PIXELS_PER_TILE, height*PIXELS_PER_TILE)
+	art := ArtInit(width*PIXELS_PER_TILE, height*PIXELS_PER_TILE)
 	switch kind {
 	case .TownHall:
-		draw_town_hall(&art, accent)
+		DrawTownHall(&art, accent)
 	case .Home:
-		draw_home(&art, accent)
+		DrawHome(&art, accent)
 	case .Farmland:
-		draw_farmland(&art, accent)
+		DrawFarmland(&art, accent)
 	case .Wall:
-		draw_wall(&art, accent)
+		DrawWall(&art, accent)
 	case .Bridge:
-		draw_bridge(&art, accent)
+		DrawBridge(&art, accent)
 	case .Cannon:
-		draw_cannon(&art, accent)
+		DrawCannon(&art, accent)
 	case .Watchtower:
-		draw_watchtower(&art, accent)
+		DrawWatchtower(&art, accent)
 	case .ArcheryRange:
-		draw_archery_range(&art, accent)
+		DrawArcheryRange(&art, accent)
 	case .MagicSchool:
-		draw_magic_school(&art, accent)
+		DrawMagicSchool(&art, accent)
 	case .GiantPen:
-		draw_giant_pen(&art, accent)
+		DrawGiantPen(&art, accent)
 	case .SiegeWorkshop:
-		draw_siege_workshop(&art, accent)
+		DrawSiegeWorkshop(&art, accent)
 	case .TurtlePen:
-		draw_turtle_pen(&art, accent)
+		DrawTurtlePen(&art, accent)
 	case .ThievesGuild:
-		draw_thieves_guild(&art, accent)
+		DrawThievesGuild(&art, accent)
 	case .Path:
-		draw_path(&art, accent)
+		DrawPath(&art, accent)
 	case .DistrictHall:
-		draw_district_hall(&art, accent)
+		DrawDistrictHall(&art, accent)
 	}
 	return art
 }
 
-draw_path :: proc(art: ^Art, accent: rl.Color) {
-	worn := c_shade(C_DIRT, 1.12)
-	art_rect(art, 0, 0, PIXELS_PER_TILE, PIXELS_PER_TILE, C_DIRT)
-	art_rect(art, 0, 5, PIXELS_PER_TILE, 6, worn)
-	art_rect(art, 5, 0, 6, PIXELS_PER_TILE, worn)
+DrawPath :: proc(art: ^Art, accent: rl.Color) {
+	worn := CShade(C_DIRT, 1.12)
+	ArtRect(art, 0, 0, PIXELS_PER_TILE, PIXELS_PER_TILE, C_DIRT)
+	ArtRect(art, 0, 5, PIXELS_PER_TILE, 6, worn)
+	ArtRect(art, 5, 0, 6, PIXELS_PER_TILE, worn)
 
 	for i in 0..<30 {
 		x := int(WorldNoiseHash(i, 11, 0xB01)*PIXELS_PER_TILE)
 		y := int(WorldNoiseHash(11, i, 0xB02)*PIXELS_PER_TILE)
 		color := C_DIRT_DARK
 		if WorldNoiseHash(x, y, 0xB03) < 0.35 do color = C_WOOD_LIGHT
-		art_pixel(art, x, y, color)
+		ArtPixel(art, x, y, color)
 	}
 	for i in 0..<5 {
 		x := 1+int(WorldNoiseHash(i, 17, 0xB04)*13)
 		y := 1+int(WorldNoiseHash(17, i, 0xB05)*13)
-		art_rect(art, x, y, 2, 1, C_STONE_DARK)
-		art_pixel(art, x, y, C_STONE)
+		ArtRect(art, x, y, 2, 1, C_STONE_DARK)
+		ArtPixel(art, x, y, C_STONE)
 	}
 
 	// Ragged rim so the road blends into grass instead of reading as a slab.
 	for i in 0..<PIXELS_PER_TILE {
-		if WorldNoiseHash(i, 0, 0xB11) < 0.6 do art_pixel(art, i, 0, C_CLEAR)
-		if WorldNoiseHash(i, 1, 0xB12) < 0.6 do art_pixel(art, i, PIXELS_PER_TILE-1, C_CLEAR)
-		if WorldNoiseHash(2, i, 0xB13) < 0.6 do art_pixel(art, 0, i, C_CLEAR)
-		if WorldNoiseHash(3, i, 0xB14) < 0.6 do art_pixel(art, PIXELS_PER_TILE-1, i, C_CLEAR)
+		if WorldNoiseHash(i, 0, 0xB11) < 0.6 do ArtPixel(art, i, 0, C_CLEAR)
+		if WorldNoiseHash(i, 1, 0xB12) < 0.6 do ArtPixel(art, i, PIXELS_PER_TILE-1, C_CLEAR)
+		if WorldNoiseHash(2, i, 0xB13) < 0.6 do ArtPixel(art, 0, i, C_CLEAR)
+		if WorldNoiseHash(3, i, 0xB14) < 0.6 do ArtPixel(art, PIXELS_PER_TILE-1, i, C_CLEAR)
 	}
-	art_pixel(art, 13, 2, accent)
+	ArtPixel(art, 13, 2, accent)
 }
 
 // Scaffolding laid over the footprint while a building is under construction.
-draw_construction_sprite :: proc(accent: rl.Color) -> Art {
-	art := art_init(PIXELS_PER_TILE, PIXELS_PER_TILE)
-	art_rect(&art, 0, 0, PIXELS_PER_TILE, PIXELS_PER_TILE, C_DIRT_DARK)
+DrawConstructionSprite :: proc(accent: rl.Color) -> Art {
+	art := ArtInit(PIXELS_PER_TILE, PIXELS_PER_TILE)
+	ArtRect(&art, 0, 0, PIXELS_PER_TILE, PIXELS_PER_TILE, C_DIRT_DARK)
 
 	for i in 0..<18 {
 		x := int(WorldNoiseHash(i, 23, 0xC01)*PIXELS_PER_TILE)
 		y := int(WorldNoiseHash(23, i, 0xC02)*PIXELS_PER_TILE)
 		color := C_DIRT
 		if WorldNoiseHash(x, y, 0xC03) < 0.4 do color = C_WOOD_DARKEST
-		art_pixel(&art, x, y, color)
+		ArtPixel(&art, x, y, color)
 	}
 
-	art_rect(&art, 0, 6, PIXELS_PER_TILE, 4, C_OUTLINE)
-	art_rect(&art, 0, 7, PIXELS_PER_TILE, 2, C_WOOD_DARK)
-	art_rect(&art, 6, 0, 4, PIXELS_PER_TILE, C_OUTLINE)
-	art_rect(&art, 7, 0, 2, PIXELS_PER_TILE, C_WOOD_DARK)
+	ArtRect(&art, 0, 6, PIXELS_PER_TILE, 4, C_OUTLINE)
+	ArtRect(&art, 0, 7, PIXELS_PER_TILE, 2, C_WOOD_DARK)
+	ArtRect(&art, 6, 0, 4, PIXELS_PER_TILE, C_OUTLINE)
+	ArtRect(&art, 7, 0, 2, PIXELS_PER_TILE, C_WOOD_DARK)
 
-	art_rect(&art, 1, 1, 3, 3, C_OUTLINE)
-	art_rect(&art, 2, 2, 1, 1, C_WOOD_LIGHT)
-	art_rect(&art, 12, 12, 3, 3, C_OUTLINE)
-	art_rect(&art, 13, 13, 1, 1, C_WOOD_LIGHT)
+	ArtRect(&art, 1, 1, 3, 3, C_OUTLINE)
+	ArtRect(&art, 2, 2, 1, 1, C_WOOD_LIGHT)
+	ArtRect(&art, 12, 12, 3, 3, C_OUTLINE)
+	ArtRect(&art, 13, 13, 1, 1, C_WOOD_LIGHT)
 
-	art_pixel(&art, 8, 8, accent)
+	ArtPixel(&art, 8, 8, accent)
 	return art
 }
 
-draw_fire_sprite :: proc() -> Art {
-	art := art_init(PIXELS_PER_TILE, PIXELS_PER_TILE)
-	art_ellipse(&art, 8, 11, 5, 4, C_ROOF)
-	art_triangle(&art, 8, 0, 5, 9, 11, 9, C_ROOF)
-	art_ellipse(&art, 8, 11, 4, 3, C_GOLD_DARK)
-	art_triangle(&art, 8, 3, 6, 10, 10, 10, C_GOLD_DARK)
-	art_ellipse(&art, 8, 11, 2, 2, C_GOLD)
-	art_triangle(&art, 8, 6, 7, 10, 9, 10, C_GOLD)
-	art_pixel(&art, 8, 10, C_GOLD_LIGHT)
-	art_pixel(&art, 8, 8, C_GOLD_LIGHT)
-	art_pixel(&art, 3, 14, C_GOLD_DARK)
-	art_pixel(&art, 12, 14, C_GOLD_DARK)
+DrawFireSprite :: proc() -> Art {
+	art := ArtInit(PIXELS_PER_TILE, PIXELS_PER_TILE)
+	ArtEllipse(&art, 8, 11, 5, 4, C_ROOF)
+	ArtTriangle(&art, 8, 0, 5, 9, 11, 9, C_ROOF)
+	ArtEllipse(&art, 8, 11, 4, 3, C_GOLD_DARK)
+	ArtTriangle(&art, 8, 3, 6, 10, 10, 10, C_GOLD_DARK)
+	ArtEllipse(&art, 8, 11, 2, 2, C_GOLD)
+	ArtTriangle(&art, 8, 6, 7, 10, 9, 10, C_GOLD)
+	ArtPixel(&art, 8, 10, C_GOLD_LIGHT)
+	ArtPixel(&art, 8, 8, C_GOLD_LIGHT)
+	ArtPixel(&art, 3, 14, C_GOLD_DARK)
+	ArtPixel(&art, 12, 14, C_GOLD_DARK)
 	return art
 }
 
-draw_home :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 8, 14, 5, 2)
-	art_rect(art, 3, 7, 10, 7, C_OUTLINE)
-	art_rect(art, 4, 8, 8, 5, C_WOOD_DARK)
-	art_rect(art, 4, 8, 8, 1, C_WOOD)
-	art_line(art, 4, 12, 11, 12, C_WOOD_DARKEST)
+DrawHome :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 8, 14, 5, 2)
+	ArtRect(art, 3, 7, 10, 7, C_OUTLINE)
+	ArtRect(art, 4, 8, 8, 5, C_WOOD_DARK)
+	ArtRect(art, 4, 8, 8, 1, C_WOOD)
+	ArtLine(art, 4, 12, 11, 12, C_WOOD_DARKEST)
 
-	art_triangle(art, 8, 1, 0, 8, 15, 8, C_OUTLINE)
-	art_triangle(art, 8, 2, 2, 8, 13, 8, C_ROOF)
-	art_triangle(art, 8, 3, 4, 8, 11, 8, C_ROOF_LIGHT)
+	ArtTriangle(art, 8, 1, 0, 8, 15, 8, C_OUTLINE)
+	ArtTriangle(art, 8, 2, 2, 8, 13, 8, C_ROOF)
+	ArtTriangle(art, 8, 3, 4, 8, 11, 8, C_ROOF_LIGHT)
 
-	art_rect(art, 6, 10, 3, 4, C_OUTLINE)
-	art_rect(art, 7, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 4, 9, 2, 2, C_OUTLINE)
-	art_rect(art, 5, 10, 1, 1, C_GOLD_LIGHT)
+	ArtRect(art, 6, 10, 3, 4, C_OUTLINE)
+	ArtRect(art, 7, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 4, 9, 2, 2, C_OUTLINE)
+	ArtRect(art, 5, 10, 1, 1, C_GOLD_LIGHT)
 
-	art_rect(art, 10, 3, 2, 3, C_OUTLINE)
-	art_rect(art, 10, 4, 1, 2, C_STONE_DARK)
-	draw_flag(art, 12, 4, accent)
+	ArtRect(art, 10, 3, 2, 3, C_OUTLINE)
+	ArtRect(art, 10, 4, 1, 2, C_STONE_DARK)
+	DrawFlag(art, 12, 4, accent)
 }
 
-draw_town_hall :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 32, 61, 26, 3)
+DrawTownHall :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 32, 61, 26, 3)
 
-	art_rect(art, 22, 56, 20, 6, C_OUTLINE)
-	art_rect(art, 23, 57, 18, 5, C_STONE_DARK)
-	art_rect(art, 24, 58, 16, 4, C_STONE)
+	ArtRect(art, 22, 56, 20, 6, C_OUTLINE)
+	ArtRect(art, 23, 57, 18, 5, C_STONE_DARK)
+	ArtRect(art, 24, 58, 16, 4, C_STONE)
 
-	art_rect(art, 4, 38, 56, 18, C_OUTLINE)
-	art_rect(art, 5, 39, 54, 16, C_STONE_DARK)
-	draw_stone_seams(art, 5, 39, 54, 16, 8, C_STONE_DARKEST)
+	ArtRect(art, 4, 38, 56, 18, C_OUTLINE)
+	ArtRect(art, 5, 39, 54, 16, C_STONE_DARK)
+	DrawStoneSeams(art, 5, 39, 54, 16, 8, C_STONE_DARKEST)
 
-	art_rect(art, 8, 20, 48, 20, C_OUTLINE)
-	art_rect(art, 9, 21, 46, 18, C_STONE)
-	art_rect(art, 9, 21, 46, 2, C_STONE_LIGHT)
+	ArtRect(art, 8, 20, 48, 20, C_OUTLINE)
+	ArtRect(art, 9, 21, 46, 18, C_STONE)
+	ArtRect(art, 9, 21, 46, 2, C_STONE_LIGHT)
 
-	roof_outline := [5]Point{{1, 22}, {62, 22}, {54, 8}, {32, 0}, {10, 8}}
-	art_polygon(art, roof_outline[:], C_OUTLINE)
+	roofOutline := [5]Point{{1, 22}, {62, 22}, {54, 8}, {32, 0}, {10, 8}}
+	ArtPolygon(art, roofOutline[:], C_OUTLINE)
 	roof := [5]Point{{3, 21}, {60, 21}, {52, 9}, {32, 2}, {12, 9}}
-	art_polygon(art, roof[:], C_ROOF)
-	roof_high := [5]Point{{6, 19}, {57, 19}, {50, 10}, {32, 4}, {15, 10}}
-	art_polygon(art, roof_high[:], C_ROOF_LIGHT)
+	ArtPolygon(art, roof[:], C_ROOF)
+	roofHigh := [5]Point{{6, 19}, {57, 19}, {50, 10}, {32, 4}, {15, 10}}
+	ArtPolygon(art, roofHigh[:], C_ROOF_LIGHT)
 	for y := 12; y < 21; y += 3 {
-		art_line(art, 9, y, 54, y, C_ROOF_DARK)
+		ArtLine(art, 9, y, 54, y, C_ROOF_DARK)
 	}
 
-	art_rect(art, 25, 8, 14, 18, C_OUTLINE)
-	art_rect(art, 26, 9, 12, 16, C_STONE_LIGHT)
-	draw_stone_seams(art, 26, 9, 12, 16, 4, C_STONE)
-	art_triangle(art, 32, 0, 23, 10, 41, 10, C_OUTLINE)
-	art_triangle(art, 32, 1, 25, 9, 39, 9, C_ROOF)
+	ArtRect(art, 25, 8, 14, 18, C_OUTLINE)
+	ArtRect(art, 26, 9, 12, 16, C_STONE_LIGHT)
+	DrawStoneSeams(art, 26, 9, 12, 16, 4, C_STONE)
+	ArtTriangle(art, 32, 0, 23, 10, 41, 10, C_OUTLINE)
+	ArtTriangle(art, 32, 1, 25, 9, 39, 9, C_ROOF)
 
-	art_rect(art, 29, 13, 6, 8, C_OUTLINE)
-	art_rect(art, 30, 14, 4, 6, C_WATER_DARK)
-	art_rect(art, 31, 15, 1, 2, C_GOLD_LIGHT)
+	ArtRect(art, 29, 13, 6, 8, C_OUTLINE)
+	ArtRect(art, 30, 14, 4, 6, C_WATER_DARK)
+	ArtRect(art, 31, 15, 1, 2, C_GOLD_LIGHT)
 
-	art_rect(art, 25, 44, 14, 16, C_OUTLINE)
-	art_rect(art, 26, 45, 12, 15, C_WOOD_DARKEST)
-	art_rect(art, 27, 47, 10, 13, C_WOOD_DARK)
-	art_line(art, 32, 46, 32, 59, C_WOOD_DARKEST)
-	art_pixel(art, 30, 52, C_GOLD)
-	art_pixel(art, 34, 52, C_GOLD)
+	ArtRect(art, 25, 44, 14, 16, C_OUTLINE)
+	ArtRect(art, 26, 45, 12, 15, C_WOOD_DARKEST)
+	ArtRect(art, 27, 47, 10, 13, C_WOOD_DARK)
+	ArtLine(art, 32, 46, 32, 59, C_WOOD_DARKEST)
+	ArtPixel(art, 30, 52, C_GOLD)
+	ArtPixel(art, 34, 52, C_GOLD)
 
-	draw_window(art, 12, 28, 6, 9, true)
-	draw_window(art, 46, 28, 6, 9, true)
-	draw_window(art, 12, 44, 5, 7, true)
-	draw_window(art, 47, 44, 5, 7, true)
+	DrawWindow(art, 12, 28, 6, 9, true)
+	DrawWindow(art, 46, 28, 6, 9, true)
+	DrawWindow(art, 12, 44, 5, 7, true)
+	DrawWindow(art, 47, 44, 5, 7, true)
 
-	draw_banner(art, 7, 26, 7, 18, accent)
-	draw_banner(art, 50, 26, 7, 18, accent)
-	draw_flag(art, 32, 1, accent)
+	DrawBanner(art, 7, 26, 7, 18, accent)
+	DrawBanner(art, 50, 26, 7, 18, accent)
+	DrawFlag(art, 32, 1, accent)
 
-	art_rect(art, 21, 52, 2, 5, C_WOOD_DARKEST)
-	art_rect(art, 41, 52, 2, 5, C_WOOD_DARKEST)
-	art_pixel(art, 22, 51, C_GOLD_LIGHT)
-	art_pixel(art, 42, 51, C_GOLD_LIGHT)
+	ArtRect(art, 21, 52, 2, 5, C_WOOD_DARKEST)
+	ArtRect(art, 41, 52, 2, 5, C_WOOD_DARKEST)
+	ArtPixel(art, 22, 51, C_GOLD_LIGHT)
+	ArtPixel(art, 42, 51, C_GOLD_LIGHT)
 }
 
 // A smaller twin-towered hall raised where an absorbed town's hall stood.
 // It marks a district of the merged town without competing with the main hall.
-draw_district_hall :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 32, 61, 28, 3)
+DrawDistrictHall :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 32, 61, 28, 3)
 
-	art_rect(art, 5, 54, 54, 7, C_OUTLINE)
-	art_rect(art, 6, 55, 52, 6, C_STONE_DARK)
-	art_rect(art, 7, 56, 50, 4, C_STONE)
+	ArtRect(art, 5, 54, 54, 7, C_OUTLINE)
+	ArtRect(art, 6, 55, 52, 6, C_STONE_DARK)
+	ArtRect(art, 7, 56, 50, 4, C_STONE)
 
 	// Twin towers.
-	for tower_x in ([2]int{11, 43}) {
-		art_rect(art, tower_x, 30, 10, 26, C_OUTLINE)
-		art_rect(art, tower_x+1, 31, 8, 24, C_STONE)
-		art_rect(art, tower_x+1, 31, 8, 2, C_STONE_LIGHT)
-		art_triangle(art, tower_x+5, 19, tower_x, 31, tower_x+10, 31, C_OUTLINE)
-		art_triangle(art, tower_x+5, 21, tower_x+1, 30, tower_x+9, 30, C_ROOF)
-		draw_window(art, tower_x+3, 37, 4, 6, true)
-		art_rect(art, tower_x+3, 47, 4, 9, C_WOOD_DARKEST)
+	for towerX in ([2]int{11, 43}) {
+		ArtRect(art, towerX, 30, 10, 26, C_OUTLINE)
+		ArtRect(art, towerX+1, 31, 8, 24, C_STONE)
+		ArtRect(art, towerX+1, 31, 8, 2, C_STONE_LIGHT)
+		ArtTriangle(art, towerX+5, 19, towerX, 31, towerX+10, 31, C_OUTLINE)
+		ArtTriangle(art, towerX+5, 21, towerX+1, 30, towerX+9, 30, C_ROOF)
+		DrawWindow(art, towerX+3, 37, 4, 6, true)
+		ArtRect(art, towerX+3, 47, 4, 9, C_WOOD_DARKEST)
 	}
 
 	// Central connecting hall.
-	art_rect(art, 20, 38, 24, 18, C_OUTLINE)
-	art_rect(art, 21, 39, 22, 16, C_STONE_LIGHT)
-	draw_stone_seams(art, 21, 39, 22, 16, 5, C_STONE)
-	art_rect(art, 18, 35, 28, 4, C_OUTLINE)
-	art_rect(art, 19, 36, 26, 2, C_ROOF_DARK)
+	ArtRect(art, 20, 38, 24, 18, C_OUTLINE)
+	ArtRect(art, 21, 39, 22, 16, C_STONE_LIGHT)
+	DrawStoneSeams(art, 21, 39, 22, 16, 5, C_STONE)
+	ArtRect(art, 18, 35, 28, 4, C_OUTLINE)
+	ArtRect(art, 19, 36, 26, 2, C_ROOF_DARK)
 
 	// Arched gate.
-	art_rect(art, 28, 43, 8, 13, C_OUTLINE)
-	art_rect(art, 29, 44, 6, 12, C_WOOD_DARKEST)
-	art_rect(art, 30, 46, 4, 10, C_WOOD_DARK)
-	art_pixel(art, 33, 51, C_GOLD)
+	ArtRect(art, 28, 43, 8, 13, C_OUTLINE)
+	ArtRect(art, 29, 44, 6, 12, C_WOOD_DARKEST)
+	ArtRect(art, 30, 46, 4, 10, C_WOOD_DARK)
+	ArtPixel(art, 33, 51, C_GOLD)
 
 	// District banners and a small flag between the towers.
-	draw_banner(art, 4, 34, 6, 14, accent)
-	draw_banner(art, 54, 34, 6, 14, accent)
-	art_rect(art, 31, 24, 2, 11, C_WOOD_DARKEST)
-	draw_flag(art, 33, 24, accent)
+	DrawBanner(art, 4, 34, 6, 14, accent)
+	DrawBanner(art, 54, 34, 6, 14, accent)
+	ArtRect(art, 31, 24, 2, 11, C_WOOD_DARKEST)
+	DrawFlag(art, 33, 24, accent)
 
-	art_rect(art, 24, 52, 2, 5, C_WOOD_DARKEST)
-	art_rect(art, 38, 52, 2, 5, C_WOOD_DARKEST)
-	art_pixel(art, 25, 51, C_GOLD_LIGHT)
-	art_pixel(art, 39, 51, C_GOLD_LIGHT)
+	ArtRect(art, 24, 52, 2, 5, C_WOOD_DARKEST)
+	ArtRect(art, 38, 52, 2, 5, C_WOOD_DARKEST)
+	ArtPixel(art, 25, 51, C_GOLD_LIGHT)
+	ArtPixel(art, 39, 51, C_GOLD_LIGHT)
 }
 
-draw_farmland :: proc(art: ^Art, accent: rl.Color) {
-	art_rect(art, 2, 2, 28, 28, C_OUTLINE)
-	art_rect(art, 3, 3, 26, 26, C_DIRT_DARK)
-	art_rect(art, 4, 4, 24, 24, C_DIRT)
+DrawFarmland :: proc(art: ^Art, accent: rl.Color) {
+	ArtRect(art, 2, 2, 28, 28, C_OUTLINE)
+	ArtRect(art, 3, 3, 26, 26, C_DIRT_DARK)
+	ArtRect(art, 4, 4, 24, 24, C_DIRT)
 	for y := 7; y < 27; y += 4 {
-		art_rect(art, 4, y, 24, 1, C_DIRT_DARK)
+		ArtRect(art, 4, y, 24, 1, C_DIRT_DARK)
 		for x := 5; x < 27; x += 3 {
-			art_rect(art, x, y-1, 1, 2, C_LEAF)
-			art_pixel(art, x, y-2, C_LEAF_LIGHT)
+			ArtRect(art, x, y-1, 1, 2, C_LEAF)
+			ArtPixel(art, x, y-2, C_LEAF_LIGHT)
 		}
 	}
 	for x := 2; x <= 29; x += 5 {
-		art_rect(art, x, 1, 1, 4, C_WOOD_DARK)
-		art_rect(art, x, 27, 1, 4, C_WOOD_DARK)
+		ArtRect(art, x, 1, 1, 4, C_WOOD_DARK)
+		ArtRect(art, x, 27, 1, 4, C_WOOD_DARK)
 	}
-	art_line(art, 2, 3, 29, 3, C_WOOD)
-	art_line(art, 2, 28, 29, 28, C_WOOD)
+	ArtLine(art, 2, 3, 29, 3, C_WOOD)
+	ArtLine(art, 2, 28, 29, 28, C_WOOD)
 
-	art_line(art, 25, 20, 25, 12, C_WOOD_DARKEST)
-	art_line(art, 22, 15, 28, 15, C_WOOD_DARKEST)
-	art_rect(art, 23, 12, 5, 4, accent)
-	art_rect(art, 24, 10, 3, 2, C_GOLD_LIGHT)
-	art_pixel(art, 24, 14, C_OUTLINE)
-	art_pixel(art, 26, 14, C_OUTLINE)
-	draw_flag(art, 3, 0, accent)
+	ArtLine(art, 25, 20, 25, 12, C_WOOD_DARKEST)
+	ArtLine(art, 22, 15, 28, 15, C_WOOD_DARKEST)
+	ArtRect(art, 23, 12, 5, 4, accent)
+	ArtRect(art, 24, 10, 3, 2, C_GOLD_LIGHT)
+	ArtPixel(art, 24, 14, C_OUTLINE)
+	ArtPixel(art, 26, 14, C_OUTLINE)
+	DrawFlag(art, 3, 0, accent)
 }
 
-draw_wall :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 8, 14, 6, 2)
-	art_rect(art, 1, 5, 14, 10, C_OUTLINE)
-	art_rect(art, 2, 6, 12, 8, C_STONE_DARK)
-	draw_stone_seams(art, 2, 6, 12, 8, 4, C_STONE_DARKEST)
+DrawWall :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 8, 14, 6, 2)
+	ArtRect(art, 1, 5, 14, 10, C_OUTLINE)
+	ArtRect(art, 2, 6, 12, 8, C_STONE_DARK)
+	DrawStoneSeams(art, 2, 6, 12, 8, 4, C_STONE_DARKEST)
 
-	art_rect(art, 1, 2, 4, 4, C_OUTLINE)
-	art_rect(art, 2, 3, 2, 3, C_STONE)
-	art_rect(art, 7, 2, 3, 4, C_OUTLINE)
-	art_rect(art, 7, 3, 2, 3, C_STONE)
-	art_rect(art, 12, 2, 3, 4, C_OUTLINE)
-	art_rect(art, 12, 3, 2, 3, C_STONE)
+	ArtRect(art, 1, 2, 4, 4, C_OUTLINE)
+	ArtRect(art, 2, 3, 2, 3, C_STONE)
+	ArtRect(art, 7, 2, 3, 4, C_OUTLINE)
+	ArtRect(art, 7, 3, 2, 3, C_STONE)
+	ArtRect(art, 12, 2, 3, 4, C_OUTLINE)
+	ArtRect(art, 12, 3, 2, 3, C_STONE)
 
-	art_rect(art, 6, 8, 4, 3, C_OUTLINE)
-	art_rect(art, 7, 9, 2, 1, accent)
-	art_pixel(art, 3, 12, C_LEAF_DARK)
-	art_pixel(art, 11, 11, C_LEAF_DARK)
+	ArtRect(art, 6, 8, 4, 3, C_OUTLINE)
+	ArtRect(art, 7, 9, 2, 1, accent)
+	ArtPixel(art, 3, 12, C_LEAF_DARK)
+	ArtPixel(art, 11, 11, C_LEAF_DARK)
 }
 
-draw_bridge :: proc(art: ^Art, accent: rl.Color) {
-	art_rect(art, 1, 2, 14, 12, C_OUTLINE)
-	art_rect(art, 2, 3, 12, 10, C_WOOD)
+DrawBridge :: proc(art: ^Art, accent: rl.Color) {
+	ArtRect(art, 1, 2, 14, 12, C_OUTLINE)
+	ArtRect(art, 2, 3, 12, 10, C_WOOD)
 	for x := 3; x < 14; x += 3 {
-		art_line(art, x, 3, x, 12, C_WOOD_DARK)
+		ArtLine(art, x, 3, x, 12, C_WOOD_DARK)
 	}
-	art_line(art, 2, 2, 13, 2, C_WOOD_DARKEST)
-	art_line(art, 2, 13, 13, 13, C_WOOD_DARKEST)
-	art_rect(art, 1, 1, 2, 3, C_WOOD_DARKEST)
-	art_rect(art, 13, 1, 2, 3, C_WOOD_DARKEST)
-	art_rect(art, 1, 12, 2, 3, C_WOOD_DARKEST)
-	art_rect(art, 13, 12, 2, 3, C_WOOD_DARKEST)
-	draw_flag(art, 2, 0, accent)
+	ArtLine(art, 2, 2, 13, 2, C_WOOD_DARKEST)
+	ArtLine(art, 2, 13, 13, 13, C_WOOD_DARKEST)
+	ArtRect(art, 1, 1, 2, 3, C_WOOD_DARKEST)
+	ArtRect(art, 13, 1, 2, 3, C_WOOD_DARKEST)
+	ArtRect(art, 1, 12, 2, 3, C_WOOD_DARKEST)
+	ArtRect(art, 13, 12, 2, 3, C_WOOD_DARKEST)
+	DrawFlag(art, 2, 0, accent)
 }
 
-draw_cannon :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 16, 28, 13, 3)
-	art_rect(art, 4, 20, 24, 9, C_OUTLINE)
-	art_rect(art, 5, 21, 22, 7, C_STONE_DARK)
-	draw_stone_seams(art, 5, 21, 22, 7, 5, C_STONE_DARKEST)
+DrawCannon :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 16, 28, 13, 3)
+	ArtRect(art, 4, 20, 24, 9, C_OUTLINE)
+	ArtRect(art, 5, 21, 22, 7, C_STONE_DARK)
+	DrawStoneSeams(art, 5, 21, 22, 7, 5, C_STONE_DARKEST)
 
-	art_circle(art, 10, 27, 4, C_OUTLINE)
-	art_circle(art, 10, 27, 3, C_WOOD_DARKEST)
-	art_circle(art, 10, 27, 1, C_WOOD)
-	art_circle(art, 22, 27, 4, C_OUTLINE)
-	art_circle(art, 22, 27, 3, C_WOOD_DARKEST)
-	art_circle(art, 22, 27, 1, C_WOOD)
+	ArtCircle(art, 10, 27, 4, C_OUTLINE)
+	ArtCircle(art, 10, 27, 3, C_WOOD_DARKEST)
+	ArtCircle(art, 10, 27, 1, C_WOOD)
+	ArtCircle(art, 22, 27, 4, C_OUTLINE)
+	ArtCircle(art, 22, 27, 3, C_WOOD_DARKEST)
+	ArtCircle(art, 22, 27, 1, C_WOOD)
 
-	art_rect(art, 7, 16, 18, 7, C_OUTLINE)
-	art_rect(art, 8, 17, 16, 5, C_WOOD_DARK)
-	art_rect(art, 8, 10, 17, 6, C_OUTLINE)
-	art_rect(art, 9, 11, 15, 4, C_IRON_DARK)
-	art_rect(art, 9, 11, 15, 1, C_IRON_LIGHT)
-	art_circle(art, 25, 13, 3, C_OUTLINE)
-	art_circle(art, 25, 13, 2, C_IRON)
-	art_circle(art, 25, 13, 1, C_OUTLINE)
-	art_line(art, 14, 11, 14, 14, C_IRON_LIGHT)
-	art_line(art, 20, 11, 20, 14, C_IRON_LIGHT)
-	art_rect(art, 11, 12, 6, 2, accent)
-	draw_flag(art, 26, 5, accent)
+	ArtRect(art, 7, 16, 18, 7, C_OUTLINE)
+	ArtRect(art, 8, 17, 16, 5, C_WOOD_DARK)
+	ArtRect(art, 8, 10, 17, 6, C_OUTLINE)
+	ArtRect(art, 9, 11, 15, 4, C_IRON_DARK)
+	ArtRect(art, 9, 11, 15, 1, C_IRON_LIGHT)
+	ArtCircle(art, 25, 13, 3, C_OUTLINE)
+	ArtCircle(art, 25, 13, 2, C_IRON)
+	ArtCircle(art, 25, 13, 1, C_OUTLINE)
+	ArtLine(art, 14, 11, 14, 14, C_IRON_LIGHT)
+	ArtLine(art, 20, 11, 20, 14, C_IRON_LIGHT)
+	ArtRect(art, 11, 12, 6, 2, accent)
+	DrawFlag(art, 26, 5, accent)
 }
 
-draw_watchtower :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 8, 14, 6, 2)
+DrawWatchtower :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 8, 14, 6, 2)
 
-	art_rect(art, 2, 4, 12, 11, C_OUTLINE)
-	art_rect(art, 3, 5, 10, 9, C_STONE_DARK)
-	draw_stone_seams(art, 3, 5, 10, 9, 3, C_STONE_DARKEST)
+	ArtRect(art, 2, 4, 12, 11, C_OUTLINE)
+	ArtRect(art, 3, 5, 10, 9, C_STONE_DARK)
+	DrawStoneSeams(art, 3, 5, 10, 9, 3, C_STONE_DARKEST)
 
-	art_rect(art, 1, 1, 14, 4, C_OUTLINE)
-	art_rect(art, 2, 2, 12, 2, C_STONE)
+	ArtRect(art, 1, 1, 14, 4, C_OUTLINE)
+	ArtRect(art, 2, 2, 12, 2, C_STONE)
 	for x in 2..<14 {
-		if x%4 == 0 do art_rect(art, x, 0, 2, 3, C_OUTLINE)
+		if x%4 == 0 do ArtRect(art, x, 0, 2, 3, C_OUTLINE)
 	}
 
-	art_rect(art, 6, 6, 4, 5, C_OUTLINE)
-	art_rect(art, 7, 7, 2, 3, C_GOLD_LIGHT)
-	art_rect(art, 4, 9, 2, 2, C_OUTLINE)
-	art_rect(art, 5, 10, 1, 1, C_STONE_LIGHT)
+	ArtRect(art, 6, 6, 4, 5, C_OUTLINE)
+	ArtRect(art, 7, 7, 2, 3, C_GOLD_LIGHT)
+	ArtRect(art, 4, 9, 2, 2, C_OUTLINE)
+	ArtRect(art, 5, 10, 1, 1, C_STONE_LIGHT)
 
-	art_line(art, 12, 15, 12, 5, C_OUTLINE)
-	art_rect(art, 12, 3, 3, 4, accent)
-	art_rect_outline(art, 12, 3, 3, 4, C_OUTLINE)
-	art_pixel(art, 13, 4, C_GOLD_LIGHT)
+	ArtLine(art, 12, 15, 12, 5, C_OUTLINE)
+	ArtRect(art, 12, 3, 3, 4, accent)
+	ArtRectOutline(art, 12, 3, 3, 4, C_OUTLINE)
+	ArtPixel(art, 13, 4, C_GOLD_LIGHT)
 }
 
-draw_archery_range :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 24, 45, 20, 3)
-	art_rect(art, 4, 18, 26, 22, C_OUTLINE)
-	art_rect(art, 5, 19, 24, 20, C_WOOD_DARK)
+DrawArcheryRange :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 24, 45, 20, 3)
+	ArtRect(art, 4, 18, 26, 22, C_OUTLINE)
+	ArtRect(art, 5, 19, 24, 20, C_WOOD_DARK)
 	for y := 22; y < 39; y += 4 {
-		art_line(art, 5, y, 28, y, C_WOOD_DARKEST)
+		ArtLine(art, 5, y, 28, y, C_WOOD_DARKEST)
 	}
-	roof_outline := [4]Point{{1, 19}, {33, 19}, {28, 7}, {6, 7}}
-	art_polygon(art, roof_outline[:], C_OUTLINE)
+	roofOutline := [4]Point{{1, 19}, {33, 19}, {28, 7}, {6, 7}}
+	ArtPolygon(art, roofOutline[:], C_OUTLINE)
 	roof := [4]Point{{3, 18}, {31, 18}, {27, 8}, {7, 8}}
-	art_polygon(art, roof[:], C_ROOF_DARK)
-	roof_high := [4]Point{{5, 16}, {29, 16}, {26, 9}, {8, 9}}
-	art_polygon(art, roof_high[:], C_ROOF)
-	art_rect(art, 12, 26, 8, 14, C_OUTLINE)
-	art_rect(art, 13, 27, 6, 13, C_WOOD_DARKEST)
-	art_pixel(art, 17, 33, C_GOLD)
-	draw_window(art, 22, 24, 4, 5, true)
+	ArtPolygon(art, roof[:], C_ROOF_DARK)
+	roofHigh := [4]Point{{5, 16}, {29, 16}, {26, 9}, {8, 9}}
+	ArtPolygon(art, roofHigh[:], C_ROOF)
+	ArtRect(art, 12, 26, 8, 14, C_OUTLINE)
+	ArtRect(art, 13, 27, 6, 13, C_WOOD_DARKEST)
+	ArtPixel(art, 17, 33, C_GOLD)
+	DrawWindow(art, 22, 24, 4, 5, true)
 
 	for y := 20; y <= 44; y += 6 {
-		art_rect(art, 33, y, 1, 4, C_WOOD_DARK)
+		ArtRect(art, 33, y, 1, 4, C_WOOD_DARK)
 	}
-	art_line(art, 33, 21, 33, 44, C_WOOD)
-	art_line(art, 33, 22, 47, 22, C_WOOD)
+	ArtLine(art, 33, 21, 33, 44, C_WOOD)
+	ArtLine(art, 33, 22, 47, 22, C_WOOD)
 
-	art_circle(art, 41, 28, 5, C_OUTLINE)
-	art_circle(art, 41, 28, 4, C_GOLD_LIGHT)
-	art_circle(art, 41, 28, 3, C_ROOF)
-	art_circle(art, 41, 28, 2, C_WHITE)
-	art_circle(art, 41, 28, 1, C_ROOF_DARK)
-	art_circle(art, 39, 39, 4, C_OUTLINE)
-	art_circle(art, 39, 39, 3, C_GOLD_LIGHT)
-	art_circle(art, 39, 39, 2, C_ROOF)
-	art_circle(art, 39, 39, 1, C_WHITE)
-	art_line(art, 38, 30, 37, 27, C_WOOD_LIGHT)
-	art_line(art, 43, 31, 44, 28, C_WOOD_LIGHT)
-	draw_flag(art, 27, 1, accent)
+	ArtCircle(art, 41, 28, 5, C_OUTLINE)
+	ArtCircle(art, 41, 28, 4, C_GOLD_LIGHT)
+	ArtCircle(art, 41, 28, 3, C_ROOF)
+	ArtCircle(art, 41, 28, 2, C_WHITE)
+	ArtCircle(art, 41, 28, 1, C_ROOF_DARK)
+	ArtCircle(art, 39, 39, 4, C_OUTLINE)
+	ArtCircle(art, 39, 39, 3, C_GOLD_LIGHT)
+	ArtCircle(art, 39, 39, 2, C_ROOF)
+	ArtCircle(art, 39, 39, 1, C_WHITE)
+	ArtLine(art, 38, 30, 37, 27, C_WOOD_LIGHT)
+	ArtLine(art, 43, 31, 44, 28, C_WOOD_LIGHT)
+	DrawFlag(art, 27, 1, accent)
 }
 
-draw_magic_school :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 24, 45, 18, 3)
-	art_rect(art, 10, 16, 28, 28, C_OUTLINE)
-	art_rect(art, 11, 17, 26, 26, C_STONE_DARK)
-	draw_stone_seams(art, 11, 17, 26, 26, 6, C_STONE_DARKEST)
+DrawMagicSchool :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 24, 45, 18, 3)
+	ArtRect(art, 10, 16, 28, 28, C_OUTLINE)
+	ArtRect(art, 11, 17, 26, 26, C_STONE_DARK)
+	DrawStoneSeams(art, 11, 17, 26, 26, 6, C_STONE_DARKEST)
 
-	roof_outline := [5]Point{{6, 18}, {42, 18}, {36, 6}, {24, 0}, {12, 6}}
-	art_polygon(art, roof_outline[:], C_OUTLINE)
+	roofOutline := [5]Point{{6, 18}, {42, 18}, {36, 6}, {24, 0}, {12, 6}}
+	ArtPolygon(art, roofOutline[:], C_OUTLINE)
 	roof := [5]Point{{8, 17}, {40, 17}, {35, 7}, {24, 2}, {13, 7}}
-	art_polygon(art, roof[:], C_ARCANE_DARK)
-	roof_high := [5]Point{{11, 15}, {37, 15}, {33, 9}, {24, 4}, {15, 9}}
-	art_polygon(art, roof_high[:], C_ARCANE)
-	art_pixel(art, 20, 10, C_ARCANE_GLOW)
-	art_pixel(art, 28, 8, C_GOLD_LIGHT)
-	art_pixel(art, 24, 13, C_WHITE)
+	ArtPolygon(art, roof[:], C_ARCANE_DARK)
+	roofHigh := [5]Point{{11, 15}, {37, 15}, {33, 9}, {24, 4}, {15, 9}}
+	ArtPolygon(art, roofHigh[:], C_ARCANE)
+	ArtPixel(art, 20, 10, C_ARCANE_GLOW)
+	ArtPixel(art, 28, 8, C_GOLD_LIGHT)
+	ArtPixel(art, 24, 13, C_WHITE)
 
-	art_rect(art, 20, 32, 8, 12, C_OUTLINE)
-	art_rect(art, 21, 33, 6, 11, C_WOOD_DARKEST)
-	art_circle(art, 24, 32, 3, C_OUTLINE)
-	art_circle(art, 24, 32, 2, C_WOOD_DARKEST)
+	ArtRect(art, 20, 32, 8, 12, C_OUTLINE)
+	ArtRect(art, 21, 33, 6, 11, C_WOOD_DARKEST)
+	ArtCircle(art, 24, 32, 3, C_OUTLINE)
+	ArtCircle(art, 24, 32, 2, C_WOOD_DARKEST)
 
-	draw_window(art, 14, 22, 4, 6, true)
-	draw_window(art, 30, 22, 4, 6, true)
-	art_rect(art, 15, 23, 2, 4, C_ARCANE_GLOW)
-	art_rect(art, 31, 23, 2, 4, C_ARCANE_GLOW)
+	DrawWindow(art, 14, 22, 4, 6, true)
+	DrawWindow(art, 30, 22, 4, 6, true)
+	ArtRect(art, 15, 23, 2, 4, C_ARCANE_GLOW)
+	ArtRect(art, 31, 23, 2, 4, C_ARCANE_GLOW)
 
-	art_circle(art, 38, 12, 3, C_OUTLINE)
-	art_circle(art, 38, 12, 2, C_ARCANE_GLOW)
-	art_pixel(art, 37, 11, C_WHITE)
+	ArtCircle(art, 38, 12, 3, C_OUTLINE)
+	ArtCircle(art, 38, 12, 2, C_ARCANE_GLOW)
+	ArtPixel(art, 37, 11, C_WHITE)
 
-	draw_banner(art, 6, 26, 6, 14, accent)
-	draw_flag(art, 36, 2, accent)
+	DrawBanner(art, 6, 26, 6, 14, accent)
+	DrawFlag(art, 36, 2, accent)
 }
 
-draw_giant_pen :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 32, 60, 26, 3)
-	art_rect(art, 4, 16, 56, 44, C_OUTLINE)
-	art_rect(art, 5, 17, 54, 42, C_DIRT_DARK)
-	art_rect(art, 7, 19, 50, 38, C_DIRT)
+DrawGiantPen :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 32, 60, 26, 3)
+	ArtRect(art, 4, 16, 56, 44, C_OUTLINE)
+	ArtRect(art, 5, 17, 54, 42, C_DIRT_DARK)
+	ArtRect(art, 7, 19, 50, 38, C_DIRT)
 
 	for x := 5; x <= 58; x += 8 {
-		art_rect(art, x, 14, 2, 46, C_WOOD_DARKEST)
+		ArtRect(art, x, 14, 2, 46, C_WOOD_DARKEST)
 	}
-	art_line(art, 5, 16, 59, 16, C_WOOD)
-	art_line(art, 5, 58, 59, 58, C_WOOD)
-	art_line(art, 5, 30, 59, 30, C_WOOD)
+	ArtLine(art, 5, 16, 59, 16, C_WOOD)
+	ArtLine(art, 5, 58, 59, 58, C_WOOD)
+	ArtLine(art, 5, 30, 59, 30, C_WOOD)
 
-	art_rect(art, 8, 30, 26, 22, C_OUTLINE)
-	art_rect(art, 9, 31, 24, 20, C_WOOD_DARK)
+	ArtRect(art, 8, 30, 26, 22, C_OUTLINE)
+	ArtRect(art, 9, 31, 24, 20, C_WOOD_DARK)
 	roof := [4]Point{{5, 31}, {37, 31}, {32, 20}, {10, 20}}
-	art_polygon(art, roof[:], C_OUTLINE)
-	roof_inner := [4]Point{{8, 30}, {34, 30}, {30, 22}, {12, 22}}
-	art_polygon(art, roof_inner[:], C_ROOF_DARK)
-	art_rect(art, 13, 38, 12, 13, C_WOOD_DARKEST)
+	ArtPolygon(art, roof[:], C_OUTLINE)
+	roofInner := [4]Point{{8, 30}, {34, 30}, {30, 22}, {12, 22}}
+	ArtPolygon(art, roofInner[:], C_ROOF_DARK)
+	ArtRect(art, 13, 38, 12, 13, C_WOOD_DARKEST)
 
-	art_rect(art, 40, 42, 14, 8, C_GOLD_DARK)
-	art_rect(art, 41, 41, 12, 2, C_GOLD)
-	art_line(art, 42, 43, 52, 47, C_GOLD_LIGHT)
-	art_line(art, 44, 41, 50, 48, C_GOLD_LIGHT)
+	ArtRect(art, 40, 42, 14, 8, C_GOLD_DARK)
+	ArtRect(art, 41, 41, 12, 2, C_GOLD)
+	ArtLine(art, 42, 43, 52, 47, C_GOLD_LIGHT)
+	ArtLine(art, 44, 41, 50, 48, C_GOLD_LIGHT)
 
-	art_rect(art, 40, 32, 14, 5, C_OUTLINE)
-	art_rect(art, 41, 33, 12, 3, C_WOOD_DARKEST)
-	art_rect(art, 42, 33, 10, 1, C_WATER)
+	ArtRect(art, 40, 32, 14, 5, C_OUTLINE)
+	ArtRect(art, 41, 33, 12, 3, C_WOOD_DARKEST)
+	ArtRect(art, 42, 33, 10, 1, C_WATER)
 
-	art_line(art, 54, 54, 44, 30, C_OUTLINE)
-	art_line(art, 54, 53, 45, 30, C_WOOD_DARK)
-	art_circle(art, 44, 29, 3, C_OUTLINE)
-	art_circle(art, 44, 29, 2, C_WOOD)
+	ArtLine(art, 54, 54, 44, 30, C_OUTLINE)
+	ArtLine(art, 54, 53, 45, 30, C_WOOD_DARK)
+	ArtCircle(art, 44, 29, 3, C_OUTLINE)
+	ArtCircle(art, 44, 29, 2, C_WOOD)
 
-	art_line(art, 12, 55, 18, 57, C_WHITE)
-	art_line(art, 17, 54, 13, 58, C_WHITE)
-	draw_flag(art, 58, 1, accent)
+	ArtLine(art, 12, 55, 18, 57, C_WHITE)
+	ArtLine(art, 17, 54, 13, 58, C_WHITE)
+	DrawFlag(art, 58, 1, accent)
 }
 
-draw_siege_workshop :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 32, 45, 28, 3)
+DrawSiegeWorkshop :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 32, 45, 28, 3)
 
 	// Main hall, spanning the full 4-tile footprint.
-	art_rect(art, 7, 18, 50, 24, C_OUTLINE)
-	art_rect(art, 8, 19, 48, 22, C_WOOD_DARK)
+	ArtRect(art, 7, 18, 50, 24, C_OUTLINE)
+	ArtRect(art, 8, 19, 48, 22, C_WOOD_DARK)
 	for y := 23; y < 41; y += 5 {
-		art_line(art, 8, y, 55, y, C_WOOD_DARKEST)
+		ArtLine(art, 8, y, 55, y, C_WOOD_DARKEST)
 	}
-	art_line(art, 8, 20, 8, 40, C_WOOD_LIGHT)
+	ArtLine(art, 8, 20, 8, 40, C_WOOD_LIGHT)
 
 	roof := [4]Point{{3, 20}, {60, 20}, {51, 6}, {7, 6}}
-	art_polygon(art, roof[:], C_OUTLINE)
-	roof_inner := [4]Point{{6, 19}, {57, 19}, {49, 8}, {9, 8}}
-	art_polygon(art, roof_inner[:], C_ROOF_DARK)
-	roof_high := [4]Point{{9, 17}, {54, 17}, {47, 10}, {11, 10}}
-	art_polygon(art, roof_high[:], C_ROOF)
+	ArtPolygon(art, roof[:], C_OUTLINE)
+	roofInner := [4]Point{{6, 19}, {57, 19}, {49, 8}, {9, 8}}
+	ArtPolygon(art, roofInner[:], C_ROOF_DARK)
+	roofHigh := [4]Point{{9, 17}, {54, 17}, {47, 10}, {11, 10}}
+	ArtPolygon(art, roofHigh[:], C_ROOF)
 
 	// Open assembly bay with a catapult frame under construction.
-	art_rect(art, 12, 26, 30, 15, C_WOOD_DARKEST)
-	art_rect(art, 13, 27, 28, 13, C_DIRT_DARK)
-	art_rect(art, 16, 36, 18, 3, C_WOOD_DARKEST)
-	art_circle(art, 19, 38, 3, C_OUTLINE)
-	art_circle(art, 19, 38, 2, C_WOOD_DARKEST)
-	art_circle(art, 31, 38, 3, C_OUTLINE)
-	art_circle(art, 31, 38, 2, C_WOOD_DARKEST)
-	art_line(art, 20, 35, 33, 27, C_OUTLINE)
-	art_line(art, 20, 34, 33, 26, C_WOOD)
-	art_circle(art, 33, 26, 2, C_IRON_DARK)
+	ArtRect(art, 12, 26, 30, 15, C_WOOD_DARKEST)
+	ArtRect(art, 13, 27, 28, 13, C_DIRT_DARK)
+	ArtRect(art, 16, 36, 18, 3, C_WOOD_DARKEST)
+	ArtCircle(art, 19, 38, 3, C_OUTLINE)
+	ArtCircle(art, 19, 38, 2, C_WOOD_DARKEST)
+	ArtCircle(art, 31, 38, 3, C_OUTLINE)
+	ArtCircle(art, 31, 38, 2, C_WOOD_DARKEST)
+	ArtLine(art, 20, 35, 33, 27, C_OUTLINE)
+	ArtLine(art, 20, 34, 33, 26, C_WOOD)
+	ArtCircle(art, 33, 26, 2, C_IRON_DARK)
 
 	// Stone forge with a glowing furnace mouth.
-	art_rect(art, 44, 26, 12, 16, C_OUTLINE)
-	art_rect(art, 45, 27, 10, 14, C_STONE_DARK)
-	art_rect(art, 46, 30, 8, 7, C_GOLD_DARK)
-	art_rect(art, 47, 31, 6, 5, C_GOLD)
-	art_rect(art, 48, 32, 4, 3, C_GOLD_LIGHT)
-	art_pixel(art, 49, 29, C_GOLD_LIGHT)
+	ArtRect(art, 44, 26, 12, 16, C_OUTLINE)
+	ArtRect(art, 45, 27, 10, 14, C_STONE_DARK)
+	ArtRect(art, 46, 30, 8, 7, C_GOLD_DARK)
+	ArtRect(art, 47, 31, 6, 5, C_GOLD)
+	ArtRect(art, 48, 32, 4, 3, C_GOLD_LIGHT)
+	ArtPixel(art, 49, 29, C_GOLD_LIGHT)
 
 	// Chimney and tool rack.
-	art_rect(art, 47, 0, 5, 7, C_OUTLINE)
-	art_rect(art, 48, 1, 3, 6, C_STONE_DARK)
-	art_pixel(art, 48, 2, C_STONE_LIGHT)
-	art_line(art, 11, 22, 11, 34, C_WOOD_LIGHT)
-	art_rect(art, 9, 22, 5, 2, C_IRON)
+	ArtRect(art, 47, 0, 5, 7, C_OUTLINE)
+	ArtRect(art, 48, 1, 3, 6, C_STONE_DARK)
+	ArtPixel(art, 48, 2, C_STONE_LIGHT)
+	ArtLine(art, 11, 22, 11, 34, C_WOOD_LIGHT)
+	ArtRect(art, 9, 22, 5, 2, C_IRON)
 
-	draw_flag(art, 30, 0, accent)
+	DrawFlag(art, 30, 0, accent)
 }
 
-draw_turtle_pen :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 24, 42, 18, 3)
-	art_ellipse(art, 24, 28, 19, 13, C_OUTLINE)
-	art_ellipse(art, 24, 28, 18, 12, C_WATER_DARK)
-	art_ellipse(art, 24, 28, 15, 9, C_WATER)
-	art_ellipse(art, 20, 25, 5, 2, C_WATER_LIGHT)
-	art_ellipse(art, 30, 32, 6, 2, C_WATER_LIGHT)
+DrawTurtlePen :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 24, 42, 18, 3)
+	ArtEllipse(art, 24, 28, 19, 13, C_OUTLINE)
+	ArtEllipse(art, 24, 28, 18, 12, C_WATER_DARK)
+	ArtEllipse(art, 24, 28, 15, 9, C_WATER)
+	ArtEllipse(art, 20, 25, 5, 2, C_WATER_LIGHT)
+	ArtEllipse(art, 30, 32, 6, 2, C_WATER_LIGHT)
 
-	art_ellipse(art, 8, 36, 6, 4, C_OUTLINE)
-	art_ellipse(art, 8, 36, 5, 3, C_STONE_DARK)
-	art_ellipse(art, 40, 18, 5, 3, C_OUTLINE)
-	art_ellipse(art, 40, 18, 4, 2, C_STONE)
+	ArtEllipse(art, 8, 36, 6, 4, C_OUTLINE)
+	ArtEllipse(art, 8, 36, 5, 3, C_STONE_DARK)
+	ArtEllipse(art, 40, 18, 5, 3, C_OUTLINE)
+	ArtEllipse(art, 40, 18, 4, 2, C_STONE)
 
-	art_ellipse(art, 26, 30, 7, 5, C_OUTLINE)
-	art_ellipse(art, 26, 30, 6, 4, C_LEAF_DARK)
-	art_ellipse(art, 26, 30, 4, 3, C_LEAF)
-	art_line(art, 22, 29, 30, 31, C_LEAF_LIGHT)
-	art_line(art, 24, 27, 28, 33, C_LEAF_LIGHT)
-	art_circle(art, 34, 32, 2, C_OUTLINE)
-	art_circle(art, 34, 32, 1, C_LEAF_LIGHT)
-	art_pixel(art, 34, 31, C_OUTLINE)
-	art_rect(art, 20, 34, 2, 2, C_LEAF_DARK)
-	art_rect(art, 30, 34, 2, 2, C_LEAF_DARK)
-	art_rect(art, 24, 27, 4, 2, accent)
+	ArtEllipse(art, 26, 30, 7, 5, C_OUTLINE)
+	ArtEllipse(art, 26, 30, 6, 4, C_LEAF_DARK)
+	ArtEllipse(art, 26, 30, 4, 3, C_LEAF)
+	ArtLine(art, 22, 29, 30, 31, C_LEAF_LIGHT)
+	ArtLine(art, 24, 27, 28, 33, C_LEAF_LIGHT)
+	ArtCircle(art, 34, 32, 2, C_OUTLINE)
+	ArtCircle(art, 34, 32, 1, C_LEAF_LIGHT)
+	ArtPixel(art, 34, 31, C_OUTLINE)
+	ArtRect(art, 20, 34, 2, 2, C_LEAF_DARK)
+	ArtRect(art, 30, 34, 2, 2, C_LEAF_DARK)
+	ArtRect(art, 24, 27, 4, 2, accent)
 
 	for x := 4; x <= 44; x += 8 {
-		art_rect(art, x, 4, 1, 8, C_WOOD_DARK)
+		ArtRect(art, x, 4, 1, 8, C_WOOD_DARK)
 	}
-	art_line(art, 4, 6, 44, 6, C_WOOD)
-	art_line(art, 4, 10, 44, 10, C_WOOD)
-	art_circle(art, 12, 22, 3, C_LEAF_DARK)
-	art_pixel(art, 12, 22, C_WATER_DARK)
-	art_circle(art, 38, 38, 2, C_LEAF)
-	draw_flag(art, 44, 0, accent)
+	ArtLine(art, 4, 6, 44, 6, C_WOOD)
+	ArtLine(art, 4, 10, 44, 10, C_WOOD)
+	ArtCircle(art, 12, 22, 3, C_LEAF_DARK)
+	ArtPixel(art, 12, 22, C_WATER_DARK)
+	ArtCircle(art, 38, 38, 2, C_LEAF)
+	DrawFlag(art, 44, 0, accent)
 }
 
-draw_thieves_guild :: proc(art: ^Art, accent: rl.Color) {
-	draw_shadow(art, 16, 45, 13, 3)
-	art_rect(art, 6, 16, 20, 28, C_OUTLINE)
-	art_rect(art, 7, 17, 18, 26, C_WOOD_DARKEST)
+DrawThievesGuild :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 16, 45, 13, 3)
+	ArtRect(art, 6, 16, 20, 28, C_OUTLINE)
+	ArtRect(art, 7, 17, 18, 26, C_WOOD_DARKEST)
 	for y := 21; y < 42; y += 5 {
-		art_line(art, 7, y, 24, y, C_OUTLINE)
+		ArtLine(art, 7, y, 24, y, C_OUTLINE)
 	}
 	roof := [4]Point{{3, 18}, {29, 18}, {25, 5}, {7, 5}}
-	art_polygon(art, roof[:], C_OUTLINE)
-	roof_inner := [4]Point{{5, 17}, {27, 17}, {24, 6}, {8, 6}}
-	art_polygon(art, roof_inner[:], C_CLOTH_DARK)
-	roof_high := [4]Point{{8, 15}, {24, 15}, {21, 8}, {11, 8}}
-	art_polygon(art, roof_high[:], C_CLOTH)
+	ArtPolygon(art, roof[:], C_OUTLINE)
+	roofInner := [4]Point{{5, 17}, {27, 17}, {24, 6}, {8, 6}}
+	ArtPolygon(art, roofInner[:], C_CLOTH_DARK)
+	roofHigh := [4]Point{{8, 15}, {24, 15}, {21, 8}, {11, 8}}
+	ArtPolygon(art, roofHigh[:], C_CLOTH)
 
-	art_rect(art, 12, 32, 8, 12, C_OUTLINE)
-	art_rect(art, 13, 33, 6, 11, C_WOOD_DARKEST)
-	art_rect(art, 14, 35, 4, 1, C_GOLD_DARK)
-	draw_window(art, 9, 22, 2, 5, false)
-	draw_window(art, 21, 22, 2, 5, false)
+	ArtRect(art, 12, 32, 8, 12, C_OUTLINE)
+	ArtRect(art, 13, 33, 6, 11, C_WOOD_DARKEST)
+	ArtRect(art, 14, 35, 4, 1, C_GOLD_DARK)
+	DrawWindow(art, 9, 22, 2, 5, false)
+	DrawWindow(art, 21, 22, 2, 5, false)
 
-	art_line(art, 26, 26, 26, 35, C_OUTLINE)
-	art_rect(art, 24, 24, 5, 5, C_OUTLINE)
-	art_rect(art, 25, 25, 3, 3, C_GOLD)
-	art_rect(art, 26, 26, 1, 1, C_GOLD_LIGHT)
+	ArtLine(art, 26, 26, 26, 35, C_OUTLINE)
+	ArtRect(art, 24, 24, 5, 5, C_OUTLINE)
+	ArtRect(art, 25, 25, 3, 3, C_GOLD)
+	ArtRect(art, 26, 26, 1, 1, C_GOLD_LIGHT)
 
-	art_circle(art, 16, 27, 3, C_OUTLINE)
-	art_circle(art, 16, 27, 2, C_CLOTH_DARK)
-	art_pixel(art, 15, 27, accent)
-	art_pixel(art, 17, 27, accent)
-	draw_banner(art, 3, 24, 4, 10, accent)
-	draw_flag(art, 25, 0, accent)
+	ArtCircle(art, 16, 27, 3, C_OUTLINE)
+	ArtCircle(art, 16, 27, 2, C_CLOTH_DARK)
+	ArtPixel(art, 15, 27, accent)
+	ArtPixel(art, 17, 27, accent)
+	DrawBanner(art, 3, 24, 4, 10, accent)
+	DrawFlag(art, 25, 0, accent)
 }
 
 // ---------------------------------------------------------------------------
 // Units
 // ---------------------------------------------------------------------------
 
-draw_unit_sprite :: proc(kind: UnitKind, accent: rl.Color) -> Art {
-	art := art_init(16, 16)
+DrawUnitSprite :: proc(kind: UnitKind, accent: rl.Color) -> Art {
+	art := ArtInit(16, 16)
 	switch kind {
 	case .Villager:
-		draw_unit_villager(&art, accent)
+		DrawUnitVillager(&art, accent)
 	case .Builder:
-		draw_unit_builder(&art, accent)
+		DrawUnitBuilder(&art, accent)
 	case .CombatBuilder:
-		draw_unit_combat_builder(&art, accent)
+		DrawUnitCombatBuilder(&art, accent)
 	case .WaterCollector:
-		draw_unit_water_collector(&art, accent)
+		DrawUnitWaterCollector(&art, accent)
 	case .Farmer:
-		draw_unit_farmer(&art, accent)
+		DrawUnitFarmer(&art, accent)
 	case .Knight:
-		draw_unit_knight(&art, accent)
+		DrawUnitKnight(&art, accent)
 	case .Archer:
-		draw_unit_archer(&art, accent)
+		DrawUnitArcher(&art, accent)
 	case .Mage:
-		draw_unit_mage(&art, accent)
+		DrawUnitMage(&art, accent)
 	case .Giant:
-		draw_unit_giant(&art, accent)
+		DrawUnitGiant(&art, accent)
 	case .Turtle:
-		draw_unit_turtle(&art, accent)
+		DrawUnitTurtle(&art, accent)
 	case .Catapult:
-		draw_unit_catapult(&art, accent)
+		DrawUnitCatapult(&art, accent)
 	case .Rogue:
-		draw_unit_rogue(&art, accent)
+		DrawUnitRogue(&art, accent)
 	case .Explorer:
-		draw_unit_explorer(&art, accent)
+		DrawUnitExplorer(&art, accent)
 	}
 	return art
 }
 
-unit_shadow :: proc(art: ^Art) {
-	art_ellipse(art, 8, 14, 4, 2, C_SHADOW)
+UnitShadow :: proc(art: ^Art) {
+	ArtEllipse(art, 8, 14, 4, 2, C_SHADOW)
 }
 
-draw_unit_villager :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
-	art_rect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 4, 6, 8, 6, C_OUTLINE)
-	art_rect(art, 5, 7, 6, 5, C_CLOTH)
-	art_rect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
-	art_rect(art, 5, 7, 6, 1, accent)
-	art_rect(art, 3, 7, 1, 4, C_OUTLINE)
-	art_rect(art, 12, 7, 1, 4, C_OUTLINE)
-	art_circle(art, 8, 4, 3, C_OUTLINE)
-	art_circle(art, 8, 4, 2, C_SKIN)
-	art_rect(art, 6, 2, 4, 2, C_HAIR)
-	art_pixel(art, 7, 4, C_OUTLINE)
-	art_pixel(art, 9, 4, C_OUTLINE)
-	art_rect(art, 11, 8, 2, 3, C_WOOD_DARK)
-	art_rect_outline(art, 11, 8, 2, 3, C_OUTLINE)
+DrawUnitVillager :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	ArtRect(art, 5, 11, 6, 4, C_OUTLINE)
+	ArtRect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 4, 6, 8, 6, C_OUTLINE)
+	ArtRect(art, 5, 7, 6, 5, C_CLOTH)
+	ArtRect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
+	ArtRect(art, 5, 7, 6, 1, accent)
+	ArtRect(art, 3, 7, 1, 4, C_OUTLINE)
+	ArtRect(art, 12, 7, 1, 4, C_OUTLINE)
+	ArtCircle(art, 8, 4, 3, C_OUTLINE)
+	ArtCircle(art, 8, 4, 2, C_SKIN)
+	ArtRect(art, 6, 2, 4, 2, C_HAIR)
+	ArtPixel(art, 7, 4, C_OUTLINE)
+	ArtPixel(art, 9, 4, C_OUTLINE)
+	ArtRect(art, 11, 8, 2, 3, C_WOOD_DARK)
+	ArtRectOutline(art, 11, 8, 2, 3, C_OUTLINE)
 }
 
-draw_unit_builder :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
-	art_rect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 4, 6, 8, 6, C_OUTLINE)
-	art_rect(art, 5, 7, 6, 5, C_LEAF_DARK)
-	art_rect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
-	art_rect(art, 5, 7, 6, 1, accent)
-	art_rect(art, 3, 7, 1, 4, C_OUTLINE)
-	art_rect(art, 12, 7, 1, 4, C_OUTLINE)
-	art_circle(art, 8, 4, 3, C_OUTLINE)
-	art_circle(art, 8, 4, 2, C_SKIN)
-	art_pixel(art, 7, 4, C_OUTLINE)
-	art_pixel(art, 9, 4, C_OUTLINE)
-	art_rect(art, 5, 2, 6, 2, C_WOOD_DARKEST)
-	art_rect(art, 4, 3, 8, 1, C_WOOD_DARK)
-	art_line(art, 12, 11, 14, 5, C_OUTLINE)
-	art_line(art, 12, 10, 13, 5, C_WOOD_LIGHT)
-	art_rect(art, 12, 4, 3, 2, C_OUTLINE)
-	art_rect(art, 13, 5, 1, 1, C_IRON)
-	art_rect(art, 10, 10, 2, 2, C_WOOD_DARK)
+DrawUnitBuilder :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	ArtRect(art, 5, 11, 6, 4, C_OUTLINE)
+	ArtRect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 4, 6, 8, 6, C_OUTLINE)
+	ArtRect(art, 5, 7, 6, 5, C_LEAF_DARK)
+	ArtRect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
+	ArtRect(art, 5, 7, 6, 1, accent)
+	ArtRect(art, 3, 7, 1, 4, C_OUTLINE)
+	ArtRect(art, 12, 7, 1, 4, C_OUTLINE)
+	ArtCircle(art, 8, 4, 3, C_OUTLINE)
+	ArtCircle(art, 8, 4, 2, C_SKIN)
+	ArtPixel(art, 7, 4, C_OUTLINE)
+	ArtPixel(art, 9, 4, C_OUTLINE)
+	ArtRect(art, 5, 2, 6, 2, C_WOOD_DARKEST)
+	ArtRect(art, 4, 3, 8, 1, C_WOOD_DARK)
+	ArtLine(art, 12, 11, 14, 5, C_OUTLINE)
+	ArtLine(art, 12, 10, 13, 5, C_WOOD_LIGHT)
+	ArtRect(art, 12, 4, 3, 2, C_OUTLINE)
+	ArtRect(art, 13, 5, 1, 1, C_IRON)
+	ArtRect(art, 10, 10, 2, 2, C_WOOD_DARK)
 }
 
-draw_unit_explorer :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
-	art_rect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 4, 6, 8, 6, C_OUTLINE)
-	art_rect(art, 5, 7, 6, 5, C_CLOTH_LIGHT)
-	art_rect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
-	art_rect(art, 5, 7, 6, 1, accent)
-	art_rect(art, 3, 7, 1, 4, C_OUTLINE)
-	art_rect(art, 12, 7, 1, 4, C_OUTLINE)
-	art_circle(art, 8, 4, 3, C_OUTLINE)
-	art_circle(art, 8, 4, 2, C_SKIN)
-	art_pixel(art, 7, 4, C_OUTLINE)
-	art_pixel(art, 9, 4, C_OUTLINE)
+DrawUnitExplorer :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	ArtRect(art, 5, 11, 6, 4, C_OUTLINE)
+	ArtRect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 4, 6, 8, 6, C_OUTLINE)
+	ArtRect(art, 5, 7, 6, 5, C_CLOTH_LIGHT)
+	ArtRect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
+	ArtRect(art, 5, 7, 6, 1, accent)
+	ArtRect(art, 3, 7, 1, 4, C_OUTLINE)
+	ArtRect(art, 12, 7, 1, 4, C_OUTLINE)
+	ArtCircle(art, 8, 4, 3, C_OUTLINE)
+	ArtCircle(art, 8, 4, 2, C_SKIN)
+	ArtPixel(art, 7, 4, C_OUTLINE)
+	ArtPixel(art, 9, 4, C_OUTLINE)
 	// Wide travelling hat.
-	art_rect(art, 4, 2, 8, 1, C_WOOD_DARKEST)
-	art_rect(art, 6, 0, 4, 2, C_WOOD_DARK)
-	art_rect(art, 7, 0, 2, 1, C_WOOD_LIGHT)
+	ArtRect(art, 4, 2, 8, 1, C_WOOD_DARKEST)
+	ArtRect(art, 6, 0, 4, 2, C_WOOD_DARK)
+	ArtRect(art, 7, 0, 2, 1, C_WOOD_LIGHT)
 	// Backpack and walking staff.
-	art_rect(art, 11, 7, 2, 4, C_WOOD_DARKEST)
-	art_rect(art, 11, 8, 2, 1, C_WOOD)
-	art_line(art, 13, 12, 13, 4, C_OUTLINE)
-	art_line(art, 14, 11, 14, 5, C_WOOD_LIGHT)
+	ArtRect(art, 11, 7, 2, 4, C_WOOD_DARKEST)
+	ArtRect(art, 11, 8, 2, 1, C_WOOD)
+	ArtLine(art, 13, 12, 13, 4, C_OUTLINE)
+	ArtLine(art, 14, 11, 14, 5, C_WOOD_LIGHT)
 }
 
-draw_unit_combat_builder :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
-	art_rect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 4, 6, 8, 6, C_OUTLINE)
-	art_rect(art, 5, 7, 6, 5, C_IRON_DARK)
-	art_rect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
-	art_rect(art, 5, 7, 6, 1, accent)
-	art_rect(art, 3, 7, 1, 4, C_OUTLINE)
-	art_rect(art, 12, 7, 1, 4, C_OUTLINE)
+DrawUnitCombatBuilder :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	ArtRect(art, 5, 11, 6, 4, C_OUTLINE)
+	ArtRect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 4, 6, 8, 6, C_OUTLINE)
+	ArtRect(art, 5, 7, 6, 5, C_IRON_DARK)
+	ArtRect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
+	ArtRect(art, 5, 7, 6, 1, accent)
+	ArtRect(art, 3, 7, 1, 4, C_OUTLINE)
+	ArtRect(art, 12, 7, 1, 4, C_OUTLINE)
 
-	art_circle(art, 8, 4, 3, C_OUTLINE)
-	art_circle(art, 8, 4, 2, C_SKIN)
-	art_rect(art, 5, 1, 7, 3, C_OUTLINE)
-	art_rect(art, 6, 2, 5, 2, C_IRON)
-	art_rect(art, 7, 2, 3, 1, C_IRON_LIGHT)
-	art_pixel(art, 7, 4, C_OUTLINE)
-	art_pixel(art, 9, 4, C_OUTLINE)
+	ArtCircle(art, 8, 4, 3, C_OUTLINE)
+	ArtCircle(art, 8, 4, 2, C_SKIN)
+	ArtRect(art, 5, 1, 7, 3, C_OUTLINE)
+	ArtRect(art, 6, 2, 5, 2, C_IRON)
+	ArtRect(art, 7, 2, 3, 1, C_IRON_LIGHT)
+	ArtPixel(art, 7, 4, C_OUTLINE)
+	ArtPixel(art, 9, 4, C_OUTLINE)
 
-	art_line(art, 12, 12, 14, 4, C_OUTLINE)
-	art_line(art, 12, 11, 13, 4, C_WOOD_LIGHT)
-	art_rect(art, 12, 3, 4, 4, C_OUTLINE)
-	art_rect(art, 13, 4, 2, 2, C_STONE)
-	art_rect(art, 10, 10, 2, 2, C_IRON_DARK)
+	ArtLine(art, 12, 12, 14, 4, C_OUTLINE)
+	ArtLine(art, 12, 11, 13, 4, C_WOOD_LIGHT)
+	ArtRect(art, 12, 3, 4, 4, C_OUTLINE)
+	ArtRect(art, 13, 4, 2, 2, C_STONE)
+	ArtRect(art, 10, 10, 2, 2, C_IRON_DARK)
 }
 
-draw_unit_water_collector :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
-	art_rect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 4, 6, 8, 6, C_OUTLINE)
-	art_rect(art, 5, 7, 6, 5, C_WATER_DARK)
-	art_rect(art, 5, 7, 6, 1, C_WATER_LIGHT)
-	art_rect(art, 5, 10, 6, 1, accent)
-	art_rect(art, 3, 7, 1, 4, C_OUTLINE)
-	art_rect(art, 12, 7, 1, 4, C_OUTLINE)
-	art_circle(art, 8, 4, 3, C_OUTLINE)
-	art_circle(art, 8, 4, 2, C_SKIN)
-	art_rect(art, 5, 2, 6, 2, C_WATER_DARK)
-	art_rect(art, 4, 3, 8, 1, C_WATER_LIGHT)
-	art_pixel(art, 7, 4, C_OUTLINE)
-	art_pixel(art, 9, 4, C_OUTLINE)
-	art_rect(art, 11, 10, 3, 4, C_OUTLINE)
-	art_rect(art, 12, 11, 1, 2, C_IRON)
-	art_line(art, 11, 10, 13, 9, C_IRON_LIGHT)
-	art_pixel(art, 13, 9, C_WATER_LIGHT)
+DrawUnitWaterCollector :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	ArtRect(art, 5, 11, 6, 4, C_OUTLINE)
+	ArtRect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 4, 6, 8, 6, C_OUTLINE)
+	ArtRect(art, 5, 7, 6, 5, C_WATER_DARK)
+	ArtRect(art, 5, 7, 6, 1, C_WATER_LIGHT)
+	ArtRect(art, 5, 10, 6, 1, accent)
+	ArtRect(art, 3, 7, 1, 4, C_OUTLINE)
+	ArtRect(art, 12, 7, 1, 4, C_OUTLINE)
+	ArtCircle(art, 8, 4, 3, C_OUTLINE)
+	ArtCircle(art, 8, 4, 2, C_SKIN)
+	ArtRect(art, 5, 2, 6, 2, C_WATER_DARK)
+	ArtRect(art, 4, 3, 8, 1, C_WATER_LIGHT)
+	ArtPixel(art, 7, 4, C_OUTLINE)
+	ArtPixel(art, 9, 4, C_OUTLINE)
+	ArtRect(art, 11, 10, 3, 4, C_OUTLINE)
+	ArtRect(art, 12, 11, 1, 2, C_IRON)
+	ArtLine(art, 11, 10, 13, 9, C_IRON_LIGHT)
+	ArtPixel(art, 13, 9, C_WATER_LIGHT)
 }
 
-draw_unit_farmer :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
-	art_rect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 4, 6, 8, 6, C_OUTLINE)
-	art_rect(art, 5, 7, 6, 5, C_LEAF_DARK)
-	art_rect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
-	art_rect(art, 5, 7, 6, 1, accent)
-	art_rect(art, 3, 7, 1, 4, C_OUTLINE)
-	art_rect(art, 12, 7, 1, 4, C_OUTLINE)
-	art_circle(art, 8, 4, 3, C_OUTLINE)
-	art_circle(art, 8, 4, 2, C_SKIN)
-	art_pixel(art, 7, 4, C_OUTLINE)
-	art_pixel(art, 9, 4, C_OUTLINE)
-	art_rect(art, 4, 2, 9, 2, C_OUTLINE)
-	art_rect(art, 5, 2, 7, 1, C_GOLD)
-	art_rect(art, 6, 0, 5, 2, C_OUTLINE)
-	art_rect(art, 7, 0, 3, 1, C_GOLD_LIGHT)
-	art_line(art, 12, 12, 14, 4, C_OUTLINE)
-	art_line(art, 12, 11, 13, 5, C_WOOD_LIGHT)
-	art_rect(art, 13, 4, 2, 1, C_IRON_LIGHT)
-	art_line(art, 2, 12, 3, 8, C_GOLD_DARK)
-	art_line(art, 3, 12, 4, 8, C_GOLD)
-	art_line(art, 4, 12, 5, 8, C_GOLD_LIGHT)
+DrawUnitFarmer :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	ArtRect(art, 5, 11, 6, 4, C_OUTLINE)
+	ArtRect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 4, 6, 8, 6, C_OUTLINE)
+	ArtRect(art, 5, 7, 6, 5, C_LEAF_DARK)
+	ArtRect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
+	ArtRect(art, 5, 7, 6, 1, accent)
+	ArtRect(art, 3, 7, 1, 4, C_OUTLINE)
+	ArtRect(art, 12, 7, 1, 4, C_OUTLINE)
+	ArtCircle(art, 8, 4, 3, C_OUTLINE)
+	ArtCircle(art, 8, 4, 2, C_SKIN)
+	ArtPixel(art, 7, 4, C_OUTLINE)
+	ArtPixel(art, 9, 4, C_OUTLINE)
+	ArtRect(art, 4, 2, 9, 2, C_OUTLINE)
+	ArtRect(art, 5, 2, 7, 1, C_GOLD)
+	ArtRect(art, 6, 0, 5, 2, C_OUTLINE)
+	ArtRect(art, 7, 0, 3, 1, C_GOLD_LIGHT)
+	ArtLine(art, 12, 12, 14, 4, C_OUTLINE)
+	ArtLine(art, 12, 11, 13, 5, C_WOOD_LIGHT)
+	ArtRect(art, 13, 4, 2, 1, C_IRON_LIGHT)
+	ArtLine(art, 2, 12, 3, 8, C_GOLD_DARK)
+	ArtLine(art, 3, 12, 4, 8, C_GOLD)
+	ArtLine(art, 4, 12, 5, 8, C_GOLD_LIGHT)
 }
 
-draw_unit_knight :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
-	art_rect(art, 6, 11, 1, 3, C_IRON_DARK)
-	art_rect(art, 9, 11, 1, 3, C_IRON_DARK)
-	art_rect(art, 4, 6, 8, 6, C_OUTLINE)
-	art_rect(art, 5, 7, 6, 5, C_IRON_DARK)
-	art_rect(art, 5, 7, 6, 1, C_IRON)
-	art_rect(art, 5, 10, 6, 1, accent)
-	art_rect(art, 3, 7, 1, 4, C_OUTLINE)
-	art_rect(art, 12, 7, 1, 4, C_OUTLINE)
-	art_circle(art, 8, 4, 3, C_OUTLINE)
-	art_circle(art, 8, 4, 2, C_IRON)
-	art_rect(art, 6, 4, 4, 1, C_OUTLINE)
-	art_pixel(art, 8, 2, C_IRON_LIGHT)
-	art_rect(art, 8, 0, 2, 2, accent)
-	art_pixel(art, 7, 1, accent)
-	art_rect(art, 1, 7, 4, 6, C_OUTLINE)
-	art_rect(art, 2, 8, 2, 4, accent)
-	art_rect(art, 2, 9, 2, 1, C_GOLD_LIGHT)
-	art_line(art, 12, 11, 14, 3, C_OUTLINE)
-	art_line(art, 12, 10, 13, 3, C_IRON_LIGHT)
-	art_line(art, 11, 11, 13, 11, C_GOLD)
+DrawUnitKnight :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	ArtRect(art, 5, 11, 6, 4, C_OUTLINE)
+	ArtRect(art, 6, 11, 1, 3, C_IRON_DARK)
+	ArtRect(art, 9, 11, 1, 3, C_IRON_DARK)
+	ArtRect(art, 4, 6, 8, 6, C_OUTLINE)
+	ArtRect(art, 5, 7, 6, 5, C_IRON_DARK)
+	ArtRect(art, 5, 7, 6, 1, C_IRON)
+	ArtRect(art, 5, 10, 6, 1, accent)
+	ArtRect(art, 3, 7, 1, 4, C_OUTLINE)
+	ArtRect(art, 12, 7, 1, 4, C_OUTLINE)
+	ArtCircle(art, 8, 4, 3, C_OUTLINE)
+	ArtCircle(art, 8, 4, 2, C_IRON)
+	ArtRect(art, 6, 4, 4, 1, C_OUTLINE)
+	ArtPixel(art, 8, 2, C_IRON_LIGHT)
+	ArtRect(art, 8, 0, 2, 2, accent)
+	ArtPixel(art, 7, 1, accent)
+	ArtRect(art, 1, 7, 4, 6, C_OUTLINE)
+	ArtRect(art, 2, 8, 2, 4, accent)
+	ArtRect(art, 2, 9, 2, 1, C_GOLD_LIGHT)
+	ArtLine(art, 12, 11, 14, 3, C_OUTLINE)
+	ArtLine(art, 12, 10, 13, 3, C_IRON_LIGHT)
+	ArtLine(art, 11, 11, 13, 11, C_GOLD)
 }
 
-draw_unit_archer :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
-	art_rect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
-	art_rect(art, 4, 6, 8, 6, C_OUTLINE)
-	art_rect(art, 5, 7, 6, 5, C_LEAF_DARK)
-	art_rect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
-	art_rect(art, 5, 7, 6, 1, accent)
-	art_rect(art, 3, 7, 1, 4, C_OUTLINE)
-	art_rect(art, 12, 7, 1, 4, C_OUTLINE)
-	art_circle(art, 8, 4, 3, C_OUTLINE)
-	art_circle(art, 8, 4, 2, C_SKIN)
-	art_rect(art, 5, 2, 6, 2, C_LEAF_DARK)
-	art_rect(art, 4, 3, 2, 2, C_LEAF_DARK)
-	art_pixel(art, 7, 4, C_OUTLINE)
-	art_pixel(art, 9, 4, C_OUTLINE)
-	art_rect(art, 10, 6, 2, 5, C_WOOD_DARK)
-	art_line(art, 11, 6, 11, 3, C_WOOD_LIGHT)
-	art_pixel(art, 10, 3, C_IRON_LIGHT)
-	art_pixel(art, 12, 3, C_IRON_LIGHT)
-	art_line(art, 12, 3, 14, 5, C_OUTLINE)
-	art_line(art, 14, 5, 14, 9, C_OUTLINE)
-	art_line(art, 14, 9, 12, 12, C_OUTLINE)
-	art_line(art, 13, 4, 13, 10, C_IRON_LIGHT)
-	art_line(art, 12, 8, 15, 8, C_WOOD_LIGHT)
-	art_pixel(art, 15, 8, C_IRON_LIGHT)
+DrawUnitArcher :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	ArtRect(art, 5, 11, 6, 4, C_OUTLINE)
+	ArtRect(art, 6, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 9, 11, 1, 3, C_WOOD_DARKEST)
+	ArtRect(art, 4, 6, 8, 6, C_OUTLINE)
+	ArtRect(art, 5, 7, 6, 5, C_LEAF_DARK)
+	ArtRect(art, 5, 10, 6, 1, C_WOOD_DARKEST)
+	ArtRect(art, 5, 7, 6, 1, accent)
+	ArtRect(art, 3, 7, 1, 4, C_OUTLINE)
+	ArtRect(art, 12, 7, 1, 4, C_OUTLINE)
+	ArtCircle(art, 8, 4, 3, C_OUTLINE)
+	ArtCircle(art, 8, 4, 2, C_SKIN)
+	ArtRect(art, 5, 2, 6, 2, C_LEAF_DARK)
+	ArtRect(art, 4, 3, 2, 2, C_LEAF_DARK)
+	ArtPixel(art, 7, 4, C_OUTLINE)
+	ArtPixel(art, 9, 4, C_OUTLINE)
+	ArtRect(art, 10, 6, 2, 5, C_WOOD_DARK)
+	ArtLine(art, 11, 6, 11, 3, C_WOOD_LIGHT)
+	ArtPixel(art, 10, 3, C_IRON_LIGHT)
+	ArtPixel(art, 12, 3, C_IRON_LIGHT)
+	ArtLine(art, 12, 3, 14, 5, C_OUTLINE)
+	ArtLine(art, 14, 5, 14, 9, C_OUTLINE)
+	ArtLine(art, 14, 9, 12, 12, C_OUTLINE)
+	ArtLine(art, 13, 4, 13, 10, C_IRON_LIGHT)
+	ArtLine(art, 12, 8, 15, 8, C_WOOD_LIGHT)
+	ArtPixel(art, 15, 8, C_IRON_LIGHT)
 }
 
-draw_unit_mage :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	robe_outline := [4]Point{{5, 6}, {11, 6}, {13, 14}, {3, 14}}
-	art_polygon(art, robe_outline[:], C_OUTLINE)
+DrawUnitMage :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	robeOutline := [4]Point{{5, 6}, {11, 6}, {13, 14}, {3, 14}}
+	ArtPolygon(art, robeOutline[:], C_OUTLINE)
 	robe := [4]Point{{6, 7}, {10, 7}, {12, 13}, {4, 13}}
-	art_polygon(art, robe[:], C_ARCANE_DARK)
-	robe_high := [4]Point{{7, 7}, {9, 7}, {10, 12}, {6, 12}}
-	art_polygon(art, robe_high[:], C_ARCANE)
-	art_line(art, 5, 12, 11, 12, accent)
-	art_rect(art, 3, 8, 1, 4, C_OUTLINE)
-	art_rect(art, 12, 8, 1, 4, C_OUTLINE)
-	art_circle(art, 8, 4, 3, C_OUTLINE)
-	art_circle(art, 8, 4, 2, C_SKIN)
-	art_rect(art, 6, 5, 4, 2, C_WHITE)
-	art_pixel(art, 7, 4, C_OUTLINE)
-	art_pixel(art, 9, 4, C_OUTLINE)
-	art_rect(art, 4, 2, 9, 2, C_OUTLINE)
-	art_rect(art, 5, 2, 7, 1, C_ARCANE_DARK)
+	ArtPolygon(art, robe[:], C_ARCANE_DARK)
+	robeHigh := [4]Point{{7, 7}, {9, 7}, {10, 12}, {6, 12}}
+	ArtPolygon(art, robeHigh[:], C_ARCANE)
+	ArtLine(art, 5, 12, 11, 12, accent)
+	ArtRect(art, 3, 8, 1, 4, C_OUTLINE)
+	ArtRect(art, 12, 8, 1, 4, C_OUTLINE)
+	ArtCircle(art, 8, 4, 3, C_OUTLINE)
+	ArtCircle(art, 8, 4, 2, C_SKIN)
+	ArtRect(art, 6, 5, 4, 2, C_WHITE)
+	ArtPixel(art, 7, 4, C_OUTLINE)
+	ArtPixel(art, 9, 4, C_OUTLINE)
+	ArtRect(art, 4, 2, 9, 2, C_OUTLINE)
+	ArtRect(art, 5, 2, 7, 1, C_ARCANE_DARK)
 	hat := [3]Point{{6, 2}, {10, 2}, {8, 0}}
-	art_polygon(art, hat[:], C_ARCANE_DARK)
-	art_pixel(art, 8, 1, C_ARCANE_GLOW)
-	art_line(art, 13, 13, 13, 4, C_OUTLINE)
-	art_line(art, 12, 12, 12, 4, C_WOOD_LIGHT)
-	art_circle(art, 13, 3, 2, C_OUTLINE)
-	art_circle(art, 13, 3, 1, C_ARCANE_GLOW)
-	art_pixel(art, 11, 2, C_ARCANE_GLOW)
+	ArtPolygon(art, hat[:], C_ARCANE_DARK)
+	ArtPixel(art, 8, 1, C_ARCANE_GLOW)
+	ArtLine(art, 13, 13, 13, 4, C_OUTLINE)
+	ArtLine(art, 12, 12, 12, 4, C_WOOD_LIGHT)
+	ArtCircle(art, 13, 3, 2, C_OUTLINE)
+	ArtCircle(art, 13, 3, 1, C_ARCANE_GLOW)
+	ArtPixel(art, 11, 2, C_ARCANE_GLOW)
 }
 
-draw_unit_giant :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
+DrawUnitGiant :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
 
-	art_rect(art, 3, 11, 4, 4, C_OUTLINE)
-	art_rect(art, 9, 11, 4, 4, C_OUTLINE)
-	art_rect(art, 4, 12, 2, 2, C_SKIN_DARK)
-	art_rect(art, 10, 12, 2, 2, C_SKIN_DARK)
+	ArtRect(art, 3, 11, 4, 4, C_OUTLINE)
+	ArtRect(art, 9, 11, 4, 4, C_OUTLINE)
+	ArtRect(art, 4, 12, 2, 2, C_SKIN_DARK)
+	ArtRect(art, 10, 12, 2, 2, C_SKIN_DARK)
 
 	// Bare torso with a fur collar and a faction-coloured loincloth.
-	art_rect(art, 3, 4, 10, 8, C_OUTLINE)
-	art_rect(art, 4, 4, 8, 7, C_SKIN)
-	art_rect(art, 4, 7, 8, 4, C_SKIN_DARK)
-	art_rect(art, 3, 4, 10, 2, C_WOOD_DARK)
-	art_rect(art, 3, 4, 10, 1, C_WOOD_LIGHT)
-	art_rect(art, 4, 9, 8, 2, C_WOOD_DARKEST)
-	art_rect(art, 4, 9, 8, 1, accent)
+	ArtRect(art, 3, 4, 10, 8, C_OUTLINE)
+	ArtRect(art, 4, 4, 8, 7, C_SKIN)
+	ArtRect(art, 4, 7, 8, 4, C_SKIN_DARK)
+	ArtRect(art, 3, 4, 10, 2, C_WOOD_DARK)
+	ArtRect(art, 3, 4, 10, 1, C_WOOD_LIGHT)
+	ArtRect(art, 4, 9, 8, 2, C_WOOD_DARKEST)
+	ArtRect(art, 4, 9, 8, 1, accent)
 
-	art_rect(art, 1, 5, 2, 5, C_OUTLINE)
-	art_rect(art, 2, 6, 1, 3, C_SKIN)
-	art_rect(art, 12, 4, 2, 5, C_OUTLINE)
-	art_rect(art, 13, 5, 1, 3, C_SKIN)
+	ArtRect(art, 1, 5, 2, 5, C_OUTLINE)
+	ArtRect(art, 2, 6, 1, 3, C_SKIN)
+	ArtRect(art, 12, 4, 2, 5, C_OUTLINE)
+	ArtRect(art, 13, 5, 1, 3, C_SKIN)
 
 	// Club held overhead.
-	art_rect(art, 13, 3, 1, 2, C_WOOD_DARK)
-	art_circle(art, 13, 2, 2, C_OUTLINE)
-	art_circle(art, 13, 2, 1, C_WOOD_LIGHT)
+	ArtRect(art, 13, 3, 1, 2, C_WOOD_DARK)
+	ArtCircle(art, 13, 2, 2, C_OUTLINE)
+	ArtCircle(art, 13, 2, 1, C_WOOD_LIGHT)
 
-	art_circle(art, 8, 3, 3, C_OUTLINE)
-	art_circle(art, 8, 3, 2, C_SKIN)
-	art_rect(art, 6, 0, 5, 2, C_HAIR)
-	art_pixel(art, 6, 2, C_SKIN_DARK)
-	art_pixel(art, 7, 3, C_OUTLINE)
-	art_pixel(art, 9, 3, C_OUTLINE)
-	art_rect(art, 7, 5, 3, 1, C_HAIR)
+	ArtCircle(art, 8, 3, 3, C_OUTLINE)
+	ArtCircle(art, 8, 3, 2, C_SKIN)
+	ArtRect(art, 6, 0, 5, 2, C_HAIR)
+	ArtPixel(art, 6, 2, C_SKIN_DARK)
+	ArtPixel(art, 7, 3, C_OUTLINE)
+	ArtPixel(art, 9, 3, C_OUTLINE)
+	ArtRect(art, 7, 5, 3, 1, C_HAIR)
 }
 
-draw_unit_turtle :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
+DrawUnitTurtle :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
 
 	// Flippers and tail.
-	art_rect(art, 2, 11, 3, 2, C_OUTLINE)
-	art_rect(art, 10, 11, 3, 2, C_OUTLINE)
-	art_pixel(art, 2, 12, C_LEAF_LIGHT)
-	art_pixel(art, 12, 12, C_LEAF_LIGHT)
-	art_rect(art, 3, 5, 2, 2, C_OUTLINE)
-	art_pixel(art, 3, 5, C_LEAF)
-	art_pixel(art, 0, 9, C_LEAF_DARK)
+	ArtRect(art, 2, 11, 3, 2, C_OUTLINE)
+	ArtRect(art, 10, 11, 3, 2, C_OUTLINE)
+	ArtPixel(art, 2, 12, C_LEAF_LIGHT)
+	ArtPixel(art, 12, 12, C_LEAF_LIGHT)
+	ArtRect(art, 3, 5, 2, 2, C_OUTLINE)
+	ArtPixel(art, 3, 5, C_LEAF)
+	ArtPixel(art, 0, 9, C_LEAF_DARK)
 
 	// Shell.
-	art_ellipse(art, 7, 8, 6, 5, C_OUTLINE)
-	art_ellipse(art, 7, 8, 5, 4, C_LEAF_DARK)
-	art_ellipse(art, 7, 8, 3, 2, C_LEAF)
-	art_line(art, 4, 8, 10, 8, C_LEAF_DARKEST)
-	art_line(art, 7, 5, 7, 11, C_LEAF_DARKEST)
-	art_pixel(art, 5, 6, C_LEAF_LIGHT)
-	art_pixel(art, 9, 10, C_LEAF)
+	ArtEllipse(art, 7, 8, 6, 5, C_OUTLINE)
+	ArtEllipse(art, 7, 8, 5, 4, C_LEAF_DARK)
+	ArtEllipse(art, 7, 8, 3, 2, C_LEAF)
+	ArtLine(art, 4, 8, 10, 8, C_LEAF_DARKEST)
+	ArtLine(art, 7, 5, 7, 11, C_LEAF_DARKEST)
+	ArtPixel(art, 5, 6, C_LEAF_LIGHT)
+	ArtPixel(art, 9, 10, C_LEAF)
 
 	// Harness in the faction colour.
-	art_rect(art, 5, 7, 4, 2, accent)
+	ArtRect(art, 5, 7, 4, 2, accent)
 
 	// Neck and head.
-	art_rect(art, 11, 6, 3, 3, C_OUTLINE)
-	art_rect(art, 12, 6, 2, 2, C_LEAF_LIGHT)
-	art_pixel(art, 13, 6, C_OUTLINE)
-	art_pixel(art, 11, 9, C_LEAF_DARK)
+	ArtRect(art, 11, 6, 3, 3, C_OUTLINE)
+	ArtRect(art, 12, 6, 2, 2, C_LEAF_LIGHT)
+	ArtPixel(art, 13, 6, C_OUTLINE)
+	ArtPixel(art, 11, 9, C_LEAF_DARK)
 }
 
-draw_unit_catapult :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	art_rect(art, 2, 11, 12, 3, C_OUTLINE)
-	art_rect(art, 3, 12, 10, 2, C_WOOD_DARK)
-	art_circle(art, 4, 13, 2, C_OUTLINE)
-	art_circle(art, 4, 13, 1, C_WOOD_DARKEST)
-	art_circle(art, 12, 13, 2, C_OUTLINE)
-	art_circle(art, 12, 13, 1, C_WOOD_DARKEST)
-	art_line(art, 5, 11, 7, 6, C_OUTLINE)
-	art_line(art, 11, 11, 9, 6, C_OUTLINE)
-	art_line(art, 6, 10, 8, 6, C_WOOD_LIGHT)
-	art_line(art, 10, 10, 9, 6, C_WOOD_LIGHT)
-	art_line(art, 8, 9, 13, 3, C_OUTLINE)
-	art_line(art, 8, 8, 12, 3, C_WOOD)
-	art_rect(art, 11, 2, 3, 2, C_OUTLINE)
-	art_rect(art, 12, 3, 1, 1, C_IRON_DARK)
-	art_circle(art, 13, 2, 1, C_STONE)
-	art_line(art, 8, 5, 8, 2, C_OUTLINE)
-	art_rect(art, 9, 2, 3, 2, accent)
-	art_rect_outline(art, 9, 2, 3, 2, C_OUTLINE)
+DrawUnitCatapult :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	ArtRect(art, 2, 11, 12, 3, C_OUTLINE)
+	ArtRect(art, 3, 12, 10, 2, C_WOOD_DARK)
+	ArtCircle(art, 4, 13, 2, C_OUTLINE)
+	ArtCircle(art, 4, 13, 1, C_WOOD_DARKEST)
+	ArtCircle(art, 12, 13, 2, C_OUTLINE)
+	ArtCircle(art, 12, 13, 1, C_WOOD_DARKEST)
+	ArtLine(art, 5, 11, 7, 6, C_OUTLINE)
+	ArtLine(art, 11, 11, 9, 6, C_OUTLINE)
+	ArtLine(art, 6, 10, 8, 6, C_WOOD_LIGHT)
+	ArtLine(art, 10, 10, 9, 6, C_WOOD_LIGHT)
+	ArtLine(art, 8, 9, 13, 3, C_OUTLINE)
+	ArtLine(art, 8, 8, 12, 3, C_WOOD)
+	ArtRect(art, 11, 2, 3, 2, C_OUTLINE)
+	ArtRect(art, 12, 3, 1, 1, C_IRON_DARK)
+	ArtCircle(art, 13, 2, 1, C_STONE)
+	ArtLine(art, 8, 5, 8, 2, C_OUTLINE)
+	ArtRect(art, 9, 2, 3, 2, accent)
+	ArtRectOutline(art, 9, 2, 3, 2, C_OUTLINE)
 }
 
-draw_unit_rogue :: proc(art: ^Art, accent: rl.Color) {
-	unit_shadow(art)
-	art_rect(art, 5, 11, 6, 4, C_OUTLINE)
-	art_rect(art, 6, 11, 1, 3, C_CLOTH_DARKEST)
-	art_rect(art, 9, 11, 1, 3, C_CLOTH_DARKEST)
+DrawUnitRogue :: proc(art: ^Art, accent: rl.Color) {
+	UnitShadow(art)
+	ArtRect(art, 5, 11, 6, 4, C_OUTLINE)
+	ArtRect(art, 6, 11, 1, 3, C_CLOTH_DARKEST)
+	ArtRect(art, 9, 11, 1, 3, C_CLOTH_DARKEST)
 	cloak := [4]Point{{4, 6}, {12, 6}, {13, 14}, {3, 14}}
-	art_polygon(art, cloak[:], C_OUTLINE)
-	cloak_inner := [4]Point{{5, 7}, {11, 7}, {12, 13}, {4, 13}}
-	art_polygon(art, cloak_inner[:], C_CLOTH_DARKEST)
-	art_line(art, 5, 10, 11, 10, accent)
-	art_circle(art, 8, 4, 3, C_OUTLINE)
-	art_circle(art, 8, 4, 2, C_CLOTH_DARKEST)
-	art_rect(art, 6, 4, 4, 2, C_OUTLINE)
-	art_pixel(art, 7, 4, accent)
-	art_pixel(art, 9, 4, accent)
-	art_line(art, 3, 10, 1, 6, C_OUTLINE)
-	art_line(art, 3, 9, 2, 6, C_IRON_LIGHT)
-	art_line(art, 13, 10, 15, 6, C_OUTLINE)
-	art_line(art, 13, 9, 14, 6, C_IRON_LIGHT)
-	art_rect(art, 6, 6, 4, 1, accent)
+	ArtPolygon(art, cloak[:], C_OUTLINE)
+	cloakInner := [4]Point{{5, 7}, {11, 7}, {12, 13}, {4, 13}}
+	ArtPolygon(art, cloakInner[:], C_CLOTH_DARKEST)
+	ArtLine(art, 5, 10, 11, 10, accent)
+	ArtCircle(art, 8, 4, 3, C_OUTLINE)
+	ArtCircle(art, 8, 4, 2, C_CLOTH_DARKEST)
+	ArtRect(art, 6, 4, 4, 2, C_OUTLINE)
+	ArtPixel(art, 7, 4, accent)
+	ArtPixel(art, 9, 4, accent)
+	ArtLine(art, 3, 10, 1, 6, C_OUTLINE)
+	ArtLine(art, 3, 9, 2, 6, C_IRON_LIGHT)
+	ArtLine(art, 13, 10, 15, 6, C_OUTLINE)
+	ArtLine(art, 13, 9, 14, 6, C_IRON_LIGHT)
+	ArtRect(art, 6, 6, 4, 1, accent)
 }
 
 // ---------------------------------------------------------------------------
@@ -1398,240 +1398,240 @@ draw_unit_rogue :: proc(art: ^Art, accent: rl.Color) {
 // Decorations
 // ---------------------------------------------------------------------------
 
-draw_decoration_sprite :: proc(kind: DecorationKind) -> Art {
+DrawDecorationSprite :: proc(kind: DecorationKind) -> Art {
 	switch kind {
 	case .Tree:
-		art := art_init(20, 30)
-		draw_decoration_tree(&art)
+		art := ArtInit(20, 30)
+		DrawDecorationTree(&art)
 		return art
 	case .Pine:
-		art := art_init(20, 34)
-		draw_decoration_pine(&art)
+		art := ArtInit(20, 34)
+		DrawDecorationPine(&art)
 		return art
 	case .Bush:
-		art := art_init(16, 12)
-		draw_decoration_bush(&art)
+		art := ArtInit(16, 12)
+		DrawDecorationBush(&art)
 		return art
 	case .Rock:
-		art := art_init(16, 10)
-		draw_decoration_rock(&art)
+		art := ArtInit(16, 10)
+		DrawDecorationRock(&art)
 		return art
 	case .Flowers:
-		art := art_init(16, 8)
-		draw_decoration_flowers(&art)
+		art := ArtInit(16, 8)
+		DrawDecorationFlowers(&art)
 		return art
 	case .Cactus:
-		art := art_init(16, 20)
-		draw_decoration_cactus(&art)
+		art := ArtInit(16, 20)
+		DrawDecorationCactus(&art)
 		return art
 	case .Reed:
-		art := art_init(16, 14)
-		draw_decoration_reed(&art)
+		art := ArtInit(16, 14)
+		DrawDecorationReed(&art)
 		return art
 	case .Stump:
-		art := art_init(16, 10)
-		draw_decoration_stump(&art)
+		art := ArtInit(16, 10)
+		DrawDecorationStump(&art)
 		return art
 	case .Lamp:
-		art := art_init(16, 28)
-		draw_decoration_lamp(&art)
+		art := ArtInit(16, 28)
+		DrawDecorationLamp(&art)
 		return art
 	}
-	return art_init(1, 1)
+	return ArtInit(1, 1)
 }
 
-draw_decoration_tree :: proc(art: ^Art) {
-	draw_shadow(art, 10, 28, 6, 2)
+DrawDecorationTree :: proc(art: ^Art) {
+	DrawShadow(art, 10, 28, 6, 2)
 
-	art_rect(art, 9, 18, 3, 12, C_OUTLINE)
-	art_rect(art, 10, 19, 1, 10, C_WOOD_DARK)
-	art_pixel(art, 11, 20, C_WOOD)
+	ArtRect(art, 9, 18, 3, 12, C_OUTLINE)
+	ArtRect(art, 10, 19, 1, 10, C_WOOD_DARK)
+	ArtPixel(art, 11, 20, C_WOOD)
 
-	art_circle(art, 10, 10, 8, C_OUTLINE)
-	art_circle(art, 5, 15, 5, C_OUTLINE)
-	art_circle(art, 15, 15, 5, C_OUTLINE)
+	ArtCircle(art, 10, 10, 8, C_OUTLINE)
+	ArtCircle(art, 5, 15, 5, C_OUTLINE)
+	ArtCircle(art, 15, 15, 5, C_OUTLINE)
 
-	art_circle(art, 10, 10, 7, C_LEAF_DARKEST)
-	art_circle(art, 5, 15, 4, C_LEAF_DARKEST)
-	art_circle(art, 15, 15, 4, C_LEAF_DARKEST)
+	ArtCircle(art, 10, 10, 7, C_LEAF_DARKEST)
+	ArtCircle(art, 5, 15, 4, C_LEAF_DARKEST)
+	ArtCircle(art, 15, 15, 4, C_LEAF_DARKEST)
 
-	art_circle(art, 8, 9, 6, C_LEAF_DARK)
-	art_circle(art, 13, 10, 5, C_LEAF_DARK)
-	art_circle(art, 6, 15, 3, C_LEAF_DARK)
+	ArtCircle(art, 8, 9, 6, C_LEAF_DARK)
+	ArtCircle(art, 13, 10, 5, C_LEAF_DARK)
+	ArtCircle(art, 6, 15, 3, C_LEAF_DARK)
 
-	art_circle(art, 8, 8, 4, C_LEAF)
-	art_circle(art, 12, 7, 3, C_LEAF)
-	art_pixel(art, 6, 5, C_LEAF_LIGHT)
-	art_pixel(art, 7, 4, C_LEAF_LIGHT)
-	art_pixel(art, 11, 6, C_LEAF_LIGHT)
-	art_pixel(art, 15, 13, C_LEAF_LIGHT)
-	art_pixel(art, 4, 14, C_LEAF_LIGHT)
+	ArtCircle(art, 8, 8, 4, C_LEAF)
+	ArtCircle(art, 12, 7, 3, C_LEAF)
+	ArtPixel(art, 6, 5, C_LEAF_LIGHT)
+	ArtPixel(art, 7, 4, C_LEAF_LIGHT)
+	ArtPixel(art, 11, 6, C_LEAF_LIGHT)
+	ArtPixel(art, 15, 13, C_LEAF_LIGHT)
+	ArtPixel(art, 4, 14, C_LEAF_LIGHT)
 }
 
-draw_decoration_pine :: proc(art: ^Art) {
-	draw_shadow(art, 10, 32, 6, 2)
+DrawDecorationPine :: proc(art: ^Art) {
+	DrawShadow(art, 10, 32, 6, 2)
 
-	art_rect(art, 9, 25, 3, 9, C_OUTLINE)
-	art_rect(art, 10, 26, 1, 8, C_WOOD_DARK)
+	ArtRect(art, 9, 25, 3, 9, C_OUTLINE)
+	ArtRect(art, 10, 26, 1, 8, C_WOOD_DARK)
 
-	art_triangle(art, 10, 13, 0, 27, 20, 27, C_OUTLINE)
-	art_triangle(art, 10, 15, 2, 27, 18, 27, C_LEAF_DARKEST)
-	art_triangle(art, 10, 7, 1, 21, 19, 21, C_OUTLINE)
-	art_triangle(art, 10, 9, 3, 21, 17, 21, C_LEAF_DARKEST)
-	art_triangle(art, 10, 1, 4, 13, 16, 13, C_OUTLINE)
-	art_triangle(art, 10, 3, 5, 13, 15, 13, C_LEAF_DARK)
+	ArtTriangle(art, 10, 13, 0, 27, 20, 27, C_OUTLINE)
+	ArtTriangle(art, 10, 15, 2, 27, 18, 27, C_LEAF_DARKEST)
+	ArtTriangle(art, 10, 7, 1, 21, 19, 21, C_OUTLINE)
+	ArtTriangle(art, 10, 9, 3, 21, 17, 21, C_LEAF_DARKEST)
+	ArtTriangle(art, 10, 1, 4, 13, 16, 13, C_OUTLINE)
+	ArtTriangle(art, 10, 3, 5, 13, 15, 13, C_LEAF_DARK)
 
-	art_line(art, 10, 4, 10, 12, C_LEAF)
-	art_line(art, 10, 10, 10, 20, C_LEAF_DARK)
-	art_pixel(art, 9, 7, C_LEAF_LIGHT)
-	art_pixel(art, 9, 14, C_LEAF)
-	art_pixel(art, 13, 19, C_LEAF_DARKEST)
-	art_pixel(art, 9, 22, C_LEAF_DARKEST)
+	ArtLine(art, 10, 4, 10, 12, C_LEAF)
+	ArtLine(art, 10, 10, 10, 20, C_LEAF_DARK)
+	ArtPixel(art, 9, 7, C_LEAF_LIGHT)
+	ArtPixel(art, 9, 14, C_LEAF)
+	ArtPixel(art, 13, 19, C_LEAF_DARKEST)
+	ArtPixel(art, 9, 22, C_LEAF_DARKEST)
 }
 
-draw_decoration_bush :: proc(art: ^Art) {
-	draw_shadow(art, 8, 10, 4, 1)
+DrawDecorationBush :: proc(art: ^Art) {
+	DrawShadow(art, 8, 10, 4, 1)
 
-	art_circle(art, 4, 8, 4, C_OUTLINE)
-	art_circle(art, 11, 8, 4, C_OUTLINE)
-	art_circle(art, 8, 5, 4, C_OUTLINE)
-	art_circle(art, 4, 8, 3, C_LEAF_DARKEST)
-	art_circle(art, 11, 8, 3, C_LEAF_DARKEST)
-	art_circle(art, 8, 5, 3, C_LEAF_DARKEST)
-	art_circle(art, 5, 7, 2, C_LEAF_DARK)
-	art_circle(art, 10, 7, 2, C_LEAF_DARK)
-	art_circle(art, 8, 5, 2, C_LEAF)
-	art_pixel(art, 7, 4, C_LEAF_LIGHT)
+	ArtCircle(art, 4, 8, 4, C_OUTLINE)
+	ArtCircle(art, 11, 8, 4, C_OUTLINE)
+	ArtCircle(art, 8, 5, 4, C_OUTLINE)
+	ArtCircle(art, 4, 8, 3, C_LEAF_DARKEST)
+	ArtCircle(art, 11, 8, 3, C_LEAF_DARKEST)
+	ArtCircle(art, 8, 5, 3, C_LEAF_DARKEST)
+	ArtCircle(art, 5, 7, 2, C_LEAF_DARK)
+	ArtCircle(art, 10, 7, 2, C_LEAF_DARK)
+	ArtCircle(art, 8, 5, 2, C_LEAF)
+	ArtPixel(art, 7, 4, C_LEAF_LIGHT)
 }
 
-draw_decoration_rock :: proc(art: ^Art) {
-	draw_shadow(art, 8, 8, 5, 1)
+DrawDecorationRock :: proc(art: ^Art) {
+	DrawShadow(art, 8, 8, 5, 1)
 
 	outline := [6]Point{{2, 8}, {4, 3}, {11, 2}, {14, 6}, {12, 8}, {3, 8}}
-	art_polygon(art, outline[:], C_OUTLINE)
+	ArtPolygon(art, outline[:], C_OUTLINE)
 	fill := [5]Point{{3, 7}, {5, 4}, {10, 3}, {13, 6}, {11, 7}}
-	art_polygon(art, fill[:], C_STONE_DARK)
-	art_rect(art, 5, 4, 5, 1, C_STONE)
-	art_pixel(art, 11, 4, C_STONE_LIGHT)
-	art_pixel(art, 4, 7, C_STONE_DARKEST)
+	ArtPolygon(art, fill[:], C_STONE_DARK)
+	ArtRect(art, 5, 4, 5, 1, C_STONE)
+	ArtPixel(art, 11, 4, C_STONE_LIGHT)
+	ArtPixel(art, 4, 7, C_STONE_DARKEST)
 }
 
-draw_decoration_flowers :: proc(art: ^Art) {
+DrawDecorationFlowers :: proc(art: ^Art) {
 	positions := [6][2]int{{2, 5}, {5, 3}, {8, 6}, {11, 3}, {13, 5}, {14, 6}}
 	colors := [6]rl.Color{C_WHITE, C_GOLD_LIGHT, C_ROOF_LIGHT, C_ARCANE_LIGHT, C_WHITE, C_GOLD_LIGHT}
 	for position, index in positions {
 		x := position[0]
 		y := position[1]
-		draw_flower(art, x, y, colors[index])
+		DrawFlower(art, x, y, colors[index])
 	}
 }
 
-draw_flower :: proc(art: ^Art, x, y: int, color: rl.Color) {
-	art_rect(art, x, y+1, 1, 2, C_LEAF_DARK)
-	art_pixel(art, x-1, y, color)
-	art_pixel(art, x+1, y, color)
-	art_pixel(art, x, y-1, color)
-	art_pixel(art, x, y+1, color)
-	art_pixel(art, x, y, C_GOLD_LIGHT)
+DrawFlower :: proc(art: ^Art, x, y: int, color: rl.Color) {
+	ArtRect(art, x, y+1, 1, 2, C_LEAF_DARK)
+	ArtPixel(art, x-1, y, color)
+	ArtPixel(art, x+1, y, color)
+	ArtPixel(art, x, y-1, color)
+	ArtPixel(art, x, y+1, color)
+	ArtPixel(art, x, y, C_GOLD_LIGHT)
 }
 
-draw_decoration_cactus :: proc(art: ^Art) {
-	draw_shadow(art, 8, 18, 4, 2)
+DrawDecorationCactus :: proc(art: ^Art) {
+	DrawShadow(art, 8, 18, 4, 2)
 
-	art_rect(art, 1, 9, 5, 3, C_OUTLINE)
-	art_rect(art, 2, 10, 4, 1, C_LEAF_DARK)
-	art_rect(art, 1, 6, 3, 4, C_OUTLINE)
-	art_rect(art, 2, 7, 1, 3, C_LEAF_DARK)
+	ArtRect(art, 1, 9, 5, 3, C_OUTLINE)
+	ArtRect(art, 2, 10, 4, 1, C_LEAF_DARK)
+	ArtRect(art, 1, 6, 3, 4, C_OUTLINE)
+	ArtRect(art, 2, 7, 1, 3, C_LEAF_DARK)
 
-	art_rect(art, 10, 6, 5, 3, C_OUTLINE)
-	art_rect(art, 10, 7, 4, 1, C_LEAF_DARK)
-	art_rect(art, 12, 3, 3, 4, C_OUTLINE)
-	art_rect(art, 13, 4, 1, 3, C_LEAF_DARK)
+	ArtRect(art, 10, 6, 5, 3, C_OUTLINE)
+	ArtRect(art, 10, 7, 4, 1, C_LEAF_DARK)
+	ArtRect(art, 12, 3, 3, 4, C_OUTLINE)
+	ArtRect(art, 13, 4, 1, 3, C_LEAF_DARK)
 
-	art_rect(art, 6, 2, 5, 17, C_OUTLINE)
-	art_rect(art, 7, 3, 3, 15, C_LEAF_DARK)
-	art_rect(art, 8, 4, 1, 13, C_LEAF)
-	art_pixel(art, 7, 5, C_LEAF_LIGHT)
-	art_pixel(art, 7, 11, C_LEAF_LIGHT)
-	art_pixel(art, 9, 8, C_LEAF_LIGHT)
+	ArtRect(art, 6, 2, 5, 17, C_OUTLINE)
+	ArtRect(art, 7, 3, 3, 15, C_LEAF_DARK)
+	ArtRect(art, 8, 4, 1, 13, C_LEAF)
+	ArtPixel(art, 7, 5, C_LEAF_LIGHT)
+	ArtPixel(art, 7, 11, C_LEAF_LIGHT)
+	ArtPixel(art, 9, 8, C_LEAF_LIGHT)
 }
 
-draw_decoration_reed :: proc(art: ^Art) {
-	draw_shadow(art, 8, 12, 4, 1)
+DrawDecorationReed :: proc(art: ^Art) {
+	DrawShadow(art, 8, 12, 4, 1)
 
-	art_line(art, 3, 12, 2, 5, C_LEAF_DARK)
-	art_rect(art, 2, 3, 1, 2, C_WOOD_DARK)
-	art_line(art, 6, 12, 6, 4, C_LEAF_DARK)
-	art_rect(art, 6, 2, 1, 2, C_WOOD)
-	art_line(art, 9, 12, 10, 6, C_LEAF_DARK)
-	art_rect(art, 10, 4, 1, 2, C_WOOD_DARK)
-	art_line(art, 12, 12, 13, 7, C_LEAF_DARK)
-	art_rect(art, 13, 5, 1, 2, C_WOOD)
-	art_pixel(art, 6, 6, C_LEAF_LIGHT)
+	ArtLine(art, 3, 12, 2, 5, C_LEAF_DARK)
+	ArtRect(art, 2, 3, 1, 2, C_WOOD_DARK)
+	ArtLine(art, 6, 12, 6, 4, C_LEAF_DARK)
+	ArtRect(art, 6, 2, 1, 2, C_WOOD)
+	ArtLine(art, 9, 12, 10, 6, C_LEAF_DARK)
+	ArtRect(art, 10, 4, 1, 2, C_WOOD_DARK)
+	ArtLine(art, 12, 12, 13, 7, C_LEAF_DARK)
+	ArtRect(art, 13, 5, 1, 2, C_WOOD)
+	ArtPixel(art, 6, 6, C_LEAF_LIGHT)
 }
 
-draw_decoration_stump :: proc(art: ^Art) {
-	draw_shadow(art, 8, 8, 5, 1)
+DrawDecorationStump :: proc(art: ^Art) {
+	DrawShadow(art, 8, 8, 5, 1)
 
-	art_ellipse(art, 8, 6, 5, 3, C_OUTLINE)
-	art_ellipse(art, 8, 6, 4, 2, C_WOOD_DARK)
-	art_ellipse(art, 8, 6, 2, 1, C_WOOD)
-	art_pixel(art, 7, 6, C_WOOD_LIGHT)
-	art_rect(art, 4, 8, 2, 1, C_WOOD_DARKEST)
-	art_rect(art, 11, 8, 2, 1, C_WOOD_DARKEST)
+	ArtEllipse(art, 8, 6, 5, 3, C_OUTLINE)
+	ArtEllipse(art, 8, 6, 4, 2, C_WOOD_DARK)
+	ArtEllipse(art, 8, 6, 2, 1, C_WOOD)
+	ArtPixel(art, 7, 6, C_WOOD_LIGHT)
+	ArtRect(art, 4, 8, 2, 1, C_WOOD_DARKEST)
+	ArtRect(art, 11, 8, 2, 1, C_WOOD_DARKEST)
 }
 
-draw_decoration_lamp :: proc(art: ^Art) {
-	draw_shadow(art, 8, 26, 4, 1)
+DrawDecorationLamp :: proc(art: ^Art) {
+	DrawShadow(art, 8, 26, 4, 1)
 
-	art_rect(art, 7, 10, 3, 16, C_OUTLINE)
-	art_rect(art, 8, 11, 1, 14, C_IRON_DARK)
-	art_rect(art, 6, 24, 5, 2, C_OUTLINE)
-	art_rect(art, 7, 25, 3, 1, C_IRON)
+	ArtRect(art, 7, 10, 3, 16, C_OUTLINE)
+	ArtRect(art, 8, 11, 1, 14, C_IRON_DARK)
+	ArtRect(art, 6, 24, 5, 2, C_OUTLINE)
+	ArtRect(art, 7, 25, 3, 1, C_IRON)
 
-	art_rect(art, 5, 4, 7, 7, C_OUTLINE)
-	art_rect(art, 6, 5, 5, 5, C_GOLD_DARK)
-	art_rect(art, 7, 6, 3, 3, C_GOLD_LIGHT)
-	art_pixel(art, 8, 7, C_WHITE)
+	ArtRect(art, 5, 4, 7, 7, C_OUTLINE)
+	ArtRect(art, 6, 5, 5, 5, C_GOLD_DARK)
+	ArtRect(art, 7, 6, 3, 3, C_GOLD_LIGHT)
+	ArtPixel(art, 8, 7, C_WHITE)
 
-	art_rect(art, 4, 2, 9, 2, C_OUTLINE)
-	art_rect(art, 5, 3, 7, 1, C_IRON)
-	art_pixel(art, 8, 0, C_IRON_LIGHT)
-	art_pixel(art, 8, 1, C_IRON)
+	ArtRect(art, 4, 2, 9, 2, C_OUTLINE)
+	ArtRect(art, 5, 3, 7, 1, C_IRON)
+	ArtPixel(art, 8, 0, C_IRON_LIGHT)
+	ArtPixel(art, 8, 1, C_IRON)
 }
 
 // Small inspection icons for unit conditions. The red slash is shared so the
 // three effects read as warnings at a glance.
-draw_effect_icon :: proc(effect: UnitEffects) -> Art {
-	art := art_init(20, 20)
+DrawEffectIcon :: proc(effect: UnitEffects) -> Art {
+	art := ArtInit(20, 20)
 	switch effect {
 	case .NoHome:
-		art_triangle(&art, 10, 2, 2, 10, 18, 10, C_OUTLINE)
-		art_triangle(&art, 10, 4, 4, 10, 16, 10, C_ROOF)
-		art_rect(&art, 5, 10, 10, 8, C_OUTLINE)
-		art_rect(&art, 6, 11, 8, 6, C_STONE_DARK)
-		art_rect(&art, 9, 13, 2, 4, C_WOOD_DARKEST)
-		art_line(&art, 3, 17, 17, 3, C_OUTLINE)
-		art_line(&art, 4, 17, 18, 3, C_EFFECT_BAD)
-		art_line(&art, 3, 16, 17, 2, C_EFFECT_BAD)
+		ArtTriangle(&art, 10, 2, 2, 10, 18, 10, C_OUTLINE)
+		ArtTriangle(&art, 10, 4, 4, 10, 16, 10, C_ROOF)
+		ArtRect(&art, 5, 10, 10, 8, C_OUTLINE)
+		ArtRect(&art, 6, 11, 8, 6, C_STONE_DARK)
+		ArtRect(&art, 9, 13, 2, 4, C_WOOD_DARKEST)
+		ArtLine(&art, 3, 17, 17, 3, C_OUTLINE)
+		ArtLine(&art, 4, 17, 18, 3, C_EFFECT_BAD)
+		ArtLine(&art, 3, 16, 17, 2, C_EFFECT_BAD)
 	case .NoWater:
-		art_triangle(&art, 10, 2, 5, 11, 15, 11, C_OUTLINE)
-		art_circle(&art, 10, 12, 6, C_OUTLINE)
-		art_triangle(&art, 10, 3, 6, 11, 14, 11, C_WATER_DARK)
-		art_circle(&art, 10, 12, 5, C_WATER)
-		art_circle(&art, 8, 11, 2, C_WATER_LIGHT)
-		art_line(&art, 3, 17, 17, 3, C_OUTLINE)
-		art_line(&art, 4, 17, 18, 3, C_EFFECT_BAD)
-		art_line(&art, 3, 16, 17, 2, C_EFFECT_BAD)
+		ArtTriangle(&art, 10, 2, 5, 11, 15, 11, C_OUTLINE)
+		ArtCircle(&art, 10, 12, 6, C_OUTLINE)
+		ArtTriangle(&art, 10, 3, 6, 11, 14, 11, C_WATER_DARK)
+		ArtCircle(&art, 10, 12, 5, C_WATER)
+		ArtCircle(&art, 8, 11, 2, C_WATER_LIGHT)
+		ArtLine(&art, 3, 17, 17, 3, C_OUTLINE)
+		ArtLine(&art, 4, 17, 18, 3, C_EFFECT_BAD)
+		ArtLine(&art, 3, 16, 17, 2, C_EFFECT_BAD)
 	case .NoFood:
-		art_rect(&art, 4, 9, 12, 8, C_OUTLINE)
-		art_rect(&art, 5, 10, 10, 6, C_GOLD_DARK)
-		art_rect(&art, 5, 10, 10, 1, C_GOLD_LIGHT)
-		art_rect(&art, 6, 12, 3, 1, C_GOLD)
-		art_rect(&art, 11, 14, 3, 1, C_GOLD)
-		art_line(&art, 3, 17, 17, 3, C_OUTLINE)
-		art_line(&art, 4, 17, 18, 3, C_EFFECT_BAD)
-		art_line(&art, 3, 16, 17, 2, C_EFFECT_BAD)
+		ArtRect(&art, 4, 9, 12, 8, C_OUTLINE)
+		ArtRect(&art, 5, 10, 10, 6, C_GOLD_DARK)
+		ArtRect(&art, 5, 10, 10, 1, C_GOLD_LIGHT)
+		ArtRect(&art, 6, 12, 3, 1, C_GOLD)
+		ArtRect(&art, 11, 14, 3, 1, C_GOLD)
+		ArtLine(&art, 3, 17, 17, 3, C_OUTLINE)
+		ArtLine(&art, 4, 17, 18, 3, C_EFFECT_BAD)
+		ArtLine(&art, 3, 16, 17, 2, C_EFFECT_BAD)
 	}
 	return art
 }
@@ -1653,53 +1653,53 @@ SpriteSet :: struct {
 
 SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 	set: SpriteSet
-	set.shadow = create_shadow_texture()
-	set.glow = create_glow_texture()
+	set.shadow = CreateShadowTexture()
+	set.glow = CreateGlowTexture()
 	for faction in 0 ..< SPRITE_FACTION_COUNT {
 		accent := FactionColor(w, faction)
 		for kind in ALL_BUILDING_KINDS {
-			art := draw_building_sprite(kind, accent)
-			art_grain(&art, u64(kind)+1)
-			set.building[faction][kind] = art_to_texture(art)
+			art := DrawBuildingSprite(kind, accent)
+			ArtGrain(&art, u64(kind)+1)
+			set.building[faction][kind] = ArtToTexture(art)
 			rl.UnloadImage(art.image)
 		}
 		for kind in ALL_UNIT_KINDS {
-			art := draw_unit_sprite(kind, accent)
-			set.unit[faction][kind] = art_to_texture(art)
+			art := DrawUnitSprite(kind, accent)
+			set.unit[faction][kind] = ArtToTexture(art)
 			rl.UnloadImage(art.image)
 		}
-		art := draw_construction_sprite(accent)
-		art_grain(&art, u64(faction)+701)
-		set.construction[faction] = art_to_texture(art)
+		art := DrawConstructionSprite(accent)
+		ArtGrain(&art, u64(faction)+701)
+		set.construction[faction] = ArtToTexture(art)
 		rl.UnloadImage(art.image)
 
 		for part in ALL_GORE_PARTS {
-			gore_art := draw_gore_part(part, accent)
-			set.gore[faction][part] = art_to_texture(gore_art)
-			rl.UnloadImage(gore_art.image)
+			goreArt := DrawGorePart(part, accent)
+			set.gore[faction][part] = ArtToTexture(goreArt)
+			rl.UnloadImage(goreArt.image)
 		}
 	}
 	for kind in ALL_DECORATION_KINDS {
-		art := draw_decoration_sprite(kind)
-		art_grain(&art, u64(kind)+301)
-		set.decoration[kind] = art_to_texture(art)
+		art := DrawDecorationSprite(kind)
+		ArtGrain(&art, u64(kind)+301)
+		set.decoration[kind] = ArtToTexture(art)
 		rl.UnloadImage(art.image)
 	}
 	for kind in ALL_PARTICLE_KINDS {
-		set.particle[kind] = create_particle_kind_texture(kind)
+		set.particle[kind] = CreateParticleKindTexture(kind)
 	}
 	for effect in ALL_UNIT_EFFECTS {
-		art := draw_effect_icon(effect)
-		set.effect[effect] = art_to_texture(art)
+		art := DrawEffectIcon(effect)
+		set.effect[effect] = ArtToTexture(art)
 		rl.UnloadImage(art.image)
 	}
 	for variant in 0 ..< BLOOD_SPLAT_VARIANTS {
-		set.bloodSplat[variant] = create_blood_splat_texture(u64(variant)+1, 48, false)
+		set.bloodSplat[variant] = CreateBloodSplatTexture(u64(variant)+1, 48, false)
 	}
 	for variant in 0 ..< BLOOD_POOL_VARIANTS {
-		set.bloodPool[variant] = create_blood_splat_texture(u64(variant)+101, 96, true)
+		set.bloodPool[variant] = CreateBloodSplatTexture(u64(variant)+101, 96, true)
 	}
-	set.fire = art_to_texture(draw_fire_sprite())
+	set.fire = ArtToTexture(DrawFireSprite())
 	return set
 }
 

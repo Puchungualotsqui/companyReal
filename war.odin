@@ -15,64 +15,64 @@ WARRIOR_GARRISON_ESCORT_RATIO :: 0.15
 WARRIOR_ESCORT_RADIUS :: 30
 WARRIOR_BREACH_RADIUS :: 40
 
-StateWarriorInit :: proc(unit_slot, kingdom_slot, town_slot: int) -> StateWarrior {
+StateWarriorInit :: proc(unitSlot, kingdomSlot, townSlot: int) -> StateWarrior {
 	return StateWarrior{
 		activity = .Idle,
 		order = WarriorIdle{},
 		orderKingdom = -1,
 		orderTown = -1,
 		target = TargetNone{},
-		scanTimer = WorldNoiseHash(unit_slot, kingdom_slot+town_slot*101, u64(unit_slot)+601)*
+		scanTimer = WorldNoiseHash(unitSlot, kingdomSlot+townSlot*101, u64(unitSlot)+601)*
 			WARRIOR_SCAN_INTERVAL,
 		escortTarget = -1,
 	}
 }
 
-UnitWarriorReset :: proc(w: ^World, unit_slot: int) {
-	if !UnitIsWarrior(w.units[unit_slot].type) do return
-	w.units[unit_slot].state = StateWarriorInit(
-		unit_slot,
-		w.units[unit_slot].kingdome,
-		w.units[unit_slot].town,
+UnitWarriorReset :: proc(w: ^World, unitSlot: int) {
+	if !UnitIsWarrior(w.units[unitSlot].type) do return
+	w.units[unitSlot].state = StateWarriorInit(
+		unitSlot,
+		w.units[unitSlot].kingdome,
+		w.units[unitSlot].town,
 	)
 }
 
 // Units react to enemies inside their distraction radius, which is usually
 // wider than the radius that reveals fog for the player.
-UnitUpdateWarrior :: proc(w: ^World, unit_slot: int, delta_time: f32) {
-	unit := &w.units[unit_slot]
+UnitUpdateWarrior :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
+	unit := &w.units[unitSlot]
 	if !UnitIsWarrior(unit.type) do return
 	state := &unit.state.(StateWarrior)
 
-	kingdom_slot := unit.kingdome
-	town_slot := unit.town
-	if !WorldTownExists(w, kingdom_slot, town_slot) {
+	kingdomSlot := unit.kingdome
+	townSlot := unit.town
+	if !WorldTownExists(w, kingdomSlot, townSlot) {
 		state.target = TargetNone{}
 		return
 	}
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	if state.orderKingdom != kingdom_slot || state.orderTown != town_slot ||
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	if state.orderKingdom != kingdomSlot || state.orderTown != townSlot ||
 		state.orderRevision != town.orderRevision {
-		UnitWarriorAssignOrder(w, unit_slot, state)
+		UnitWarriorAssignOrder(w, unitSlot, state)
 	}
 
-	if !WarriorFocusValid(w, unit_slot, state) {
+	if !WarriorFocusValid(w, unitSlot, state) {
 		state.target = TargetNone{}
 	}
 
-	state.scanTimer -= delta_time
+	state.scanTimer -= deltaTime
 	if state.scanTimer <= 0 {
-		jitter := 0.75+WorldNoiseHash(unit_slot, state.scanSequence, u64(kingdom_slot)+911)*0.5
+		jitter := 0.75+WorldNoiseHash(unitSlot, state.scanSequence, u64(kingdomSlot)+911)*0.5
 		state.scanTimer = WARRIOR_SCAN_INTERVAL*jitter
-		if _, is_none := state.target.(TargetNone); is_none {
-			state.target = WarriorFindFocus(w, unit_slot, state)
+		if _, isNone := state.target.(TargetNone); isNone {
+			state.target = WarriorFindFocus(w, unitSlot, state)
 		}
 	}
 
-	if _, is_none := state.target.(TargetNone); !is_none {
+	if _, isNone := state.target.(TargetNone); !isNone {
 		state.activity = .Attacking
 		unit.pathReady = false
-		if UnitWarriorEngage(w, unit_slot, state, delta_time) do return
+		if UnitWarriorEngage(w, unitSlot, state, deltaTime) do return
 		state.target = TargetNone{}
 	}
 
@@ -80,20 +80,20 @@ UnitUpdateWarrior :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	case WarriorIdle:
 		state.activity = .Idle
 	case WarriorGarrison:
-		if !UnitWarriorFarFromTown(w, unit_slot, kingdom_slot, town_slot) {
-			if UnitWarriorEscort(w, unit_slot, state, delta_time) do return
+		if !UnitWarriorFarFromTown(w, unitSlot, kingdomSlot, townSlot) {
+			if UnitWarriorEscort(w, unitSlot, state, deltaTime) do return
 			state.activity = .Moving
-			UnitWarriorPatrol(w, unit_slot, kingdom_slot, town_slot, WARRIOR_HOME_PATROL_RADIUS, delta_time, state)
+			UnitWarriorPatrol(w, unitSlot, kingdomSlot, townSlot, WARRIOR_HOME_PATROL_RADIUS, deltaTime, state)
 			return
 		}
 		state.activity = .Moving
-		if UnitWarriorTravel(w, unit_slot, kingdom_slot, town_slot, delta_time) == .Arrived {
+		if UnitWarriorTravel(w, unitSlot, kingdomSlot, townSlot, deltaTime) == .Arrived {
 			unit.pathReady = false
-			UnitWarriorPatrol(w, unit_slot, kingdom_slot, town_slot, WARRIOR_HOME_PATROL_RADIUS, delta_time, state)
+			UnitWarriorPatrol(w, unitSlot, kingdomSlot, townSlot, WARRIOR_HOME_PATROL_RADIUS, deltaTime, state)
 		}
 	case WarriorAttack:
 		state.activity = .Moving
-		result := UnitWarriorTravel(w, unit_slot, order.kingdom, order.town, delta_time)
+		result := UnitWarriorTravel(w, unitSlot, order.kingdom, order.town, deltaTime)
 		if result == .Arrived {
 			if hall := TownHallSlot(w, order.kingdom, order.town); hall >= 0 {
 				state.target = TargetBuilding{slot = hall}
@@ -103,7 +103,7 @@ UnitUpdateWarrior :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 			// The town is enclosed. Break the ring: prefer its walls, then any
 			// nearby building of that town. If nothing is close enough yet, walk
 			// toward the hall until the wall is in breach range.
-			breach := WarriorFindBreachBuilding(w, unit_slot, order.kingdom, order.town)
+			breach := WarriorFindBreachBuilding(w, unitSlot, order.kingdom, order.town)
 			if breach < 0 do breach = TownHallSlot(w, order.kingdom, order.town)
 			if breach >= 0 {
 				state.target = TargetBuilding{slot = breach}
@@ -113,31 +113,31 @@ UnitUpdateWarrior :: proc(w: ^World, unit_slot: int, delta_time: f32) {
 	case WarriorDefend:
 		// A new order still travels to the hall; once stationed, keep the patrol
 		// destination instead of pulling the defender back to the hall each tick.
-		if state.patrolSequence == 0 || UnitWarriorFarFromTown(w, unit_slot,
+		if state.patrolSequence == 0 || UnitWarriorFarFromTown(w, unitSlot,
 			order.kingdom, order.town, WARRIOR_DEFEND_PATROL_RADIUS*2) {
 			state.activity = .Moving
-			if UnitWarriorTravel(w, unit_slot, order.kingdom, order.town, delta_time) != .Arrived do return
+			if UnitWarriorTravel(w, unitSlot, order.kingdom, order.town, deltaTime) != .Arrived do return
 			unit.pathReady = false
 			state.patrolSequence = max(1, state.patrolSequence)
 		}
-		UnitWarriorPatrol(w, unit_slot, order.kingdom, order.town, WARRIOR_DEFEND_PATROL_RADIUS, delta_time, state)
+		UnitWarriorPatrol(w, unitSlot, order.kingdom, order.town, WARRIOR_DEFEND_PATROL_RADIUS, deltaTime, state)
 	}
 }
 
-UnitWarriorAssignOrder :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
-	unit := &w.units[unit_slot]
-	kingdom_slot := unit.kingdome
-	town_slot := unit.town
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+UnitWarriorAssignOrder :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
+	unit := &w.units[unitSlot]
+	kingdomSlot := unit.kingdome
+	townSlot := unit.town
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	previous := state.order
 
-	new_order := TownUnitOrder(w, unit_slot)
+	newOrder := TownUnitOrder(w, unitSlot)
 
-	state.order = new_order
-	state.orderKingdom = kingdom_slot
-	state.orderTown = town_slot
+	state.order = newOrder
+	state.orderKingdom = kingdomSlot
+	state.orderTown = townSlot
 	state.orderRevision = town.orderRevision
-	if !WarriorOrderEqual(previous, new_order) {
+	if !WarriorOrderEqual(previous, newOrder) {
 		state.target = TargetNone{}
 		state.escortTarget = -1
 		state.patrolSequence = 0
@@ -148,8 +148,8 @@ UnitWarriorAssignOrder :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) 
 // Divide each unit kind independently between the home garrison and the
 // town's orders. Rotating the slot order on revisions keeps the selection
 // varied while keeping the mix balanced when there are enough units.
-TownUnitOrder :: proc(w: ^World, unit_slot: int) -> WarriorOrder {
-	unit := &w.units[unit_slot]
+TownUnitOrder :: proc(w: ^World, unitSlot: int) -> WarriorOrder {
+	unit := &w.units[unitSlot]
 	town := &w.kingdoms[unit.kingdome].towns[unit.town]
 	if town.orderCount == 0 do return WarriorGarrison{}
 
@@ -160,7 +160,7 @@ TownUnitOrder :: proc(w: ^World, unit_slot: int) -> WarriorOrder {
 		other := &w.units[slot]
 		if other.kingdome != unit.kingdome || other.town != unit.town do continue
 		if UnitKindOf(other.type) != kind do continue
-		if slot < unit_slot do rank += 1
+		if slot < unitSlot do rank += 1
 		total += 1
 	}
 	seed := u64(unit.kingdome*TOWN_CAPACITY+unit.town)+u64(kind)*101
@@ -182,7 +182,7 @@ TownUnitOrder :: proc(w: ^World, unit_slot: int) -> WarriorOrder {
 }
 
 WarriorOrderEqual :: proc(a, b: WarriorOrder) -> bool {
-	switch order_a in a {
+	switch orderA in a {
 	case WarriorIdle:
 		_, ok := b.(WarriorIdle)
 		return ok
@@ -190,17 +190,17 @@ WarriorOrderEqual :: proc(a, b: WarriorOrder) -> bool {
 		_, ok := b.(WarriorGarrison)
 		return ok
 	case WarriorAttack:
-		order_b, ok := b.(WarriorAttack)
-		return ok && order_a.kingdom == order_b.kingdom && order_a.town == order_b.town
+		orderB, ok := b.(WarriorAttack)
+		return ok && orderA.kingdom == orderB.kingdom && orderA.town == orderB.town
 	case WarriorDefend:
-		order_b, ok := b.(WarriorDefend)
-		return ok && order_a.kingdom == order_b.kingdom && order_a.town == order_b.town
+		orderB, ok := b.(WarriorDefend)
+		return ok && orderA.kingdom == orderB.kingdom && orderA.town == orderB.town
 	}
 	return false
 }
 
-WarriorFocusValid :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) -> bool {
-	unit := &w.units[unit_slot]
+WarriorFocusValid :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) -> bool {
+	unit := &w.units[unitSlot]
 	switch target in state.target {
 	case TargetNone:
 		return false
@@ -210,9 +210,9 @@ WarriorFocusValid :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) -> bo
 		}
 		if UnitHiddenInside(w, target.slot) do return false
 		if !KingdomAtWar(w, unit.kingdome, w.units[target.slot].kingdome) do return false
-		delta_x := WorldShortestWrappedDelta(w.units.x[target.slot]-unit.x, f32(w.maxX))
-		delta_y := WorldShortestWrappedDelta(w.units.y[target.slot]-unit.y, f32(w.maxY))
-		return delta_x*delta_x+delta_y*delta_y <=
+		deltaX := WorldShortestWrappedDelta(w.units.x[target.slot]-unit.x, f32(w.maxX))
+		deltaY := WorldShortestWrappedDelta(w.units.y[target.slot]-unit.y, f32(w.maxY))
+		return deltaX*deltaX+deltaY*deltaY <=
 			UnitDistraction(unit.type)*UnitDistraction(unit.type)
 	case TargetBuilding:
 		if target.slot < 0 || target.slot >= BUILDING_CAPACITY || !w.buildingUsed[target.slot] {
@@ -223,86 +223,86 @@ WarriorFocusValid :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) -> bo
 	return false
 }
 
-WarriorFindFocus :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) -> WarriorTarget {
-	unit := &w.units[unit_slot]
+WarriorFindFocus :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) -> WarriorTarget {
+	unit := &w.units[unitSlot]
 	aggro := UnitDistraction(unit.type)
-	is_attack_order := false
+	isAttackOrder := false
 	switch _ in state.order {
 	case WarriorAttack:
-		is_attack_order = true
+		isAttackOrder = true
 	case WarriorGarrison, WarriorDefend, WarriorIdle:
 	}
 
 	state.scanSequence += 1
-	near_unit, unit_distance, near_building, building_distance :=
-		WarriorFindNearbyHostiles(w, unit_slot, max(UnitDefaultVision(unit.type), aggro))
-	seed := u64(unit_slot)+u64(state.scanSequence)*7919+1307
+	nearUnit, unitDistance, nearBuilding, buildingDistance :=
+		WarriorFindNearbyHostiles(w, unitSlot, max(UnitDefaultVision(unit.type, WorldIsNight(w)), aggro))
+	seed := u64(unitSlot)+u64(state.scanSequence)*7919+1307
 
-	if near_unit >= 0 {
-		if unit_distance <= aggro do return TargetUnit{slot = near_unit}
-		if is_attack_order &&
-			WorldNoiseHash(unit_slot, state.scanSequence, seed) <
+	if nearUnit >= 0 {
+		if unitDistance <= aggro do return TargetUnit{slot = nearUnit}
+		if isAttackOrder &&
+			WorldNoiseHash(unitSlot, state.scanSequence, seed) <
 				WARRIOR_CASCADE_UNIT_CHANCE {
-			return TargetUnit{slot = near_unit}
+			return TargetUnit{slot = nearUnit}
 		}
 	}
-	if near_building >= 0 && (building_distance <= aggro || is_attack_order) {
-		if WorldNoiseHash(unit_slot, state.scanSequence+1, seed) <
+	if nearBuilding >= 0 && (buildingDistance <= aggro || isAttackOrder) {
+		if WorldNoiseHash(unitSlot, state.scanSequence+1, seed) <
 			WARRIOR_CASCADE_BUILDING_CHANCE {
-			return TargetBuilding{slot = near_building}
+			return TargetBuilding{slot = nearBuilding}
 		}
 	}
 	return TargetNone{}
 }
 
-WarriorFindNearbyHostiles :: proc(w: ^World, unit_slot: int, radius: f32) -> (near_unit: int, unit_distance: f32, near_building: int, building_distance: f32) {
-	near_unit = -1
-	near_building = -1
-	unit_distance = radius
-	building_distance = radius
+WarriorFindNearbyHostiles :: proc(w: ^World, unitSlot: int, radius: f32) -> (nearUnit: int, unitDistance: f32, nearBuilding: int, buildingDistance: f32) {
+	nearUnit = -1
+	nearBuilding = -1
+	unitDistance = radius
+	buildingDistance = radius
 	if radius <= 0 do return
 
-	unit := &w.units[unit_slot]
-	world_width := f32(w.maxX)
-	world_height := f32(w.maxY)
-	unit_x := WorldWrapPosition(unit.x, world_width)
-	unit_y := WorldWrapPosition(unit.y, world_height)
-	chunk_size := w.spatial.chunkSize
-	if chunk_size <= 0 do return
+	unit := &w.units[unitSlot]
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	unitX := WorldWrapPosition(unit.x, worldWidth)
+	unitY := WorldWrapPosition(unit.y, worldHeight)
+	chunkSize := w.spatial.chunkSize
+	if chunkSize <= 0 do return
 
-	center_chunk_x := int(unit_x)/chunk_size
-	center_chunk_y := int(unit_y)/chunk_size
-	chunk_radius := int(radius)/chunk_size+1
-	for offset_x in -chunk_radius..=chunk_radius {
-		chunk_x := WorldWrapCoordinate(center_chunk_x+offset_x, w.spatial.chunksX)
-		for offset_y in -chunk_radius..=chunk_radius {
-			chunk_y := WorldWrapCoordinate(center_chunk_y+offset_y, w.spatial.chunksY)
-			chunk := chunk_x*w.spatial.chunksY+chunk_y
+	centerChunkX := int(unitX)/chunkSize
+	centerChunkY := int(unitY)/chunkSize
+	chunkRadius := int(radius)/chunkSize+1
+	for offsetX in -chunkRadius..=chunkRadius {
+		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
+		for offsetY in -chunkRadius..=chunkRadius {
+			chunkY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
+			chunk := chunkX*w.spatial.chunksY+chunkY
 
-			for other_slot := w.spatial.unitHead[chunk]; other_slot >= 0;
-				other_slot = w.spatial.unitNext[other_slot] {
-				if other_slot == unit_slot || !w.unitUsed[other_slot] do continue
-				if UnitHiddenInside(w, other_slot) do continue
-				if !KingdomAtWar(w, unit.kingdome, w.units[other_slot].kingdome) do continue
-				delta_x := WorldShortestWrappedDelta(w.units.x[other_slot]-unit_x, world_width)
-				delta_y := WorldShortestWrappedDelta(w.units.y[other_slot]-unit_y, world_height)
-				distance := math.sqrt(delta_x*delta_x+delta_y*delta_y)
-				if distance < unit_distance {
-					unit_distance = distance
-					near_unit = other_slot
+			for otherSlot := w.spatial.unitHead[chunk]; otherSlot >= 0;
+				otherSlot = w.spatial.unitNext[otherSlot] {
+				if otherSlot == unitSlot || !w.unitUsed[otherSlot] do continue
+				if UnitHiddenInside(w, otherSlot) do continue
+				if !KingdomAtWar(w, unit.kingdome, w.units[otherSlot].kingdome) do continue
+				deltaX := WorldShortestWrappedDelta(w.units.x[otherSlot]-unitX, worldWidth)
+				deltaY := WorldShortestWrappedDelta(w.units.y[otherSlot]-unitY, worldHeight)
+				distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
+				if distance < unitDistance {
+					unitDistance = distance
+					nearUnit = otherSlot
 				}
 			}
 
-			for building_slot := w.spatial.buildingHead[chunk]; building_slot >= 0;
-				building_slot = w.spatial.buildingNext[building_slot] {
-				if !w.buildingUsed[building_slot] do continue
-				building_kingdom := w.buildings.kingdom[building_slot]
-				if building_kingdom < 0 || building_kingdom == unit.kingdome do continue
-				if !KingdomAtWar(w, unit.kingdome, building_kingdom) do continue
-				distance, _, _ := WarriorBuildingNearestPoint(w, unit_x, unit_y, building_slot)
-				if distance < building_distance {
-					building_distance = distance
-					near_building = building_slot
+			for buildingSlot := w.spatial.buildingHead[chunk]; buildingSlot >= 0;
+				buildingSlot = w.spatial.buildingNext[buildingSlot] {
+				if !w.buildingUsed[buildingSlot] do continue
+				buildingKingdom := w.buildings.kingdom[buildingSlot]
+				if buildingKingdom < 0 || buildingKingdom == unit.kingdome do continue
+				if !KingdomAtWar(w, unit.kingdome, buildingKingdom) do continue
+				distance, _, _ := WarriorBuildingNearestPoint(w, unitX, unitY, buildingSlot)
+				if distance < buildingDistance {
+					buildingDistance = distance
+					nearBuilding = buildingSlot
 				}
 			}
 		}
@@ -312,91 +312,91 @@ WarriorFindNearbyHostiles :: proc(w: ^World, unit_slot: int, radius: f32) -> (ne
 
 // Returns the distance from a point to the building footprint, plus the
 // nearest point on the footprint (used as the approach target).
-WarriorBuildingNearestPoint :: proc(w: ^World, x, y: f32, building_slot: int) -> (distance: f32, nearest_x: f32, nearest_y: f32) {
-	world_width := f32(w.maxX)
-	world_height := f32(w.maxY)
-	building_x := f32(w.buildings.x[building_slot])
-	building_y := f32(w.buildings.y[building_slot])
-	width, height := BuildingTileSize(w.buildings[building_slot].type)
-	half_width := f32(width)*0.5
-	half_height := f32(height)*0.5
-	center_x := building_x+half_width
-	center_y := building_y+half_height
+WarriorBuildingNearestPoint :: proc(w: ^World, x, y: f32, buildingSlot: int) -> (distance: f32, nearestX: f32, nearestY: f32) {
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	buildingX := f32(w.buildings.x[buildingSlot])
+	buildingY := f32(w.buildings.y[buildingSlot])
+	width, height := BuildingTileSize(w.buildings[buildingSlot].type)
+	halfWidth := f32(width)*0.5
+	halfHeight := f32(height)*0.5
+	centerX := buildingX+halfWidth
+	centerY := buildingY+halfHeight
 
-	delta_x := WorldShortestWrappedDelta(x-center_x, world_width)
-	delta_y := WorldShortestWrappedDelta(y-center_y, world_height)
-	clamped_x := clamp(delta_x, -half_width, half_width)
-	clamped_y := clamp(delta_y, -half_height, half_height)
-	nearest_x = WorldWrapPosition(center_x+clamped_x, world_width)
-	nearest_y = WorldWrapPosition(center_y+clamped_y, world_height)
-	excess_x := delta_x-clamped_x
-	excess_y := delta_y-clamped_y
-	distance = math.sqrt(excess_x*excess_x+excess_y*excess_y)
+	deltaX := WorldShortestWrappedDelta(x-centerX, worldWidth)
+	deltaY := WorldShortestWrappedDelta(y-centerY, worldHeight)
+	clampedX := clamp(deltaX, -halfWidth, halfWidth)
+	clampedY := clamp(deltaY, -halfHeight, halfHeight)
+	nearestX = WorldWrapPosition(centerX+clampedX, worldWidth)
+	nearestY = WorldWrapPosition(centerY+clampedY, worldHeight)
+	excessX := deltaX-clampedX
+	excessY := deltaY-clampedY
+	distance = math.sqrt(excessX*excessX+excessY*excessY)
 	return
 }
 
 // When a town is fully enclosed, the flow field cannot reach it. This finds the
 // nearest piece of the ring to break: first a wall, then any other building of
 // the target town, and only last the hall itself.
-WarriorFindBreachBuilding :: proc(w: ^World, unit_slot, target_kingdom, target_town: int) -> int {
-	unit := &w.units[unit_slot]
-	chunk_size := w.spatial.chunkSize
-	if chunk_size <= 0 do return -1
-	if !KingdomAtWar(w, unit.kingdome, target_kingdom) do return -1
+WarriorFindBreachBuilding :: proc(w: ^World, unitSlot, targetKingdom, targetTown: int) -> int {
+	unit := &w.units[unitSlot]
+	chunkSize := w.spatial.chunkSize
+	if chunkSize <= 0 do return -1
+	if !KingdomAtWar(w, unit.kingdome, targetKingdom) do return -1
 
-	center_chunk_x := int(unit.x)/chunk_size
-	center_chunk_y := int(unit.y)/chunk_size
-	chunk_radius := int(WARRIOR_BREACH_RADIUS)/chunk_size+1
-	best_wall := -1
-	best_wall_distance: f32 = WARRIOR_BREACH_RADIUS
-	best_building := -1
-	best_building_distance: f32 = WARRIOR_BREACH_RADIUS
-	best_hall := -1
-	best_hall_distance: f32 = WARRIOR_BREACH_RADIUS
+	centerChunkX := int(unit.x)/chunkSize
+	centerChunkY := int(unit.y)/chunkSize
+	chunkRadius := int(WARRIOR_BREACH_RADIUS)/chunkSize+1
+	bestWall := -1
+	bestWallDistance: f32 = WARRIOR_BREACH_RADIUS
+	bestBuilding := -1
+	bestBuildingDistance: f32 = WARRIOR_BREACH_RADIUS
+	bestHall := -1
+	bestHallDistance: f32 = WARRIOR_BREACH_RADIUS
 
-	for offset_x in -chunk_radius..=chunk_radius {
-		chunk_x := WorldWrapCoordinate(center_chunk_x+offset_x, w.spatial.chunksX)
-		for offset_y in -chunk_radius..=chunk_radius {
-			chunk_y := WorldWrapCoordinate(center_chunk_y+offset_y, w.spatial.chunksY)
-			chunk := chunk_x*w.spatial.chunksY+chunk_y
-			for building_slot := w.spatial.buildingHead[chunk]; building_slot >= 0;
-				building_slot = w.spatial.buildingNext[building_slot] {
-				if !w.buildingUsed[building_slot] do continue
-				if w.buildings.kingdom[building_slot] != target_kingdom do continue
-				same_town := w.buildings.town[building_slot] == target_town
+	for offsetX in -chunkRadius..=chunkRadius {
+		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
+		for offsetY in -chunkRadius..=chunkRadius {
+			chunkY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
+			chunk := chunkX*w.spatial.chunksY+chunkY
+			for buildingSlot := w.spatial.buildingHead[chunk]; buildingSlot >= 0;
+				buildingSlot = w.spatial.buildingNext[buildingSlot] {
+				if !w.buildingUsed[buildingSlot] do continue
+				if w.buildings.kingdom[buildingSlot] != targetKingdom do continue
+				sameTown := w.buildings.town[buildingSlot] == targetTown
 
-				distance, _, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, building_slot)
+				distance, _, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, buildingSlot)
 				if distance > WARRIOR_BREACH_RADIUS do continue
-				kind := BuildingKindOf(w.buildings[building_slot].type)
+				kind := BuildingKindOf(w.buildings[buildingSlot].type)
 				switch kind {
 				case .Wall:
-					if distance < best_wall_distance {
-						best_wall_distance = distance
-						best_wall = building_slot
+					if distance < bestWallDistance {
+						bestWallDistance = distance
+						bestWall = buildingSlot
 					}
 				case .TownHall:
-					if same_town && distance < best_hall_distance {
-						best_hall_distance = distance
-						best_hall = building_slot
+					if sameTown && distance < bestHallDistance {
+						bestHallDistance = distance
+						bestHall = buildingSlot
 					}
 				case .Home, .Farmland, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall:
-					if same_town && distance < best_building_distance {
-						best_building_distance = distance
-						best_building = building_slot
+					if sameTown && distance < bestBuildingDistance {
+						bestBuildingDistance = distance
+						bestBuilding = buildingSlot
 					}
 				}
 			}
 		}
 	}
 
-	if best_wall >= 0 do return best_wall
-	if best_building >= 0 do return best_building
-	return best_hall
+	if bestWall >= 0 do return bestWall
+	if bestBuilding >= 0 do return bestBuilding
+	return bestHall
 }
 
-UnitWarriorEngage :: proc(w: ^World, unit_slot: int, state: ^StateWarrior, delta_time: f32) -> bool {
-	unit := &w.units[unit_slot]
-	target_x, target_y: f32
+UnitWarriorEngage :: proc(w: ^World, unitSlot: int, state: ^StateWarrior, deltaTime: f32) -> bool {
+	unit := &w.units[unitSlot]
+	targetX, targetY: f32
 	distance: f32
 	switch target in state.target {
 	case TargetNone:
@@ -406,47 +406,47 @@ UnitWarriorEngage :: proc(w: ^World, unit_slot: int, state: ^StateWarrior, delta
 			return false
 		}
 		if UnitHiddenInside(w, target.slot) do return false
-		target_x = w.units.x[target.slot]
-		target_y = w.units.y[target.slot]
-		delta_x := WorldShortestWrappedDelta(target_x-unit.x, f32(w.maxX))
-		delta_y := WorldShortestWrappedDelta(target_y-unit.y, f32(w.maxY))
-		distance = math.sqrt(delta_x*delta_x+delta_y*delta_y)
+		targetX = w.units.x[target.slot]
+		targetY = w.units.y[target.slot]
+		deltaX := WorldShortestWrappedDelta(targetX-unit.x, f32(w.maxX))
+		deltaY := WorldShortestWrappedDelta(targetY-unit.y, f32(w.maxY))
+		distance = math.sqrt(deltaX*deltaX+deltaY*deltaY)
 	case TargetBuilding:
 		if target.slot < 0 || target.slot >= BUILDING_CAPACITY || !w.buildingUsed[target.slot] {
 			return false
 		}
-		distance, target_x, target_y =
+		distance, targetX, targetY =
 			WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
 	}
 
 	if distance > UnitDefaultRange(unit.type) {
 		speed := UnitDefaultSpeed(unit.type)
 		if unit.effects[.NoWater] do speed *= 0.7
-		_, blocked, _ := UnitStepTowards(w, unit_slot, target_x, target_y, speed*delta_time)
+		_, blocked, _ := UnitStepTowards(w, unitSlot, targetX, targetY, speed*deltaTime)
 		return !blocked
 	}
 
-	unit.cooldown -= delta_time
+	unit.cooldown -= deltaTime
 	if unit.cooldown <= 0 {
-		WarriorSwing(w, unit_slot, state)
+		WarriorSwing(w, unitSlot, state)
 		unit.cooldown = UnitDefaultCooldown(unit.type)
 	}
 	return true
 }
 
-WarriorSwing :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
-	unit := &w.units[unit_slot]
+WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
+	unit := &w.units[unitSlot]
 	damage := UnitDefaultDamage(unit.type)
-	area_radius := UnitDefaultAreaRadius(unit.type)
+	areaRadius := UnitDefaultAreaRadius(unit.type)
 	switch target in state.target {
 	case TargetNone:
 	case TargetUnit:
 		if target.slot < 0 || target.slot >= UNIT_CAPACITY || !w.unitUsed[target.slot] do return
 		if UnitHiddenInside(w, target.slot) do return
-		impact_x := w.units.x[target.slot]
-		impact_y := w.units.y[target.slot]
-		if area_radius > 0 {
-			WarriorAreaUnitDamage(w, unit_slot, impact_x, impact_y, area_radius, damage)
+		impactX := w.units.x[target.slot]
+		impactY := w.units.y[target.slot]
+		if areaRadius > 0 {
+			WarriorAreaUnitDamage(w, unitSlot, impactX, impactY, areaRadius, damage)
 		} else {
 			UnitApplyDamage(w, target.slot, damage, unit.x, unit.y, .Melee)
 		}
@@ -467,53 +467,53 @@ WarriorSwing :: proc(w: ^World, unit_slot: int, state: ^StateWarrior) {
 				f32(building.y)+f32(height)*0.5,
 			)
 		}
-		impact_x, impact_y, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
-		BuildingHitBurst(w, target.slot, impact_x, impact_y)
+		impactX, impactY, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
+		BuildingHitBurst(w, target.slot, impactX, impactY)
 		w.buildings[target.slot].health -= damage
 		if w.buildings[target.slot].health <= 0 {
 			kind := BuildingKindOf(w.buildings[target.slot].type)
 			// Burning rubble can set the surroundings alight after a siege.
 			if !BuildingImmuneToFire(kind) &&
 				WorldNoiseHash(target.slot, int(w.simulationTime*4), 0xF12E) < 0.35 {
-				WorldFireIgnite(w, impact_x, impact_y, 1)
+				WorldFireIgnite(w, impactX, impactY, 1)
 			}
 			BuildingDestroyedBurst(w, target.slot)
 			BuildingDespawn(w, target.slot, unit.kingdome)
 			state.target = TargetNone{}
 		}
-		if area_radius > 0 {
-			WarriorAreaUnitDamage(w, unit_slot, impact_x, impact_y, area_radius, damage)
+		if areaRadius > 0 {
+			WarriorAreaUnitDamage(w, unitSlot, impactX, impactY, areaRadius, damage)
 		}
 	}
 }
 
-WarriorAreaUnitDamage :: proc(w: ^World, attacker_slot: int, x, y, radius, damage: f32) {
+WarriorAreaUnitDamage :: proc(w: ^World, attackerSlot: int, x, y, radius, damage: f32) {
 	if radius <= 0 do return
-	attacker := &w.units[attacker_slot]
-	world_width := f32(w.maxX)
-	world_height := f32(w.maxY)
-	chunk_size := w.spatial.chunkSize
-	if chunk_size <= 0 do return
+	attacker := &w.units[attackerSlot]
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	chunkSize := w.spatial.chunkSize
+	if chunkSize <= 0 do return
 
-	center_x := WorldWrapPosition(x, world_width)
-	center_y := WorldWrapPosition(y, world_height)
-	center_chunk_x := int(center_x)/chunk_size
-	center_chunk_y := int(center_y)/chunk_size
-	chunk_radius := int(radius)/chunk_size+1
-	for offset_x in -chunk_radius..=chunk_radius {
-		chunk_x := WorldWrapCoordinate(center_chunk_x+offset_x, w.spatial.chunksX)
-		for offset_y in -chunk_radius..=chunk_radius {
-			chunk_y := WorldWrapCoordinate(center_chunk_y+offset_y, w.spatial.chunksY)
-			chunk := chunk_x*w.spatial.chunksY+chunk_y
+	centerX := WorldWrapPosition(x, worldWidth)
+	centerY := WorldWrapPosition(y, worldHeight)
+	centerChunkX := int(centerX)/chunkSize
+	centerChunkY := int(centerY)/chunkSize
+	chunkRadius := int(radius)/chunkSize+1
+	for offsetX in -chunkRadius..=chunkRadius {
+		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
+		for offsetY in -chunkRadius..=chunkRadius {
+			chunkY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
+			chunk := chunkX*w.spatial.chunksY+chunkY
 			slot := w.spatial.unitHead[chunk]
 			for slot >= 0 {
 				next := w.spatial.unitNext[slot]
-				if slot != attacker_slot && w.unitUsed[slot] && !UnitHiddenInside(w, slot) &&
+				if slot != attackerSlot && w.unitUsed[slot] && !UnitHiddenInside(w, slot) &&
 					KingdomAtWar(w, attacker.kingdome, w.units[slot].kingdome) {
-					delta_x := WorldShortestWrappedDelta(w.units.x[slot]-center_x, world_width)
-					delta_y := WorldShortestWrappedDelta(w.units.y[slot]-center_y, world_height)
-					if delta_x*delta_x+delta_y*delta_y <= radius*radius {
-						UnitApplyDamage(w, slot, damage, center_x, center_y, .Area)
+					deltaX := WorldShortestWrappedDelta(w.units.x[slot]-centerX, worldWidth)
+					deltaY := WorldShortestWrappedDelta(w.units.y[slot]-centerY, worldHeight)
+					if deltaX*deltaX+deltaY*deltaY <= radius*radius {
+						UnitApplyDamage(w, slot, damage, centerX, centerY, .Area)
 					}
 				}
 				slot = next
@@ -522,53 +522,53 @@ WarriorAreaUnitDamage :: proc(w: ^World, attacker_slot: int, x, y, radius, damag
 	}
 }
 
-UnitWarriorTravel :: proc(w: ^World, unit_slot, kingdom_slot, town_slot: int, delta_time: f32) -> FlowFollowResult {
+UnitWarriorTravel :: proc(w: ^World, unitSlot, kingdomSlot, townSlot: int, deltaTime: f32) -> FlowFollowResult {
 	field, ok := FlowFieldGet(
 		w,
-		kingdom_slot,
-		town_slot,
-		w.units[unit_slot].type,
-		w.units[unit_slot].kingdome,
+		kingdomSlot,
+		townSlot,
+		w.units[unitSlot].type,
+		w.units[unitSlot].kingdome,
 	)
 	if !ok do return .Unreachable
-	return UnitFollowFlowField(w, unit_slot, field, delta_time)
+	return UnitFollowFlowField(w, unitSlot, field, deltaTime)
 }
 
-UnitWarriorFarFromTown :: proc(w: ^World, unit_slot, kingdom_slot, town_slot: int, radius: int = WARRIOR_HOME_PATROL_RADIUS*2) -> bool {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	unit := &w.units[unit_slot]
-	delta_x := WorldShortestWrappedDelta(unit.x-(f32(town.x)+2), f32(w.maxX))
-	delta_y := WorldShortestWrappedDelta(unit.y-(f32(town.y)+2), f32(w.maxY))
-	max_distance := f32(radius)
-	return delta_x*delta_x+delta_y*delta_y > max_distance*max_distance
+UnitWarriorFarFromTown :: proc(w: ^World, unitSlot, kingdomSlot, townSlot: int, radius: int = WARRIOR_HOME_PATROL_RADIUS*2) -> bool {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return false
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	unit := &w.units[unitSlot]
+	deltaX := WorldShortestWrappedDelta(unit.x-(f32(town.x)+2), f32(w.maxX))
+	deltaY := WorldShortestWrappedDelta(unit.y-(f32(town.y)+2), f32(w.maxY))
+	maxDistance := f32(radius)
+	return deltaX*deltaX+deltaY*deltaY > maxDistance*maxDistance
 }
 
 // Each warrior has a staggered 6-9 second patrol cycle. patrolSequence records
 // the next eligible cycle, leaving scanTimer and the combat cooldown independent.
 // Reserving the first two seconds of every cycle guarantees a pause after arrival,
 // blockage or a failed target search, even when a walk crosses a cycle boundary.
-WarriorPatrolCycle :: proc(w: ^World, unit_slot: int) -> (cycle: int, may_start: bool) {
-	period := 6+WorldNoiseHash(unit_slot, 0, 0x1D1E)*3
-	phase := WorldNoiseHash(unit_slot, 1, 0x1D1E)*period
+WarriorPatrolCycle :: proc(w: ^World, unitSlot: int) -> (cycle: int, mayStart: bool) {
+	period := 6+WorldNoiseHash(unitSlot, 0, 0x1D1E)*3
+	phase := WorldNoiseHash(unitSlot, 1, 0x1D1E)*period
 	clock := w.simulationTime+phase
 	cycle = int(clock/period)
-	may_start = clock-f32(cycle)*period >= WARRIOR_PATROL_MIN_PAUSE
+	mayStart = clock-f32(cycle)*period >= WARRIOR_PATROL_MIN_PAUSE
 	return
 }
 
-UnitWarriorPatrol :: proc(w: ^World, unit_slot, kingdom_slot, town_slot, radius: int, delta_time: f32, state: ^StateWarrior) {
-	unit := &w.units[unit_slot]
-	cycle, may_start := WarriorPatrolCycle(w, unit_slot)
+UnitWarriorPatrol :: proc(w: ^World, unitSlot, kingdomSlot, townSlot, radius: int, deltaTime: f32, state: ^StateWarrior) {
+	unit := &w.units[unitSlot]
+	cycle, mayStart := WarriorPatrolCycle(w, unitSlot)
 	state.activity = .Idle
 	if !unit.pathReady {
-		if !may_start || state.patrolSequence > cycle do return
+		if !mayStart || state.patrolSequence > cycle do return
 		state.patrolSequence = cycle+1
 		x, y, found := UnitFindPatrolTarget(
 			w,
-			unit_slot,
-			kingdom_slot,
-			town_slot,
+			unitSlot,
+			kingdomSlot,
+			townSlot,
 			radius,
 			state.patrolSequence,
 			WARRIOR_PATROL_STEP_RADIUS,
@@ -584,10 +584,10 @@ UnitWarriorPatrol :: proc(w: ^World, unit_slot, kingdom_slot, town_slot, radius:
 	if unit.effects[.NoWater] do speed *= 0.7
 	reached, blocked, _ := UnitStepTowards(
 		w,
-		unit_slot,
+		unitSlot,
 		f32(unit.pathTargetX)+0.5,
 		f32(unit.pathTargetY)+0.5,
-		speed*delta_time,
+		speed*deltaTime,
 	)
 	if reached || blocked {
 		unit.pathReady = false
@@ -596,40 +596,40 @@ UnitWarriorPatrol :: proc(w: ^World, unit_slot, kingdom_slot, town_slot, radius:
 	}
 }
 
-UnitFindPatrolTarget :: proc(w: ^World, unit_slot, kingdom_slot, town_slot, radius, sequence: int, step_radius: int = 0) -> (int, int, bool) {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return 0, 0, false
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	center_x := town.x+2
-	center_y := town.y+2
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	unit := &w.units[unit_slot]
-	sample_radius := radius
-	town_delta_x := WorldShortestWrappedDelta(unit.x-f32(center_x), f32(world_width))
-	town_delta_y := WorldShortestWrappedDelta(unit.y-f32(center_y), f32(world_height))
-	town_distance := town_delta_x*town_delta_x+town_delta_y*town_delta_y
-	if step_radius > 0 {
-		center_x = int(WorldWrapPosition(unit.x, f32(world_width)))
-		center_y = int(WorldWrapPosition(unit.y, f32(world_height)))
-		sample_radius = min(radius, step_radius)
+UnitFindPatrolTarget :: proc(w: ^World, unitSlot, kingdomSlot, townSlot, radius, sequence: int, stepRadius: int = 0) -> (int, int, bool) {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	centerX := town.x+2
+	centerY := town.y+2
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	unit := &w.units[unitSlot]
+	sampleRadius := radius
+	townDeltaX := WorldShortestWrappedDelta(unit.x-f32(centerX), f32(worldWidth))
+	townDeltaY := WorldShortestWrappedDelta(unit.y-f32(centerY), f32(worldHeight))
+	townDistance := townDeltaX*townDeltaX+townDeltaY*townDeltaY
+	if stepRadius > 0 {
+		centerX = int(WorldWrapPosition(unit.x, f32(worldWidth)))
+		centerY = int(WorldWrapPosition(unit.y, f32(worldHeight)))
+		sampleRadius = min(radius, stepRadius)
 	}
-	seed := u64(unit_slot)+u64(sequence)*1031+1709
+	seed := u64(unitSlot)+u64(sequence)*1031+1709
 	for attempt in 0..<16 {
-		delta_x := int(WorldNoiseHash(unit_slot, sequence*37+attempt*2, seed+11)*f32(sample_radius*2+1))-sample_radius
-		delta_y := int(WorldNoiseHash(unit_slot, sequence*37+attempt*2+1, seed+23)*f32(sample_radius*2+1))-sample_radius
-		if delta_x == 0 && delta_y == 0 do continue
-		x := WorldWrapCoordinate(center_x+delta_x, world_width)
-		y := WorldWrapCoordinate(center_y+delta_y, world_height)
-		if step_radius > 0 {
-			if delta_x*delta_x+delta_y*delta_y > sample_radius*sample_radius do continue
-			dx := WorldShortestWrappedDelta(f32(x)+0.5-(f32(town.x)+2), f32(world_width))
-			dy := WorldShortestWrappedDelta(f32(y)+0.5-(f32(town.y)+2), f32(world_height))
+		deltaX := int(WorldNoiseHash(unitSlot, sequence*37+attempt*2, seed+11)*f32(sampleRadius*2+1))-sampleRadius
+		deltaY := int(WorldNoiseHash(unitSlot, sequence*37+attempt*2+1, seed+23)*f32(sampleRadius*2+1))-sampleRadius
+		if deltaX == 0 && deltaY == 0 do continue
+		x := WorldWrapCoordinate(centerX+deltaX, worldWidth)
+		y := WorldWrapCoordinate(centerY+deltaY, worldHeight)
+		if stepRadius > 0 {
+			if deltaX*deltaX+deltaY*deltaY > sampleRadius*sampleRadius do continue
+			dx := WorldShortestWrappedDelta(f32(x)+0.5-(f32(town.x)+2), f32(worldWidth))
+			dy := WorldShortestWrappedDelta(f32(y)+0.5-(f32(town.y)+2), f32(worldHeight))
 			distance := dx*dx+dy*dy
 			// Displaced warriors can take short steps home rather than getting stuck
 			// outside the patrol area after a chase or an escort.
-			if distance > f32(radius*radius) && distance >= town_distance do continue
+			if distance > f32(radius*radius) && distance >= townDistance do continue
 		}
-		if !UnitValidTileType(w.units[unit_slot].type, w.ground[x][y].type) do continue
+		if !UnitValidTileType(w.units[unitSlot].type, w.ground[x][y].type) do continue
 		if WorldTileOccupied(w, x, y) do continue
 		return x, y, true
 	}
@@ -638,33 +638,33 @@ UnitFindPatrolTarget :: proc(w: ^World, unit_slot, kingdom_slot, town_slot, radi
 
 // Garrison warriors occasionally escort civilians; the moment they receive an
 // attack or defend order the escort is dropped.
-UnitWarriorEscort :: proc(w: ^World, unit_slot: int, state: ^StateWarrior, delta_time: f32) -> bool {
-	unit := &w.units[unit_slot]
-	kingdom_slot := unit.kingdome
-	town_slot := unit.town
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return false
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	escort_duty := WorldNoiseHash(
-		unit_slot,
+UnitWarriorEscort :: proc(w: ^World, unitSlot: int, state: ^StateWarrior, deltaTime: f32) -> bool {
+	unit := &w.units[unitSlot]
+	kingdomSlot := unit.kingdome
+	townSlot := unit.town
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return false
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	escortDuty := WorldNoiseHash(
+		unitSlot,
 		int(town.orderRevision%1_000_000),
-		u64(kingdom_slot*TOWN_CAPACITY+town_slot)+2203,
+		u64(kingdomSlot*TOWN_CAPACITY+townSlot)+2203,
 	)
-	if escort_duty >= WARRIOR_GARRISON_ESCORT_RATIO {
+	if escortDuty >= WARRIOR_GARRISON_ESCORT_RATIO {
 		state.escortTarget = -1
 		return false
 	}
 
 	target := state.escortTarget
-	if target >= 0 && !WarriorEscortValid(w, unit_slot, target) {
+	if target >= 0 && !WarriorEscortValid(w, unitSlot, target) {
 		state.escortTarget = -1
 		unit.pathReady = false
 		target = -1
 	}
 	if target < 0 {
 		state.scanSequence += 1
-		seed := u64(unit_slot)+u64(state.scanSequence)*1319+1901
-		if WorldNoiseHash(unit_slot, state.scanSequence, seed) < WARRIOR_ESCORT_CHANCE {
-			state.escortTarget = UnitFindEscortTarget(w, unit_slot, state.scanSequence)
+		seed := u64(unitSlot)+u64(state.scanSequence)*1319+1901
+		if WorldNoiseHash(unitSlot, state.scanSequence, seed) < WARRIOR_ESCORT_CHANCE {
+			state.escortTarget = UnitFindEscortTarget(w, unitSlot, state.scanSequence)
 			target = state.escortTarget
 		}
 	}
@@ -672,81 +672,81 @@ UnitWarriorEscort :: proc(w: ^World, unit_slot: int, state: ^StateWarrior, delta
 
 	state.activity = .Escorting
 	unit.pathReady = false
-	x, y, found := UnitFindEscortPosition(w, unit_slot, target, unit.roamSequence)
+	x, y, found := UnitFindEscortPosition(w, unitSlot, target, unit.roamSequence)
 	if !found do return true
 	speed := UnitDefaultSpeed(unit.type)
 	if unit.effects[.NoWater] do speed *= 0.7
-	_, blocked, _ := UnitStepTowards(w, unit_slot, f32(x)+0.5, f32(y)+0.5, speed*delta_time)
+	_, blocked, _ := UnitStepTowards(w, unitSlot, f32(x)+0.5, f32(y)+0.5, speed*deltaTime)
 	if blocked do unit.roamSequence += 1
 	return true
 }
 
-WarriorEscortValid :: proc(w: ^World, warrior_slot, target_slot: int) -> bool {
-	if target_slot < 0 || target_slot >= UNIT_CAPACITY || !w.unitUsed[target_slot] {
+WarriorEscortValid :: proc(w: ^World, warriorSlot, targetSlot: int) -> bool {
+	if targetSlot < 0 || targetSlot >= UNIT_CAPACITY || !w.unitUsed[targetSlot] {
 		return false
 	}
-	if UnitHiddenInside(w, target_slot) do return false
-	if w.units[target_slot].kingdome != w.units[warrior_slot].kingdome do return false
-	return !UnitIsWarrior(w.units[target_slot].type)
+	if UnitHiddenInside(w, targetSlot) do return false
+	if w.units[targetSlot].kingdome != w.units[warriorSlot].kingdome do return false
+	return !UnitIsWarrior(w.units[targetSlot].type)
 }
 
-UnitFindEscortTarget :: proc(w: ^World, warrior_slot, sequence: int) -> int {
-	unit := &w.units[warrior_slot]
-	kingdom_slot := unit.kingdome
-	world_width := f32(w.maxX)
-	world_height := f32(w.maxY)
-	unit_x := WorldWrapPosition(unit.x, world_width)
-	unit_y := WorldWrapPosition(unit.y, world_height)
-	chunk_size := w.spatial.chunkSize
-	if chunk_size <= 0 do return -1
+UnitFindEscortTarget :: proc(w: ^World, warriorSlot, sequence: int) -> int {
+	unit := &w.units[warriorSlot]
+	kingdomSlot := unit.kingdome
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	unitX := WorldWrapPosition(unit.x, worldWidth)
+	unitY := WorldWrapPosition(unit.y, worldHeight)
+	chunkSize := w.spatial.chunkSize
+	if chunkSize <= 0 do return -1
 
-	center_chunk_x := int(unit_x)/chunk_size
-	center_chunk_y := int(unit_y)/chunk_size
-	chunk_radius := WARRIOR_ESCORT_RADIUS/chunk_size+1
-	seed := u64(kingdom_slot)+u64(warrior_slot)*101+u64(sequence)*7919
-	selected_target := -1
-	best_score: f32 = -1
-	for offset_x in -chunk_radius..=chunk_radius {
-		chunk_x := WorldWrapCoordinate(center_chunk_x+offset_x, w.spatial.chunksX)
-		for offset_y in -chunk_radius..=chunk_radius {
-			chunk_y := WorldWrapCoordinate(center_chunk_y+offset_y, w.spatial.chunksY)
-			chunk := chunk_x*w.spatial.chunksY+chunk_y
-			for candidate_slot := w.spatial.unitHead[chunk]; candidate_slot >= 0;
-				candidate_slot = w.spatial.unitNext[candidate_slot] {
-				if candidate_slot == warrior_slot || !w.unitUsed[candidate_slot] do continue
-				if UnitHiddenInside(w, candidate_slot) do continue
-				if w.units[candidate_slot].kingdome != kingdom_slot do continue
-				if UnitIsWarrior(w.units[candidate_slot].type) do continue
-				delta_x := WorldShortestWrappedDelta(w.units.x[candidate_slot]-unit_x, world_width)
-				delta_y := WorldShortestWrappedDelta(w.units.y[candidate_slot]-unit_y, world_height)
-				if delta_x*delta_x+delta_y*delta_y > f32(WARRIOR_ESCORT_RADIUS*WARRIOR_ESCORT_RADIUS) {
+	centerChunkX := int(unitX)/chunkSize
+	centerChunkY := int(unitY)/chunkSize
+	chunkRadius := WARRIOR_ESCORT_RADIUS/chunkSize+1
+	seed := u64(kingdomSlot)+u64(warriorSlot)*101+u64(sequence)*7919
+	selectedTarget := -1
+	bestScore: f32 = -1
+	for offsetX in -chunkRadius..=chunkRadius {
+		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
+		for offsetY in -chunkRadius..=chunkRadius {
+			chunkY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
+			chunk := chunkX*w.spatial.chunksY+chunkY
+			for candidateSlot := w.spatial.unitHead[chunk]; candidateSlot >= 0;
+				candidateSlot = w.spatial.unitNext[candidateSlot] {
+				if candidateSlot == warriorSlot || !w.unitUsed[candidateSlot] do continue
+				if UnitHiddenInside(w, candidateSlot) do continue
+				if w.units[candidateSlot].kingdome != kingdomSlot do continue
+				if UnitIsWarrior(w.units[candidateSlot].type) do continue
+				deltaX := WorldShortestWrappedDelta(w.units.x[candidateSlot]-unitX, worldWidth)
+				deltaY := WorldShortestWrappedDelta(w.units.y[candidateSlot]-unitY, worldHeight)
+				if deltaX*deltaX+deltaY*deltaY > f32(WARRIOR_ESCORT_RADIUS*WARRIOR_ESCORT_RADIUS) {
 					continue
 				}
-				score := WorldNoiseHash(warrior_slot, candidate_slot, seed)
-				if score > best_score {
-					best_score = score
-					selected_target = candidate_slot
+				score := WorldNoiseHash(warriorSlot, candidateSlot, seed)
+				if score > bestScore {
+					bestScore = score
+					selectedTarget = candidateSlot
 				}
 			}
 		}
 	}
-	return selected_target
+	return selectedTarget
 }
 
-UnitFindEscortPosition :: proc(w: ^World, warrior_slot, target_slot, sequence: int) -> (int, int, bool) {
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return 0, 0, false
-	target_x := int(WorldWrapPosition(w.units[target_slot].x, f32(world_width)))
-	target_y := int(WorldWrapPosition(w.units[target_slot].y, f32(world_height)))
-	offsets_x := [8]int{0, 1, 1, 1, 0, -1, -1, -1}
-	offsets_y := [8]int{-1, -1, 0, 1, 1, 1, 0, -1}
-	start_direction := int(WorldNoiseHash(warrior_slot, sequence, u64(target_slot)+7919)*8)
+UnitFindEscortPosition :: proc(w: ^World, warriorSlot, targetSlot, sequence: int) -> (int, int, bool) {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return 0, 0, false
+	targetX := int(WorldWrapPosition(w.units[targetSlot].x, f32(worldWidth)))
+	targetY := int(WorldWrapPosition(w.units[targetSlot].y, f32(worldHeight)))
+	offsetsX := [8]int{0, 1, 1, 1, 0, -1, -1, -1}
+	offsetsY := [8]int{-1, -1, 0, 1, 1, 1, 0, -1}
+	startDirection := int(WorldNoiseHash(warriorSlot, sequence, u64(targetSlot)+7919)*8)
 	for offset in 0..<8 {
-		direction := (start_direction+offset)%8
-		x := WorldWrapCoordinate(target_x+offsets_x[direction], world_width)
-		y := WorldWrapCoordinate(target_y+offsets_y[direction], world_height)
-		if !UnitValidTileType(w.units[warrior_slot].type, w.ground[x][y].type) do continue
+		direction := (startDirection+offset)%8
+		x := WorldWrapCoordinate(targetX+offsetsX[direction], worldWidth)
+		y := WorldWrapCoordinate(targetY+offsetsY[direction], worldHeight)
+		if !UnitValidTileType(w.units[warriorSlot].type, w.ground[x][y].type) do continue
 		if WorldTileOccupied(w, x, y) do continue
 		return x, y, true
 	}

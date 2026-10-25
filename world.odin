@@ -80,9 +80,9 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.particleRandom = settings.seed*0x9E3779B97F4A7C15+0x9E37
 	if !SpatialIndexInit(w) do return false
 	if !WorldNavigationInit(w) do return false
-	node_count := int(maxX)*int(maxY)
-	w.tileBuilding = make([]int, node_count)
-	for i in 0..<node_count {
+	nodeCount := int(maxX)*int(maxY)
+	w.tileBuilding = make([]int, nodeCount)
+	for i in 0..<nodeCount {
 		w.tileBuilding[i] = -1
 	}
 	for i in 0..<FLOW_FIELD_CAPACITY {
@@ -138,15 +138,15 @@ TileType :: enum {
 	Desert,
 }
 
-WorldTileSet :: proc(w: ^World, x, y: int, tile_type: TileType) -> bool {
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return false
+WorldTileSet :: proc(w: ^World, x, y: int, tileType: TileType) -> bool {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return false
 
-	wrapped_x := WorldWrapCoordinate(x, world_width)
-	wrapped_y := WorldWrapCoordinate(y, world_height)
-	if w.ground[wrapped_x][wrapped_y].type != tile_type {
-		w.ground[wrapped_x][wrapped_y].type = tile_type
+	wrappedX := WorldWrapCoordinate(x, worldWidth)
+	wrappedY := WorldWrapCoordinate(y, worldHeight)
+	if w.ground[wrappedX][wrappedY].type != tileType {
+		w.ground[wrappedX][wrappedY].type = tileType
 		w.navigationRevision += 1
 		w.terrainRevision += 1
 	}
@@ -212,15 +212,15 @@ UnitDespawn :: proc(w: ^World, slot: int) -> bool {
 	if slot < 0 || slot >= UNIT_CAPACITY || !w.unitUsed[slot] {
 		return false
 	}
-	kingdom_slot := w.units[slot].kingdome
-	town_slot := w.units[slot].town
+	kingdomSlot := w.units[slot].kingdome
+	townSlot := w.units[slot].town
 	UnitConversionCancel(w, slot)
 	UnitReleaseHome(w, slot)
-	if kingdom_slot >= 0 && kingdom_slot < KINGDOMS_CAPACITY &&
-		town_slot >= 0 && town_slot < TOWN_CAPACITY &&
-		w.kingdoms[kingdom_slot].townUsed[town_slot] &&
-		w.kingdoms[kingdom_slot].towns[town_slot].citizens > 0 {
-		w.kingdoms[kingdom_slot].towns[town_slot].citizens -= 1
+	if kingdomSlot >= 0 && kingdomSlot < KINGDOMS_CAPACITY &&
+		townSlot >= 0 && townSlot < TOWN_CAPACITY &&
+		w.kingdoms[kingdomSlot].townUsed[townSlot] &&
+		w.kingdoms[kingdomSlot].towns[townSlot].citizens > 0 {
+		w.kingdoms[kingdomSlot].towns[townSlot].citizens -= 1
 	}
 	delete(w.units[slot].path)
 	if w.units[slot].burning > 0 {
@@ -228,9 +228,9 @@ UnitDespawn :: proc(w: ^World, slot: int) -> bool {
 		w.units[slot].burning = 0
 	}
 	SpatialUnitRemove(w, slot)
-	if WorldTownExists(w, kingdom_slot, town_slot) &&
+	if WorldTownExists(w, kingdomSlot, townSlot) &&
 		(UnitIsWarrior(w.units[slot].type) || UnitKindOf(w.units[slot].type) == .CombatBuilder) {
-		w.kingdoms[kingdom_slot].towns[town_slot].orderRevision += 1
+		w.kingdoms[kingdomSlot].towns[townSlot].orderRevision += 1
 	}
 	w.unitUsed[slot] = false
 	return true
@@ -259,11 +259,11 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 	w.buildings.homeResident[i] = 0
 
 	width, height := BuildingTileSize(type)
-	cleared_wood := WorldDecorationClearRect(w, x, y, width, height)
-	world_height := int(w.maxY)
-	for tile_x in x ..< x+width {
-		for tile_y in y ..< y+height {
-			w.tileBuilding[tile_x*world_height+tile_y] = i
+	clearedWood := WorldDecorationClearRect(w, x, y, width, height)
+	worldHeight := int(w.maxY)
+	for tileX in x ..< x+width {
+		for tileY in y ..< y+height {
+			w.tileBuilding[tileX*worldHeight+tileY] = i
 		}
 	}
 
@@ -275,7 +275,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 		town.buildingCounts[kind] += 1
 		if town.buildingSlots[kind] < 0 do town.buildingSlots[kind] = i
 		// Trees felled to clear the site are not wasted.
-		town.wood += cleared_wood
+		town.wood += clearedWood
 	}
 	w.navigationRevision += 1
 	if BuildingKindOf(type) == .Path do WorldSpawnStreetLamp(w, x, y)
@@ -296,52 +296,52 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 
 	switch _ in w.buildings[slot].type {
 	case TownHall:
-		kingdom_slot := w.buildings[slot].kingdom
-		town_slot := w.buildings[slot].town
-		if kingdom_slot < 0 || kingdom_slot >= KINGDOMS_CAPACITY ||
-			town_slot < 0 || town_slot >= TOWN_CAPACITY ||
-			!w.kingdomUsed[kingdom_slot] || !w.kingdoms[kingdom_slot].townUsed[town_slot] {
+		kingdomSlot := w.buildings[slot].kingdom
+		townSlot := w.buildings[slot].town
+		if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY ||
+			townSlot < 0 || townSlot >= TOWN_CAPACITY ||
+			!w.kingdomUsed[kingdomSlot] || !w.kingdoms[kingdomSlot].townUsed[townSlot] {
 			return false
 		}
-		if kingdom_slot == w.observerKingdom {
+		if kingdomSlot == w.observerKingdom {
 			WorldAlertAdd(
 				w,
 				.TownLost,
-				kingdom_slot,
-				town_slot,
+				kingdomSlot,
+				townSlot,
 				-1,
 				f32(w.buildings[slot].x),
 				f32(w.buildings[slot].y),
 			)
 		}
 
-		if w.kingdoms[kingdom_slot].capitalSlot == town_slot {
-			if !KingdomAbsorb(w, kingdom_slot, destroyerKingdom, town_slot, slot) do return false
+		if w.kingdoms[kingdomSlot].capitalSlot == townSlot {
+			if !KingdomAbsorb(w, kingdomSlot, destroyerKingdom, townSlot, slot) do return false
 		} else {
-			TownOrdersClear(w, kingdom_slot, town_slot)
-			TownConversionsClear(w, kingdom_slot, town_slot)
-			w.kingdoms[kingdom_slot].townUsed[town_slot] = false
+			TownOrdersClear(w, kingdomSlot, townSlot)
+			TownConversionsClear(w, kingdomSlot, townSlot)
+			w.kingdoms[kingdomSlot].townUsed[townSlot] = false
 			WorldConstructionChanged(w)
-			CombatSiteClear(w, kingdom_slot, town_slot)
-			for unit_slot in 0..<UNIT_CAPACITY {
-				if !w.unitUsed[unit_slot] || w.units[unit_slot].kingdome != kingdom_slot ||
-					w.units[unit_slot].town != town_slot {
+			CombatSiteClear(w, kingdomSlot, townSlot)
+			for unitSlot in 0..<UNIT_CAPACITY {
+				if !w.unitUsed[unitSlot] || w.units[unitSlot].kingdome != kingdomSlot ||
+					w.units[unitSlot].town != townSlot {
 					continue
 				}
 
-				UnitResetState(w, unit_slot)
-				new_town := KingdomChooseTownForUnit(w, kingdom_slot, unit_slot, slot)
-				w.units[unit_slot].town = new_town
-				if new_town >= 0 {
-					w.kingdoms[kingdom_slot].towns[new_town].citizens += 1
+				UnitResetState(w, unitSlot)
+				newTown := KingdomChooseTownForUnit(w, kingdomSlot, unitSlot, slot)
+				w.units[unitSlot].town = newTown
+				if newTown >= 0 {
+					w.kingdoms[kingdomSlot].towns[newTown].citizens += 1
 				}
 			}
-			w.kingdoms[kingdom_slot].towns[town_slot].citizens = 0
-			for building_slot in 0..<BUILDING_CAPACITY {
-				if building_slot != slot && w.buildingUsed[building_slot] &&
-					w.buildings[building_slot].kingdom == kingdom_slot &&
-					w.buildings[building_slot].town == town_slot {
-					w.buildings[building_slot].town = -1
+			w.kingdoms[kingdomSlot].towns[townSlot].citizens = 0
+			for buildingSlot in 0..<BUILDING_CAPACITY {
+				if buildingSlot != slot && w.buildingUsed[buildingSlot] &&
+					w.buildings[buildingSlot].kingdom == kingdomSlot &&
+					w.buildings[buildingSlot].town == townSlot {
+					w.buildings[buildingSlot].town = -1
 				}
 			}
 		}
@@ -356,10 +356,10 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 	w.buildings.homeResident[slot] = 0
 
 	width, height := BuildingTileSize(w.buildings[slot].type)
-	world_height := int(w.maxY)
-	for tile_x in w.buildings.x[slot] ..< w.buildings.x[slot]+width {
-		for tile_y in w.buildings.y[slot] ..< w.buildings.y[slot]+height {
-			w.tileBuilding[tile_x*world_height+tile_y] = -1
+	worldHeight := int(w.maxY)
+	for tileX in w.buildings.x[slot] ..< w.buildings.x[slot]+width {
+		for tileY in w.buildings.y[slot] ..< w.buildings.y[slot]+height {
+			w.tileBuilding[tileX*worldHeight+tileY] = -1
 		}
 	}
 	SpatialBuildingRemove(w, slot)
@@ -410,12 +410,12 @@ KingdomDespawn :: proc(w: ^World, slot: int) -> bool {
 }
 
 WorldTileOccupied :: proc(w: ^World, x, y: int) -> bool {
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return false
-	wrapped_x := WorldWrapCoordinate(x, world_width)
-	wrapped_y := WorldWrapCoordinate(y, world_height)
-	index := wrapped_x*world_height+wrapped_y
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return false
+	wrappedX := WorldWrapCoordinate(x, worldWidth)
+	wrappedY := WorldWrapCoordinate(y, worldHeight)
+	index := wrappedX*worldHeight+wrappedY
 	return w.tileBuilding[index] >= 0 || w.tileConstructionBlocked[index]
 }
 
@@ -426,9 +426,9 @@ WorldBuildingOverTile :: proc(w: ^World, x, y: int, bType: BuildingType) -> bool
 		return false
 	}
 
-	for tile_x in x ..< x + width {
-		for tile_y in y ..< y + height {
-			if !BuildingValidTileType(bType, w.ground[tile_x][tile_y].type) {
+	for tileX in x ..< x + width {
+		for tileY in y ..< y + height {
+			if !BuildingValidTileType(bType, w.ground[tileX][tileY].type) {
 				return false
 			}
 		}
@@ -443,10 +443,10 @@ WorldBuildingCollides :: proc(w: ^World, x, y: int, type: BuildingType) -> bool 
 		return true
 	}
 
-	world_height := int(w.maxY)
-	for tile_x in x ..< x+width {
-		for tile_y in y ..< y+height {
-			if w.tileBuilding[tile_x*world_height+tile_y] >= 0 do return true
+	worldHeight := int(w.maxY)
+	for tileX in x ..< x+width {
+		for tileY in y ..< y+height {
+			if w.tileBuilding[tileX*worldHeight+tileY] >= 0 do return true
 		}
 	}
 	return false

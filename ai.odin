@@ -50,12 +50,12 @@ AIRandom :: proc(w: ^World, kingdom, salt: int) -> f32 {
 	return f32(value % 1_000_000)/1_000_000.0
 }
 
-AIControllerUpdate :: proc(w: ^World, kingdom: int, delta_time: f32) {
+AIControllerUpdate :: proc(w: ^World, kingdom: int, deltaTime: f32) {
 	brain := &w.controllers[kingdom].ai
 
-	brain.decisionTimer -= delta_time
-	brain.diplomacyTimer -= delta_time
-	brain.expandTimer -= delta_time
+	brain.decisionTimer -= deltaTime
+	brain.diplomacyTimer -= deltaTime
+	brain.expandTimer -= deltaTime
 
 	if brain.decisionTimer <= 0 {
 		brain.decisionTimer = AI_DECISION_MIN+
@@ -76,30 +76,30 @@ AIControllerUpdate :: proc(w: ^World, kingdom: int, delta_time: f32) {
 
 AIDecide :: proc(w: ^World, kingdom: int) {
 	counts: [TOWN_CAPACITY][UnitKind]int
-	for unit_slot in 0 ..< UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil do continue
-		if w.units[unit_slot].kingdome != kingdom do continue
-		town_slot := w.units[unit_slot].town
-		if town_slot < 0 || town_slot >= TOWN_CAPACITY do continue
-		counts[town_slot][UnitKindOf(w.units[unit_slot].type)] += 1
+	for unitSlot in 0 ..< UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil do continue
+		if w.units[unitSlot].kingdome != kingdom do continue
+		townSlot := w.units[unitSlot].town
+		if townSlot < 0 || townSlot >= TOWN_CAPACITY do continue
+		counts[townSlot][UnitKindOf(w.units[unitSlot].type)] += 1
 	}
 
 	brain := &w.controllers[kingdom].ai
-	for town_slot in 0 ..< TOWN_CAPACITY {
-		if !w.kingdoms[kingdom].townUsed[town_slot] do continue
-		town := &w.kingdoms[kingdom].towns[town_slot]
+	for townSlot in 0 ..< TOWN_CAPACITY {
+		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+		town := &w.kingdoms[kingdom].towns[townSlot]
 
 		if town.milestonePending {
-			option := AIChooseMilestoneOption(w, kingdom, town_slot, brain)
+			option := AIChooseMilestoneOption(w, kingdom, townSlot, brain)
 			KingdomIssueCommand(
 				w,
 				kingdom,
-				CommandChooseMilestone{town = town_slot, option = option},
+				CommandChooseMilestone{town = townSlot, option = option},
 			)
 		}
 
-		AITownEconomy(w, kingdom, town_slot, &counts[town_slot], brain)
-		AITryCombatBuilding(w, kingdom, town_slot, &counts[town_slot])
+		AITownEconomy(w, kingdom, townSlot, &counts[townSlot], brain)
+		AITryCombatBuilding(w, kingdom, townSlot, &counts[townSlot])
 	}
 }
 
@@ -113,8 +113,8 @@ AIKindIsWarrior :: proc(kind: UnitKind) -> bool {
 	return false
 }
 
-AIPendingTo :: proc(w: ^World, kingdom, town_slot: int, to: UnitKind) -> int {
-	town := &w.kingdoms[kingdom].towns[town_slot]
+AIPendingTo :: proc(w: ^World, kingdom, townSlot: int, to: UnitKind) -> int {
+	town := &w.kingdoms[kingdom].towns[townSlot]
 	pending := 0
 	for job in town.conversions {
 		if job.from == .Villager && job.to == to do pending += job.remaining
@@ -122,8 +122,8 @@ AIPendingTo :: proc(w: ^World, kingdom, town_slot: int, to: UnitKind) -> int {
 	return pending
 }
 
-AIPendingMilitary :: proc(w: ^World, kingdom, town_slot: int) -> int {
-	town := &w.kingdoms[kingdom].towns[town_slot]
+AIPendingMilitary :: proc(w: ^World, kingdom, townSlot: int) -> int {
+	town := &w.kingdoms[kingdom].towns[townSlot]
 	pending := 0
 	for job in town.conversions {
 		if job.from == .Villager && AIKindIsWarrior(job.to) do pending += job.remaining
@@ -131,26 +131,26 @@ AIPendingMilitary :: proc(w: ^World, kingdom, town_slot: int) -> int {
 	return pending
 }
 
-AIQueueConversion :: proc(w: ^World, kingdom, town_slot: int, kind: UnitKind) -> bool {
-	if !TownUnitAvailable(w, kingdom, town_slot, kind) do return false
+AIQueueConversion :: proc(w: ^World, kingdom, townSlot: int, kind: UnitKind) -> bool {
+	if !TownUnitAvailable(w, kingdom, townSlot, kind) do return false
 	return KingdomIssueCommand(
 		w,
 		kingdom,
-		CommandQueueConversion{town = town_slot, from = .Villager, to = kind, count = 1},
+		CommandQueueConversion{town = townSlot, from = .Villager, to = kind, count = 1},
 	)
 }
 
-AIWaterCollectorTarget :: proc(w: ^World, kingdom, town_slot: int) -> int {
-	town := &w.kingdoms[kingdom].towns[town_slot]
-	collector_output := TownWaterCollectorOutput(TownWaterAccess(w, kingdom, town_slot))
-	if collector_output <= 0.001 do return 0
+AIWaterCollectorTarget :: proc(w: ^World, kingdom, townSlot: int) -> int {
+	town := &w.kingdoms[kingdom].towns[townSlot]
+	collectorOutput := TownWaterCollectorOutput(TownWaterAccess(w, kingdom, townSlot))
+	if collectorOutput <= 0.001 do return 0
 	need := f32(town.citizens)*0.025
-	target := int(math.ceil(need/collector_output))
+	target := int(math.ceil(need/collectorOutput))
 	return clamp(target, 1, max(1, town.citizens/4))
 }
 
-AIFarmerTarget :: proc(w: ^World, kingdom, town_slot: int) -> int {
-	town := &w.kingdoms[kingdom].towns[town_slot]
+AIFarmerTarget :: proc(w: ^World, kingdom, townSlot: int) -> int {
+	town := &w.kingdoms[kingdom].towns[townSlot]
 	target := int(math.ceil(f32(town.citizens)*0.25))
 	if town.foodShortage > 0.5 do target += 1
 	// The old ten-farmer ceiling cannot feed the late growth eras. Let the
@@ -158,11 +158,11 @@ AIFarmerTarget :: proc(w: ^World, kingdom, town_slot: int) -> int {
 	return clamp(target, 1, max(10, town.citizens/4))
 }
 
-AIMilitaryTarget :: proc(w: ^World, kingdom, town_slot: int, brain: ^AIBrain) -> int {
-	town := &w.kingdoms[kingdom].towns[town_slot]
+AIMilitaryTarget :: proc(w: ^World, kingdom, townSlot: int, brain: ^AIBrain) -> int {
+	town := &w.kingdoms[kingdom].towns[townSlot]
 	economy := clamp(1+town.citizens/12, 1, 3)+
-		AIFarmerTarget(w, kingdom, town_slot)+
-		AIWaterCollectorTarget(w, kingdom, town_slot)
+		AIFarmerTarget(w, kingdom, townSlot)+
+		AIWaterCollectorTarget(w, kingdom, townSlot)
 	target := max(3, town.citizens-economy)
 	if brain.aggression > 0.65 do target += max(1, town.citizens/8)
 	if KingdomHasWar(w, kingdom) do target += 3
@@ -170,27 +170,27 @@ AIMilitaryTarget :: proc(w: ^World, kingdom, town_slot: int, brain: ^AIBrain) ->
 	return clamp(target, 3, 24)
 }
 
-AIChooseWarriorKind :: proc(w: ^World, kingdom, town_slot: int) -> (UnitKind, bool) {
+AIChooseWarriorKind :: proc(w: ^World, kingdom, townSlot: int) -> (UnitKind, bool) {
 	candidates: [len(UnitKind)]UnitKind
 	count := 0
 	for kind in ALL_UNIT_KINDS {
 		if !AIKindIsWarrior(kind) do continue
-		if !TownUnitAvailable(w, kingdom, town_slot, kind) do continue
+		if !TownUnitAvailable(w, kingdom, townSlot, kind) do continue
 		candidates[count] = kind
 		count += 1
 	}
 	if count == 0 do return .Villager, false
-	roll := AIRandom(w, kingdom, 100+town_slot*7)
+	roll := AIRandom(w, kingdom, 100+townSlot*7)
 	return candidates[int(roll*f32(count))%count], true
 }
 
 AITownEconomy :: proc(
 	w: ^World,
-	kingdom, town_slot: int,
+	kingdom, townSlot: int,
 	counts: ^[UnitKind]int,
 	brain: ^AIBrain,
 ) {
-	town := &w.kingdoms[kingdom].towns[town_slot]
+	town := &w.kingdoms[kingdom].towns[townSlot]
 	if town.citizens <= 0 do return
 
 	committed := 0
@@ -201,106 +201,106 @@ AITownEconomy :: proc(
 	// Villagers drive growth, so the economy only spends the part above a
 	// half-population reserve. The military is allowed to draw deeper when the
 	// kingdom is at war or its army target is far behind.
-	economy_reserve := max(2, town.citizens/2)
-	military_reserve := max(2, town.citizens/4)
+	economyReserve := max(2, town.citizens/2)
+	militaryReserve := max(2, town.citizens/4)
 	// Keep a full settler party at home so the town can still pay the next
 	// charter instead of converting every villager into a job.
 	if KingdomFreeTownSlot(w, kingdom) >= 0 {
-		economy_reserve = max(economy_reserve, TOWN_FOUNDING_SETTLERS)
-		military_reserve = max(military_reserve, TOWN_FOUNDING_SETTLERS)
+		economyReserve = max(economyReserve, TOWN_FOUNDING_SETTLERS)
+		militaryReserve = max(militaryReserve, TOWN_FOUNDING_SETTLERS)
 	}
-	economy_allowed := available > economy_reserve
-	military_allowed := available > military_reserve
-	if !economy_allowed && !military_allowed do return
+	economyAllowed := available > economyReserve
+	militaryAllowed := available > militaryReserve
+	if !economyAllowed && !militaryAllowed do return
 
-	builders_target := clamp(1+town.citizens/12, 1, 3)
-	farmer_target := AIFarmerTarget(w, kingdom, town_slot)
-	water_target := AIWaterCollectorTarget(w, kingdom, town_slot)
+	buildersTarget := clamp(1+town.citizens/12, 1, 3)
+	farmerTarget := AIFarmerTarget(w, kingdom, townSlot)
+	waterTarget := AIWaterCollectorTarget(w, kingdom, townSlot)
 	military := 0
 	for kind in ALL_UNIT_KINDS {
 		if AIKindIsWarrior(kind) do military += counts[kind]
 	}
-	military_target := AIMilitaryTarget(w, kingdom, town_slot, brain)
+	militaryTarget := AIMilitaryTarget(w, kingdom, townSlot, brain)
 
 	// Early essentials first, then a small army, then the rest of the economy.
-	builder_count := counts[.Builder]+AIPendingTo(w, kingdom, town_slot, .Builder)
-	if economy_allowed && builder_count < 1 {
-		if AIQueueConversion(w, kingdom, town_slot, .Builder) do return
+	builderCount := counts[.Builder]+AIPendingTo(w, kingdom, townSlot, .Builder)
+	if economyAllowed && builderCount < 1 {
+		if AIQueueConversion(w, kingdom, townSlot, .Builder) do return
 	}
-	farmer_count := counts[.Farmer]+AIPendingTo(w, kingdom, town_slot, .Farmer)
-	if economy_allowed && farmer_count < 1 {
-		if AIQueueConversion(w, kingdom, town_slot, .Farmer) do return
+	farmerCount := counts[.Farmer]+AIPendingTo(w, kingdom, townSlot, .Farmer)
+	if economyAllowed && farmerCount < 1 {
+		if AIQueueConversion(w, kingdom, townSlot, .Farmer) do return
 	}
-	water_count := counts[.WaterCollector]+AIPendingTo(w, kingdom, town_slot, .WaterCollector)
-	if economy_allowed && water_target > 0 && water_count < 1 {
-		if AIQueueConversion(w, kingdom, town_slot, .WaterCollector) do return
+	waterCount := counts[.WaterCollector]+AIPendingTo(w, kingdom, townSlot, .WaterCollector)
+	if economyAllowed && waterTarget > 0 && waterCount < 1 {
+		if AIQueueConversion(w, kingdom, townSlot, .WaterCollector) do return
 	}
 
-	early_military := 2
-	if brain.aggression > 0.65 do early_military = 3
-	if military_allowed && military+AIPendingMilitary(w, kingdom, town_slot) < early_military {
-		if kind, ok := AIChooseWarriorKind(w, kingdom, town_slot); ok {
-			if AIQueueConversion(w, kingdom, town_slot, kind) do return
+	earlyMilitary := 2
+	if brain.aggression > 0.65 do earlyMilitary = 3
+	if militaryAllowed && military+AIPendingMilitary(w, kingdom, townSlot) < earlyMilitary {
+		if kind, ok := AIChooseWarriorKind(w, kingdom, townSlot); ok {
+			if AIQueueConversion(w, kingdom, townSlot, kind) do return
 		}
 	}
 
-	if economy_allowed && builder_count < builders_target {
-		if AIQueueConversion(w, kingdom, town_slot, .Builder) do return
+	if economyAllowed && builderCount < buildersTarget {
+		if AIQueueConversion(w, kingdom, townSlot, .Builder) do return
 	}
-	if economy_allowed && farmer_count < farmer_target {
-		if AIQueueConversion(w, kingdom, town_slot, .Farmer) do return
+	if economyAllowed && farmerCount < farmerTarget {
+		if AIQueueConversion(w, kingdom, townSlot, .Farmer) do return
 	}
-	if economy_allowed && water_target > 0 && water_count < water_target {
-		if AIQueueConversion(w, kingdom, town_slot, .WaterCollector) do return
+	if economyAllowed && waterTarget > 0 && waterCount < waterTarget {
+		if AIQueueConversion(w, kingdom, townSlot, .WaterCollector) do return
 	}
 
 	// Fill whichever role is furthest behind its target. This keeps a growing
 	// army from being starved by the constantly growing economy targets.
-	best_priority: f32 = 0
-	best_role: UnitKind = .Villager
-	best_military := false
+	bestPriority: f32 = 0
+	bestRole: UnitKind = .Villager
+	bestMilitary := false
 
-	if builders_target > 0 && builder_count < builders_target && economy_allowed {
-		priority := f32(builders_target-builder_count)/f32(builders_target)
-		if priority > best_priority {
-			best_priority = priority
-			best_role = .Builder
+	if buildersTarget > 0 && builderCount < buildersTarget && economyAllowed {
+		priority := f32(buildersTarget-builderCount)/f32(buildersTarget)
+		if priority > bestPriority {
+			bestPriority = priority
+			bestRole = .Builder
 		}
 	}
-	if farmer_target > 0 && farmer_count < farmer_target && economy_allowed {
-		priority := f32(farmer_target-farmer_count)/f32(farmer_target)
-		if priority > best_priority {
-			best_priority = priority
-			best_role = .Farmer
+	if farmerTarget > 0 && farmerCount < farmerTarget && economyAllowed {
+		priority := f32(farmerTarget-farmerCount)/f32(farmerTarget)
+		if priority > bestPriority {
+			bestPriority = priority
+			bestRole = .Farmer
 		}
 	}
-	if water_target > 0 && water_count < water_target && economy_allowed {
-		priority := f32(water_target-water_count)/f32(water_target)
-		if priority > best_priority {
-			best_priority = priority
-			best_role = .WaterCollector
+	if waterTarget > 0 && waterCount < waterTarget && economyAllowed {
+		priority := f32(waterTarget-waterCount)/f32(waterTarget)
+		if priority > bestPriority {
+			bestPriority = priority
+			bestRole = .WaterCollector
 		}
 	}
-	military_count := military+AIPendingMilitary(w, kingdom, town_slot)
-	if military_allowed && military_count < military_target {
-		priority := f32(military_target-military_count)/f32(military_target)
-		if priority > best_priority {
-			best_priority = priority
-			best_military = true
+	militaryCount := military+AIPendingMilitary(w, kingdom, townSlot)
+	if militaryAllowed && militaryCount < militaryTarget {
+		priority := f32(militaryTarget-militaryCount)/f32(militaryTarget)
+		if priority > bestPriority {
+			bestPriority = priority
+			bestMilitary = true
 		}
-	}
-
-	if best_military {
-		if kind, ok := AIChooseWarriorKind(w, kingdom, town_slot); ok {
-			if AIQueueConversion(w, kingdom, town_slot, kind) do return
-		}
-	} else if best_role != .Villager {
-		if AIQueueConversion(w, kingdom, town_slot, best_role) do return
 	}
 
-	if _, wanted := AICombatBuildingChoice(w, kingdom, town_slot); wanted {
-		if counts[.CombatBuilder]+AIPendingTo(w, kingdom, town_slot, .CombatBuilder) < 1 {
-			_ = AIQueueConversion(w, kingdom, town_slot, .CombatBuilder)
+	if bestMilitary {
+		if kind, ok := AIChooseWarriorKind(w, kingdom, townSlot); ok {
+			if AIQueueConversion(w, kingdom, townSlot, kind) do return
+		}
+	} else if bestRole != .Villager {
+		if AIQueueConversion(w, kingdom, townSlot, bestRole) do return
+	}
+
+	if _, wanted := AICombatBuildingChoice(w, kingdom, townSlot); wanted {
+		if counts[.CombatBuilder]+AIPendingTo(w, kingdom, townSlot, .CombatBuilder) < 1 {
+			_ = AIQueueConversion(w, kingdom, townSlot, .CombatBuilder)
 		}
 	}
 }
@@ -315,43 +315,43 @@ MilestoneOptionWarriorWeight :: proc(option: MilestoneOption) -> int {
 
 AIChooseMilestoneOption :: proc(
 	w: ^World,
-	kingdom, town_slot: int,
+	kingdom, townSlot: int,
 	brain: ^AIBrain,
 ) -> int {
-	town := &w.kingdoms[kingdom].towns[town_slot]
+	town := &w.kingdoms[kingdom].towns[townSlot]
 	if town.milestonesChosen >= TOWN_MILESTONE_TIER_COUNT do return 0
 
-	option_a := TOWN_ERA_REWARDS[town.milestonesChosen][0]
-	option_b := TOWN_ERA_REWARDS[town.milestonesChosen][1]
-	weight_a := MilestoneOptionWarriorWeight(option_a)
-	weight_b := MilestoneOptionWarriorWeight(option_b)
+	optionA := TOWN_ERA_REWARDS[town.milestonesChosen][0]
+	optionB := TOWN_ERA_REWARDS[town.milestonesChosen][1]
+	weightA := MilestoneOptionWarriorWeight(optionA)
+	weightB := MilestoneOptionWarriorWeight(optionB)
 
 	prefer := 0
 	if brain.aggression > 0.55 {
-		if weight_b > weight_a do prefer = 1
+		if weightB > weightA do prefer = 1
 	} else {
-		if weight_a > weight_b do prefer = 1
+		if weightA > weightB do prefer = 1
 	}
-	if AIRandom(w, kingdom, 211+town_slot*13) < 0.18 do prefer = 1-prefer
+	if AIRandom(w, kingdom, 211+townSlot*13) < 0.18 do prefer = 1-prefer
 	return prefer
 }
 
-AICombatBuildingChoice :: proc(w: ^World, kingdom, town_slot: int) -> (BuildingKind, bool) {
-	town := &w.kingdoms[kingdom].towns[town_slot]
+AICombatBuildingChoice :: proc(w: ^World, kingdom, townSlot: int) -> (BuildingKind, bool) {
+	town := &w.kingdoms[kingdom].towns[townSlot]
 	kinds := [2]BuildingKind{.Watchtower, .Cannon}
 	for kind in kinds {
 		if !(kind in town.unlockedBuildings) do continue
 		if town.buildingCounts[kind] > 0 do continue
-		if AICombatSitePending(w, kingdom, town_slot, kind) do continue
+		if AICombatSitePending(w, kingdom, townSlot, kind) do continue
 		return kind, true
 	}
 	return .Wall, false
 }
 
-AICombatSitePending :: proc(w: ^World, kingdom, town_slot: int, kind: BuildingKind) -> bool {
+AICombatSitePending :: proc(w: ^World, kingdom, townSlot: int, kind: BuildingKind) -> bool {
 	for slot in 0 ..< COMBAT_SITE_CAPACITY {
 		if !w.combatSiteUsed[slot] do continue
-		if w.combatSites.kingdom[slot] != kingdom || w.combatSites.town[slot] != town_slot {
+		if w.combatSites.kingdom[slot] != kingdom || w.combatSites.town[slot] != townSlot {
 			continue
 		}
 		if w.combatSites.kind[slot] == kind do return true
@@ -361,28 +361,28 @@ AICombatSitePending :: proc(w: ^World, kingdom, town_slot: int, kind: BuildingKi
 
 AITryCombatBuilding :: proc(
 	w: ^World,
-	kingdom, town_slot: int,
+	kingdom, townSlot: int,
 	counts: ^[UnitKind]int,
 ) {
 	if counts[.CombatBuilder] <= 0 do return
-	kind, wanted := AICombatBuildingChoice(w, kingdom, town_slot)
+	kind, wanted := AICombatBuildingChoice(w, kingdom, townSlot)
 	if !wanted do return
 
-	town := &w.kingdoms[kingdom].towns[town_slot]
+	town := &w.kingdoms[kingdom].towns[townSlot]
 
 	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
-	center_x := f32(town.x)+2
-	center_y := f32(town.y)+2
+	centerX := f32(town.x)+2
+	centerY := f32(town.y)+2
 	for attempt in 0 ..< 12 {
-		angle := WorldNoiseHash(kingdom*17+town_slot, attempt, w.seed+0xC0B1)*6.2831853
+		angle := WorldNoiseHash(kingdom*17+townSlot, attempt, w.seed+0xC0B1)*6.2831853
 		distance := 6+WorldNoiseHash(attempt, kingdom, w.seed+0xC0B2)*7
-		x := WorldWrapCoordinate(int(center_x+math.cos(angle)*distance)-width/2, int(w.maxX))
-		y := WorldWrapCoordinate(int(center_y+math.sin(angle)*distance)-height/2, int(w.maxY))
-		if TownCombatConstructionFailure(w, kingdom, town_slot, kind, x, y) != .None do continue
+		x := WorldWrapCoordinate(int(centerX+math.cos(angle)*distance)-width/2, int(w.maxX))
+		y := WorldWrapCoordinate(int(centerY+math.sin(angle)*distance)-height/2, int(w.maxY))
+		if TownCombatConstructionFailure(w, kingdom, townSlot, kind, x, y) != .None do continue
 		if KingdomIssueCommand(
 			w,
 			kingdom,
-			CommandBuildCombat{town = town_slot, kind = kind, x = x, y = y},
+			CommandBuildCombat{town = townSlot, kind = kind, x = x, y = y},
 		) {
 			return
 		}
@@ -391,18 +391,18 @@ AITryCombatBuilding :: proc(
 
 AITownCount :: proc(w: ^World, kingdom: int) -> int {
 	count := 0
-	for town_slot in 0 ..< TOWN_CAPACITY {
-		if w.kingdoms[kingdom].townUsed[town_slot] do count += 1
+	for townSlot in 0 ..< TOWN_CAPACITY {
+		if w.kingdoms[kingdom].townUsed[townSlot] do count += 1
 	}
 	return count
 }
 
 AIMilitaryCount :: proc(w: ^World, kingdom: int) -> int {
 	count := 0
-	for unit_slot in 0 ..< UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] || w.units[unit_slot].type == nil do continue
-		if w.units[unit_slot].kingdome != kingdom do continue
-		if AIKindIsWarrior(UnitKindOf(w.units[unit_slot].type)) do count += 1
+	for unitSlot in 0 ..< UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil do continue
+		if w.units[unitSlot].kingdome != kingdom do continue
+		if AIKindIsWarrior(UnitKindOf(w.units[unitSlot].type)) do count += 1
 	}
 	return count
 }
@@ -414,33 +414,33 @@ KingdomHasWar :: proc(w: ^World, kingdom: int) -> bool {
 	return false
 }
 
-AINearestTownOf :: proc(w: ^World, kingdom, from_kingdom: int) -> int {
-	if !w.kingdomUsed[from_kingdom] do return -1
-	center_town := w.kingdoms[from_kingdom].capitalSlot
-	if center_town < 0 || !w.kingdoms[from_kingdom].townUsed[center_town] {
-		center_town = -1
-		for town_slot in 0 ..< TOWN_CAPACITY {
-			if w.kingdoms[from_kingdom].townUsed[town_slot] {
-				center_town = town_slot
+AINearestTownOf :: proc(w: ^World, kingdom, fromKingdom: int) -> int {
+	if !w.kingdomUsed[fromKingdom] do return -1
+	centerTown := w.kingdoms[fromKingdom].capitalSlot
+	if centerTown < 0 || !w.kingdoms[fromKingdom].townUsed[centerTown] {
+		centerTown = -1
+		for townSlot in 0 ..< TOWN_CAPACITY {
+			if w.kingdoms[fromKingdom].townUsed[townSlot] {
+				centerTown = townSlot
 				break
 			}
 		}
 	}
-	if center_town < 0 do return -1
-	center := &w.kingdoms[from_kingdom].towns[center_town]
-	center_x := f32(center.x)+2
-	center_y := f32(center.y)+2
+	if centerTown < 0 do return -1
+	center := &w.kingdoms[fromKingdom].towns[centerTown]
+	centerX := f32(center.x)+2
+	centerY := f32(center.y)+2
 	best := -1
-	best_distance: f32 = 0
-	for town_slot in 0 ..< TOWN_CAPACITY {
-		if !w.kingdoms[kingdom].townUsed[town_slot] do continue
-		town := &w.kingdoms[kingdom].towns[town_slot]
-		delta_x := WorldShortestWrappedDelta(f32(town.x)+2-center_x, f32(w.maxX))
-		delta_y := WorldShortestWrappedDelta(f32(town.y)+2-center_y, f32(w.maxY))
-		distance := delta_x*delta_x+delta_y*delta_y
-		if best < 0 || distance < best_distance {
-			best = town_slot
-			best_distance = distance
+	bestDistance: f32 = 0
+	for townSlot in 0 ..< TOWN_CAPACITY {
+		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+		town := &w.kingdoms[kingdom].towns[townSlot]
+		deltaX := WorldShortestWrappedDelta(f32(town.x)+2-centerX, f32(w.maxX))
+		deltaY := WorldShortestWrappedDelta(f32(town.y)+2-centerY, f32(w.maxY))
+		distance := deltaX*deltaX+deltaY*deltaY
+		if best < 0 || distance < bestDistance {
+			best = townSlot
+			bestDistance = distance
 		}
 	}
 	return best
@@ -448,26 +448,26 @@ AINearestTownOf :: proc(w: ^World, kingdom, from_kingdom: int) -> int {
 
 AIPickWarTarget :: proc(
 	w: ^World,
-	kingdom, own_military: int,
-	own_capital_x, own_capital_y: f32,
+	kingdom, ownMilitary: int,
+	ownCapitalX, ownCapitalY: f32,
 	brain: ^AIBrain,
 ) -> int {
 	best := -1
-	best_score: f32 = -1e9
+	bestScore: f32 = -1e9
 	for other in 0 ..< KINGDOMS_CAPACITY {
 		if !KingdomCanDeclareWar(w, kingdom, other) do continue
 		if other == brain.truceKingdom && w.simulationTime < brain.truceUntil do continue
-		target_town := AINearestTownOf(w, other, kingdom)
-		if target_town < 0 do continue
+		targetTown := AINearestTownOf(w, other, kingdom)
+		if targetTown < 0 do continue
 
-		town := &w.kingdoms[other].towns[target_town]
-		delta_x := WorldShortestWrappedDelta(f32(town.x)+2-own_capital_x, f32(w.maxX))
-		delta_y := WorldShortestWrappedDelta(f32(town.y)+2-own_capital_y, f32(w.maxY))
-		distance := math.sqrt(delta_x*delta_x+delta_y*delta_y)
-		score := f32(own_military)-f32(AIMilitaryCount(w, other))*1.1-
+		town := &w.kingdoms[other].towns[targetTown]
+		deltaX := WorldShortestWrappedDelta(f32(town.x)+2-ownCapitalX, f32(w.maxX))
+		deltaY := WorldShortestWrappedDelta(f32(town.y)+2-ownCapitalY, f32(w.maxY))
+		distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
+		score := f32(ownMilitary)-f32(AIMilitaryCount(w, other))*1.1-
 			f32(AITownCount(w, other))*4-distance*0.18+WorldNoiseHash(kingdom, other, w.seed+0xA17)*4
-		if score > best_score {
-			best_score = score
+		if score > bestScore {
+			bestScore = score
 			best = other
 		}
 	}
@@ -478,78 +478,78 @@ AIDiplomacy :: proc(w: ^World, kingdom: int) {
 	if w.simulationTime < AI_ATTACK_GRACE_SECONDS do return
 
 	brain := &w.controllers[kingdom].ai
-	own_military := AIMilitaryCount(w, kingdom)
-	own_towns := AITownCount(w, kingdom)
-	if own_towns <= 0 do return
+	ownMilitary := AIMilitaryCount(w, kingdom)
+	ownTowns := AITownCount(w, kingdom)
+	if ownTowns <= 0 do return
 
-	war_count := 0
-	best_war_enemy := -1
+	warCount := 0
+	bestWarEnemy := -1
 	for other in 0 ..< KINGDOMS_CAPACITY {
 		if !KingdomAtWar(w, kingdom, other) do continue
-		war_count += 1
-		if best_war_enemy < 0 do best_war_enemy = other
+		warCount += 1
+		if bestWarEnemy < 0 do bestWarEnemy = other
 	}
 
 	// Keep pressure on current enemies: each town sends its share of warriors
 	// toward the nearest surviving enemy town.
 	for other in 0 ..< KINGDOMS_CAPACITY {
 		if !KingdomAtWar(w, kingdom, other) do continue
-		target_town := AINearestTownOf(w, other, kingdom)
-		if target_town < 0 do continue
-		for town_slot in 0 ..< TOWN_CAPACITY {
-			if !w.kingdoms[kingdom].townUsed[town_slot] do continue
-			town := &w.kingdoms[kingdom].towns[town_slot]
+		targetTown := AINearestTownOf(w, other, kingdom)
+		if targetTown < 0 do continue
+		for townSlot in 0 ..< TOWN_CAPACITY {
+			if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+			town := &w.kingdoms[kingdom].towns[townSlot]
 			if town.orderCount >= 3 do continue
 			KingdomIssueCommand(
 				w,
 				kingdom,
 				CommandAttackTown{
-					town = town_slot,
-					target_kingdom = other,
-					target_town = target_town,
+					town = townSlot,
+					targetKingdom = other,
+					targetTown = targetTown,
 				},
 			)
 		}
 	}
 
 	// A losing or cautious kingdom sues for peace.
-	if war_count > 0 && best_war_enemy >= 0 && w.simulationTime > brain.warCommitUntil &&
-		(brain.aggression < 0.55 || own_military*2 < AIMilitaryCount(w, best_war_enemy)) {
+	if warCount > 0 && bestWarEnemy >= 0 && w.simulationTime > brain.warCommitUntil &&
+		(brain.aggression < 0.55 || ownMilitary*2 < AIMilitaryCount(w, bestWarEnemy)) {
 		roll := AIRandom(w, kingdom, 307)
 		if roll < 0.35 {
-			KingdomIssueCommand(w, kingdom, CommandMakePeace{other = best_war_enemy})
-			brain.truceKingdom = best_war_enemy
+			KingdomIssueCommand(w, kingdom, CommandMakePeace{other = bestWarEnemy})
+			brain.truceKingdom = bestWarEnemy
 			brain.truceUntil = w.simulationTime+AI_TRUCE_SECONDS
 			return
 		}
 	}
 
-	max_wars := 1
-	if brain.aggression > 0.65 do max_wars = 2
-	if war_count >= max_wars do return
+	maxWars := 1
+	if brain.aggression > 0.65 do maxWars = 2
+	if warCount >= maxWars do return
 	if w.simulationTime < brain.truceUntil do return
 
-	capital_town := w.kingdoms[kingdom].capitalSlot
-	if capital_town < 0 || !w.kingdoms[kingdom].townUsed[capital_town] do return
-	capital := &w.kingdoms[kingdom].towns[capital_town]
-	target := AIPickWarTarget(w, kingdom, own_military, f32(capital.x)+2, f32(capital.y)+2, brain)
+	capitalTown := w.kingdoms[kingdom].capitalSlot
+	if capitalTown < 0 || !w.kingdoms[kingdom].townUsed[capitalTown] do return
+	capital := &w.kingdoms[kingdom].towns[capitalTown]
+	target := AIPickWarTarget(w, kingdom, ownMilitary, f32(capital.x)+2, f32(capital.y)+2, brain)
 	if target < 0 do return
-	min_attack := 3+own_towns
-	if brain.aggression > 0.65 do min_attack = 2+own_towns
-	if own_military < min_attack do return
+	minAttack := 3+ownTowns
+	if brain.aggression > 0.65 do minAttack = 2+ownTowns
+	if ownMilitary < minAttack do return
 	roll := AIRandom(w, kingdom, 311)
 	if roll > 0.30+brain.aggression*0.55 do return
 
-	target_town := AINearestTownOf(w, target, kingdom)
-	if target_town < 0 do return
+	targetTown := AINearestTownOf(w, target, kingdom)
+	if targetTown < 0 do return
 	attacked := false
-	for town_slot in 0 ..< TOWN_CAPACITY {
-		if !w.kingdoms[kingdom].townUsed[town_slot] do continue
-		if w.kingdoms[kingdom].towns[town_slot].orderCount >= 1 do continue
+	for townSlot in 0 ..< TOWN_CAPACITY {
+		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+		if w.kingdoms[kingdom].towns[townSlot].orderCount >= 1 do continue
 		if KingdomIssueCommand(
 			w,
 			kingdom,
-			CommandAttackTown{town = town_slot, target_kingdom = target, target_town = target_town},
+			CommandAttackTown{town = townSlot, targetKingdom = target, targetTown = targetTown},
 		) {
 			attacked = true
 		}
@@ -559,34 +559,34 @@ AIDiplomacy :: proc(w: ^World, kingdom: int) {
 
 AIExpand :: proc(w: ^World, kingdom: int) {
 	brain := &w.controllers[kingdom].ai
-	max_towns := 6+int(brain.expansion*6)
-	if AITownCount(w, kingdom) >= max_towns do return
+	maxTowns := 6+int(brain.expansion*6)
+	if AITownCount(w, kingdom) >= maxTowns do return
 
-	for town_slot in 0 ..< TOWN_CAPACITY {
-		if !w.kingdoms[kingdom].townUsed[town_slot] do continue
-		town := &w.kingdoms[kingdom].towns[town_slot]
+	for townSlot in 0 ..< TOWN_CAPACITY {
+		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+		town := &w.kingdoms[kingdom].towns[townSlot]
 		if town.citizens < TOWN_FOUNDING_MIN_CITIZENS do continue
 		if town.wood < TownFoundingWoodCost(w, kingdom) do continue
-		if TownUnitCount(w, kingdom, town_slot, .Villager) < TOWN_FOUNDING_SETTLERS do continue
+		if TownUnitCount(w, kingdom, townSlot, .Villager) < TOWN_FOUNDING_SETTLERS do continue
 		if town.constructionActive && town.construction.kind == .TownHall do continue
-		if TownUnitCount(w, kingdom, town_slot, .Builder) <= 0 do continue
+		if TownUnitCount(w, kingdom, townSlot, .Builder) <= 0 do continue
 		if KingdomFreeTownSlot(w, kingdom) < 0 do continue
-		if AIFoundTownAt(w, kingdom, town_slot) do return
+		if AIFoundTownAt(w, kingdom, townSlot) do return
 	}
 }
 
-AIFoundTownAt :: proc(w: ^World, kingdom, town_slot: int) -> bool {
-	town := &w.kingdoms[kingdom].towns[town_slot]
+AIFoundTownAt :: proc(w: ^World, kingdom, townSlot: int) -> bool {
+	town := &w.kingdoms[kingdom].towns[townSlot]
 	for attempt in 0 ..< 32 {
-		angle := WorldNoiseHash(kingdom*31+town_slot, attempt, w.seed+0xF0D)*6.2831853
+		angle := WorldNoiseHash(kingdom*31+townSlot, attempt, w.seed+0xF0D)*6.2831853
 		distance := f32(TOWN_FOUNDING_MIN_DISTANCE)+2+
 			WorldNoiseHash(attempt, kingdom, w.seed+0xF0E)*28
-		center_x := f32(town.x)+2+math.cos(angle)*distance
-		center_y := f32(town.y)+2+math.sin(angle)*distance
-		x := WorldWrapCoordinate(int(center_x)-2, int(w.maxX))
-		y := WorldWrapCoordinate(int(center_y)-2, int(w.maxY))
-		if TownFoundingFailure(w, kingdom, town_slot, x, y) != .None do continue
-		if KingdomIssueCommand(w, kingdom, CommandFoundTown{town = town_slot, x = x, y = y}) {
+		centerX := f32(town.x)+2+math.cos(angle)*distance
+		centerY := f32(town.y)+2+math.sin(angle)*distance
+		x := WorldWrapCoordinate(int(centerX)-2, int(w.maxX))
+		y := WorldWrapCoordinate(int(centerY)-2, int(w.maxY))
+		if TownFoundingFailure(w, kingdom, townSlot, x, y) != .None do continue
+		if KingdomIssueCommand(w, kingdom, CommandFoundTown{town = townSlot, x = x, y = y}) {
 			return true
 		}
 	}

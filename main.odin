@@ -11,8 +11,8 @@ main :: proc() {
 	defer AppDeinit(&app)
 
 	for !rl.WindowShouldClose() && !app.quitRequested {
-		delta_time := rl.GetFrameTime()
-		AppUpdate(&app, delta_time)
+		deltaTime := rl.GetFrameTime()
+		AppUpdate(&app, deltaTime)
 
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.Color{20, 22, 28, 255})

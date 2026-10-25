@@ -729,30 +729,38 @@ UnitDefaultRange :: proc(type: UnitType) -> f32 {
 	unreachable()
 }
 
-UnitDefaultVision :: proc(type: UnitType) -> f32 {
+// Vision lost once the world is fully dark. Enough to matter at night, but
+// units still react to anything close by.
+UNIT_NIGHT_VISION_FACTOR :: 0.75
+
+UnitDefaultVision :: proc(type: UnitType, isNight: bool) -> f32 {
+	vision: f32 = 0
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
-		return 30
+		vision = 30
 	case CombatBuilder:
-		return 24
+		vision = 24
 	case Knight:
-		return 25
+		vision = 25
 	case Archer:
-		return 30
+		vision = 30
 	case Mage:
-		return 30
+		vision = 30
 	case Giant:
-		return 40
+		vision = 40
 	case Turtle:
-		return 30
+		vision = 30
 	case Catapult:
-		return 35
+		vision = 35
 	case Rogue:
-		return 30
+		vision = 30
 	case Explorer:
-		return 34
+		vision = 34
 	}
-	unreachable()
+	// Night trims vision without blacking it out: a noticeable loss that still
+	// leaves units aware of things close by.
+	if isNight do vision *= UNIT_NIGHT_VISION_FACTOR
+	return vision
 }
 
 // Enemy-detection radius used by combat AI. A unit may react before it can
@@ -872,12 +880,12 @@ UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
 }
 
 // Shared initialization for spawning and for in-place conversions.
-UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
-	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
-	UnitSleepWake(w, unit_slot)
-	unit := &w.units[unit_slot]
+UnitTypeInit :: proc(w: ^World, unitSlot: int, type: UnitType) {
+	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return
+	UnitSleepWake(w, unitSlot)
+	unit := &w.units[unitSlot]
 	if state, converting := unit.state.(StateConverting); converting && state.inside {
-		SpatialUnitMove(w, unit_slot)
+		SpatialUnitMove(w, unitSlot)
 	}
 	if unit.burning > 0 {
 		unit.burning = 0
@@ -904,25 +912,25 @@ UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
 		unit.state = StatePacific.Roaming
 	case Knight:
 		unit.type = Knight{}
-		unit.state = StateWarriorInit(unit_slot, unit.kingdome, unit.town)
+		unit.state = StateWarriorInit(unitSlot, unit.kingdome, unit.town)
 	case Archer:
 		unit.type = Archer{}
-		unit.state = StateWarriorInit(unit_slot, unit.kingdome, unit.town)
+		unit.state = StateWarriorInit(unitSlot, unit.kingdome, unit.town)
 	case Mage:
 		unit.type = Mage{}
-		unit.state = StateWarriorInit(unit_slot, unit.kingdome, unit.town)
+		unit.state = StateWarriorInit(unitSlot, unit.kingdome, unit.town)
 	case Giant:
 		unit.type = Giant{}
-		unit.state = StateWarriorInit(unit_slot, unit.kingdome, unit.town)
+		unit.state = StateWarriorInit(unitSlot, unit.kingdome, unit.town)
 	case Turtle:
 		unit.type = Turtle{}
-		unit.state = StateWarriorInit(unit_slot, unit.kingdome, unit.town)
+		unit.state = StateWarriorInit(unitSlot, unit.kingdome, unit.town)
 	case Catapult:
 		unit.type = Catapult{}
-		unit.state = StateWarriorInit(unit_slot, unit.kingdome, unit.town)
+		unit.state = StateWarriorInit(unitSlot, unit.kingdome, unit.town)
 	case Rogue:
 		unit.type = Rogue{}
-		unit.state = StateWarriorInit(unit_slot, unit.kingdome, unit.town)
+		unit.state = StateWarriorInit(unitSlot, unit.kingdome, unit.town)
 	case Explorer:
 		unit.type = Explorer{tripsLeft = 3}
 		unit.state = StatePacific.Roaming
@@ -932,39 +940,39 @@ UnitTypeInit :: proc(w: ^World, unit_slot: int, type: UnitType) {
 	unit.jumpStarted = -WALL_JUMP_SECONDS
 }
 
-UnitSetType :: proc(w: ^World, unit_slot: int, kind: UnitKind) {
-	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return
-	unit := &w.units[unit_slot]
+UnitSetType :: proc(w: ^World, unitSlot: int, kind: UnitKind) {
+	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return
+	unit := &w.units[unitSlot]
 	if WorldTownExists(w, unit.kingdome, unit.town) &&
 		(UnitIsWarrior(unit.type) || UnitKindOf(unit.type) == .CombatBuilder ||
 		kind == .CombatBuilder || UnitIsWarrior(UnitTypeFromKind(kind))) {
 		w.kingdoms[unit.kingdome].towns[unit.town].orderRevision += 1
 	}
-	UnitTypeInit(w, unit_slot, UnitTypeFromKind(kind))
+	UnitTypeInit(w, unitSlot, UnitTypeFromKind(kind))
 }
 
-UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> bool {
-	unit_index, exists := UnitGet(w, unit_slot)
-	if !exists || delta_time < 0 do return false
+UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32) -> bool {
+	unitIndex, exists := UnitGet(w, unitSlot)
+	if !exists || deltaTime < 0 do return false
 
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return false
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return false
 
-	unit := &w.units[unit_index]
-	unit_x := WorldWrapPosition(unit.x, f32(world_width))
-	unit_y := WorldWrapPosition(unit.y, f32(world_height))
-	target_x := WorldWrapCoordinate(goal_x, world_width)
-	target_y := WorldWrapCoordinate(goal_y, world_height)
+	unit := &w.units[unitIndex]
+	unitX := WorldWrapPosition(unit.x, f32(worldWidth))
+	unitY := WorldWrapPosition(unit.y, f32(worldHeight))
+	targetX := WorldWrapCoordinate(goalX, worldWidth)
+	targetY := WorldWrapCoordinate(goalY, worldHeight)
 
-	needs_path := !unit.pathReady || unit.pathTargetX != target_x ||
-		unit.pathTargetY != target_y || unit.pathRevision != w.navigationRevision
-	if needs_path {
-		start_x := WorldWrapCoordinate(int(unit_x), world_width)
-		start_y := WorldWrapCoordinate(int(unit_y), world_height)
-		unit.pathFound = AStar(w, unit.type, unit.kingdome, start_x, start_y, target_x, target_y, &unit.path)
-		unit.pathTargetX = target_x
-		unit.pathTargetY = target_y
+	needsPath := !unit.pathReady || unit.pathTargetX != targetX ||
+		unit.pathTargetY != targetY || unit.pathRevision != w.navigationRevision
+	if needsPath {
+		startX := WorldWrapCoordinate(int(unitX), worldWidth)
+		startY := WorldWrapCoordinate(int(unitY), worldHeight)
+		unit.pathFound = AStar(w, unit.type, unit.kingdome, startX, startY, targetX, targetY, &unit.path)
+		unit.pathTargetX = targetX
+		unit.pathTargetY = targetY
 		unit.pathRevision = w.navigationRevision
 		unit.pathReady = true
 		unit.pathIndex = 1
@@ -972,61 +980,61 @@ UnitMove :: proc(w: ^World, unit_slot, goal_x, goal_y: int, delta_time: f32) -> 
 	}
 	if !unit.pathFound do return false
 
-	speed := UnitMoveSpeed(w, unit_slot, UnitDefaultSpeed(unit.type))
+	speed := UnitMoveSpeed(w, unitSlot, UnitDefaultSpeed(unit.type))
 
-	remaining := speed * delta_time
+	remaining := speed * deltaTime
 	if remaining < 0 do remaining = 0
 	for unit.pathIndex < len(unit.path) {
 		waypoint := unit.path[unit.pathIndex]
-		destination_x := f32(waypoint/world_height) + 0.5
-		destination_y := f32(waypoint%world_height) + 0.5
-		delta_x := WorldShortestWrappedDelta(destination_x-unit_x, f32(world_width))
-		delta_y := WorldShortestWrappedDelta(destination_y-unit_y, f32(world_height))
-		reached_waypoint := true
+		destinationX := f32(waypoint/worldHeight) + 0.5
+		destinationY := f32(waypoint%worldHeight) + 0.5
+		deltaX := WorldShortestWrappedDelta(destinationX-unitX, f32(worldWidth))
+		deltaY := WorldShortestWrappedDelta(destinationY-unitY, f32(worldHeight))
+		reachedWaypoint := true
 
-		if delta_x != 0 {
-			distance_x := delta_x
-			if distance_x < 0 do distance_x = -distance_x
-			if remaining >= distance_x {
-				unit_x = WorldWrapPosition(unit_x+delta_x, f32(world_width))
-				remaining -= distance_x
+		if deltaX != 0 {
+			distanceX := deltaX
+			if distanceX < 0 do distanceX = -distanceX
+			if remaining >= distanceX {
+				unitX = WorldWrapPosition(unitX+deltaX, f32(worldWidth))
+				remaining -= distanceX
 			} else if remaining > 0 {
 				step := remaining
-				if delta_x < 0 do step = -step
-				unit_x = WorldWrapPosition(unit_x+step, f32(world_width))
+				if deltaX < 0 do step = -step
+				unitX = WorldWrapPosition(unitX+step, f32(worldWidth))
 				remaining = 0
-				reached_waypoint = false
+				reachedWaypoint = false
 			} else {
-				reached_waypoint = false
+				reachedWaypoint = false
 			}
 		}
 
-		if delta_y != 0 {
-			distance_y := delta_y
-			if distance_y < 0 do distance_y = -distance_y
-			if remaining >= distance_y {
-				unit_y = WorldWrapPosition(unit_y+delta_y, f32(world_height))
-				remaining -= distance_y
+		if deltaY != 0 {
+			distanceY := deltaY
+			if distanceY < 0 do distanceY = -distanceY
+			if remaining >= distanceY {
+				unitY = WorldWrapPosition(unitY+deltaY, f32(worldHeight))
+				remaining -= distanceY
 			} else if remaining > 0 {
 				step := remaining
-				if delta_y < 0 do step = -step
-				unit_y = WorldWrapPosition(unit_y+step, f32(world_height))
+				if deltaY < 0 do step = -step
+				unitY = WorldWrapPosition(unitY+step, f32(worldHeight))
 				remaining = 0
-				reached_waypoint = false
+				reachedWaypoint = false
 			} else {
-				reached_waypoint = false
+				reachedWaypoint = false
 			}
 		}
 
-		if WorldTileFriendlyWall(w, int(unit_x), int(unit_y), unit.kingdome) {
+		if WorldTileFriendlyWall(w, int(unitX), int(unitY), unit.kingdome) {
 			unit.jumpStarted = w.simulationTime
 		}
-		if !reached_waypoint do break
+		if !reachedWaypoint do break
 		unit.pathIndex += 1
 	}
 
-	unit.x = unit_x
-	unit.y = unit_y
-	SpatialUnitMove(w, unit_slot)
+	unit.x = unitX
+	unit.y = unitY
+	SpatialUnitMove(w, unitSlot)
 	return unit.pathIndex >= len(unit.path)
 }

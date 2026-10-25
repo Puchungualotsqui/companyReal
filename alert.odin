@@ -23,11 +23,11 @@ Alert :: struct {
 	kingdom:    int,
 	town:       int,
 	other:      int,
-	town_name:  Name,
-	other_name: Name,
+	townName:  Name,
+	otherName: Name,
 	x, y:       f32,
 	time:       f32,
-	real_time:  f64,
+	realTime:  f64,
 	amount:     int,
 	total:      int,
 }
@@ -42,16 +42,16 @@ AlertFeed :: struct {
 WorldAlertPush :: proc(w: ^World, alert: Alert) -> ^Alert {
 	slot := w.alerts.next
 	entry := alert
-	entry.real_time = rl.GetTime()
+	entry.realTime = rl.GetTime()
 	w.alerts.items[slot] = entry
 
 	if entry.town >= 0 && entry.town < TOWN_CAPACITY &&
 		entry.kingdom >= 0 && entry.kingdom < KINGDOMS_CAPACITY {
-		w.alerts.items[slot].town_name = w.kingdoms[entry.kingdom].towns[entry.town].name
+		w.alerts.items[slot].townName = w.kingdoms[entry.kingdom].towns[entry.town].name
 	}
 	if entry.kind == .TownFused && entry.other >= 0 && entry.other < TOWN_CAPACITY &&
 		entry.kingdom >= 0 && entry.kingdom < KINGDOMS_CAPACITY {
-		w.alerts.items[slot].other_name = w.kingdoms[entry.kingdom].towns[entry.other].name
+		w.alerts.items[slot].otherName = w.kingdoms[entry.kingdom].towns[entry.other].name
 	}
 
 	w.alerts.next = (w.alerts.next+1)%ALERT_CAPACITY
@@ -98,12 +98,12 @@ WorldAlertAddGrowth :: proc(w: ^World, kingdom, town, amount, total: int) {
 		if alert.kind != .TownGrowth || alert.kingdom != kingdom || alert.town != town do continue
 		alert.amount += amount
 		alert.total = total
-		alert.real_time = now
+		alert.realTime = now
 		alert.time = w.simulationTime
 		return
 	}
 
-	town_ref := &w.kingdoms[kingdom].towns[town]
+	townRef := &w.kingdoms[kingdom].towns[town]
 	WorldAlertPush(
 		w,
 		Alert{
@@ -111,8 +111,8 @@ WorldAlertAddGrowth :: proc(w: ^World, kingdom, town, amount, total: int) {
 			kingdom = kingdom,
 			town = town,
 			other = -1,
-			x = f32(town_ref.x),
-			y = f32(town_ref.y),
+			x = f32(townRef.x),
+			y = f32(townRef.y),
 			time = w.simulationTime,
 			amount = amount,
 			total = total,
@@ -140,7 +140,7 @@ WorldAlertPrune :: proc(w: ^World) {
 	for index in 0..<w.alerts.count {
 		alert, found := WorldAlertNewest(w, index)
 		if !found do continue
-		if now-alert.real_time >= ALERT_LIFETIME_SECONDS do continue
+		if now-alert.realTime >= ALERT_LIFETIME_SECONDS do continue
 		survivors[count] = alert
 		count += 1
 	}
@@ -156,13 +156,13 @@ WorldAlertPrune :: proc(w: ^World) {
 	w.alerts.next = count%ALERT_CAPACITY
 }
 
-WorldAlertDismiss :: proc(w: ^World, newest_index: int) {
-	if newest_index < 0 || newest_index >= w.alerts.count do return
+WorldAlertDismiss :: proc(w: ^World, newestIndex: int) {
+	if newestIndex < 0 || newestIndex >= w.alerts.count do return
 
 	survivors: [ALERT_CAPACITY]Alert
 	count := 0
 	for index in 0..<w.alerts.count {
-		if index == newest_index do continue
+		if index == newestIndex do continue
 		alert, found := WorldAlertNewest(w, index)
 		if !found do continue
 		survivors[count] = alert

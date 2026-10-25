@@ -134,7 +134,7 @@ UI_FONT_BODY_DATA :: #load("assets/fonts/PixelifySans-Regular.ttf")
 UI_FONT_TITLE_DATA :: #load("assets/fonts/PixelifySans-Bold.ttf")
 
 @(private = "file")
-ui_fonts: struct {
+uiFonts: struct {
 	body, title, menu: rl.Font,
 	loaded:             bool,
 }
@@ -143,25 +143,25 @@ ui_fonts: struct {
 // atlas is thresholded to hard alpha edges before it is used. The image keeps
 // its native layout because UpdateTexture reinterprets the raw bytes.
 @(private = "file")
-ui_font_crisp :: proc(font: ^rl.Font) {
+UIFontCrisp :: proc(font: ^rl.Font) {
 	image := rl.LoadImageFromTexture(font.texture)
 	defer rl.UnloadImage(image)
 	pixels := cast([^]u8)image.data
-	pixel_count := int(image.width)*int(image.height)
+	pixelCount := int(image.width)*int(image.height)
 
 	#partial switch image.format {
 	case .UNCOMPRESSED_GRAY_ALPHA:
-		for index in 0 ..< pixel_count {
+		for index in 0 ..< pixelCount {
 			alpha := &pixels[index*2+1]
 			alpha^ = alpha^ < 128 ? 0 : 255
 		}
 	case .UNCOMPRESSED_GRAYSCALE:
-		for index in 0 ..< pixel_count {
+		for index in 0 ..< pixelCount {
 			value := &pixels[index]
 			value^ = value^ < 128 ? 0 : 255
 		}
 	case .UNCOMPRESSED_R8G8B8A8:
-		for index in 0 ..< pixel_count {
+		for index in 0 ..< pixelCount {
 			alpha := &pixels[index*4+3]
 			alpha^ = alpha^ < 128 ? 0 : 255
 		}
@@ -172,64 +172,64 @@ ui_font_crisp :: proc(font: ^rl.Font) {
 }
 
 @(private = "file")
-ui_font_load :: proc(data: []u8, size: i32) -> rl.Font {
+UIFontLoad :: proc(data: []u8, size: i32) -> rl.Font {
 	font := rl.LoadFontFromMemory(".ttf", raw_data(data), i32(len(data)), size, nil, 0)
 	if font.texture.id == 0 do return rl.GetFontDefault()
-	ui_font_crisp(&font)
+	UIFontCrisp(&font)
 	rl.SetTextureFilter(font.texture, .POINT)
 	return font
 }
 
 @(private = "file")
-ui_font_init :: proc() {
-	if ui_fonts.loaded do return
-	ui_fonts.body = ui_font_load(UI_FONT_BODY_DATA, i32(UI_TEXT_SIZE))
-	ui_fonts.title = ui_font_load(UI_FONT_TITLE_DATA, i32(UI_TITLE_SIZE))
-	ui_fonts.menu = ui_font_load(UI_FONT_TITLE_DATA, 56)
-	ui_fonts.loaded = true
+UIFontInit :: proc() {
+	if uiFonts.loaded do return
+	uiFonts.body = UIFontLoad(UI_FONT_BODY_DATA, i32(UI_TEXT_SIZE))
+	uiFonts.title = UIFontLoad(UI_FONT_TITLE_DATA, i32(UI_TITLE_SIZE))
+	uiFonts.menu = UIFontLoad(UI_FONT_TITLE_DATA, 56)
+	uiFonts.loaded = true
 }
 
-ui_font :: proc() -> rl.Font {
-	ui_font_init()
-	return ui_fonts.body
+UIFont :: proc() -> rl.Font {
+	UIFontInit()
+	return uiFonts.body
 }
 
-ui_title_font :: proc() -> rl.Font {
-	ui_font_init()
-	return ui_fonts.title
+UITitleFont :: proc() -> rl.Font {
+	UIFontInit()
+	return uiFonts.title
 }
 
-ui_menu_font :: proc() -> rl.Font {
-	ui_font_init()
-	return ui_fonts.menu
+UIMenuFont :: proc() -> rl.Font {
+	UIFontInit()
+	return uiFonts.menu
 }
 
 WorldUIDeinit :: proc() {
-	if !ui_fonts.loaded do return
+	if !uiFonts.loaded do return
 	// A failed load falls back to the shared default font, which must not be freed.
-	default_texture := rl.GetFontDefault().texture.id
-	if ui_fonts.body.texture.id != default_texture do rl.UnloadFont(ui_fonts.body)
-	if ui_fonts.title.texture.id != default_texture do rl.UnloadFont(ui_fonts.title)
-	if ui_fonts.menu.texture.id != default_texture do rl.UnloadFont(ui_fonts.menu)
-	ui_fonts = {}
+	defaultTexture := rl.GetFontDefault().texture.id
+	if uiFonts.body.texture.id != defaultTexture do rl.UnloadFont(uiFonts.body)
+	if uiFonts.title.texture.id != defaultTexture do rl.UnloadFont(uiFonts.title)
+	if uiFonts.menu.texture.id != defaultTexture do rl.UnloadFont(uiFonts.menu)
+	uiFonts = {}
 }
 
-ui_text :: proc(text: cstring, x, y: f32, color: rl.Color) {
-	rl.DrawTextEx(ui_font(), text, rl.Vector2{x, y}, UI_TEXT_SIZE, 1, color)
+UIText :: proc(text: cstring, x, y: f32, color: rl.Color) {
+	rl.DrawTextEx(UIFont(), text, rl.Vector2{x, y}, UI_TEXT_SIZE, 1, color)
 }
 
-ui_title :: proc(text: cstring, x, y: f32, color: rl.Color) {
-	rl.DrawTextEx(ui_title_font(), text, rl.Vector2{x, y}, UI_TITLE_SIZE, 1, color)
+UITitle :: proc(text: cstring, x, y: f32, color: rl.Color) {
+	rl.DrawTextEx(UITitleFont(), text, rl.Vector2{x, y}, UI_TITLE_SIZE, 1, color)
 }
 
-ui_text_right :: proc(text: cstring, right, y: f32, color: rl.Color) {
-	width := rl.MeasureTextEx(ui_font(), text, UI_TEXT_SIZE, 1).x
-	rl.DrawTextEx(ui_font(), text, rl.Vector2{right-width, y}, UI_TEXT_SIZE, 1, color)
+UITextRight :: proc(text: cstring, right, y: f32, color: rl.Color) {
+	width := rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x
+	rl.DrawTextEx(UIFont(), text, rl.Vector2{right-width, y}, UI_TEXT_SIZE, 1, color)
 }
 
-ui_text_center :: proc(text: cstring, center_x, y: f32, color: rl.Color) {
-	width := rl.MeasureTextEx(ui_font(), text, UI_TEXT_SIZE, 1).x
-	rl.DrawTextEx(ui_font(), text, rl.Vector2{center_x-width*0.5, y}, UI_TEXT_SIZE, 1, color)
+UITextCenter :: proc(text: cstring, centerX, y: f32, color: rl.Color) {
+	width := rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x
+	rl.DrawTextEx(UIFont(), text, rl.Vector2{centerX-width*0.5, y}, UI_TEXT_SIZE, 1, color)
 }
 
 UIUnitName :: proc(kind: UnitKind) -> cstring {
@@ -495,46 +495,46 @@ UISelectionPlayerTownHall :: proc(w: ^World, selection: Selection) -> bool {
 
 // --- war orders -----------------------------------------------------------
 
-UIAttackOrderValid :: proc(w: ^World, kingdom, town, target_kingdom, target_town: int) -> bool {
-	if kingdom == target_kingdom do return false
-	if !WorldTownExists(w, kingdom, town) || !WorldTownExists(w, target_kingdom, target_town) {
+UIAttackOrderValid :: proc(w: ^World, kingdom, town, targetKingdom, targetTown: int) -> bool {
+	if kingdom == targetKingdom do return false
+	if !WorldTownExists(w, kingdom, town) || !WorldTownExists(w, targetKingdom, targetTown) {
 		return false
 	}
-	if !FogTownDiscovered(w, target_kingdom, target_town) do return false
-	if w.kingdoms[kingdom].towns[town].attackOrders[target_kingdom][target_town] {
+	if !FogTownDiscovered(w, targetKingdom, targetTown) do return false
+	if w.kingdoms[kingdom].towns[town].attackOrders[targetKingdom][targetTown] {
 		return false
 	}
-	return TownHallSlot(w, target_kingdom, target_town) >= 0
+	return TownHallSlot(w, targetKingdom, targetTown) >= 0
 }
 
-UIDefendOrderValid :: proc(w: ^World, kingdom, town, target_kingdom, target_town: int) -> bool {
-	if kingdom == target_kingdom && town == target_town do return false
-	if !WorldTownExists(w, kingdom, town) || !WorldTownExists(w, target_kingdom, target_town) {
+UIDefendOrderValid :: proc(w: ^World, kingdom, town, targetKingdom, targetTown: int) -> bool {
+	if kingdom == targetKingdom && town == targetTown do return false
+	if !WorldTownExists(w, kingdom, town) || !WorldTownExists(w, targetKingdom, targetTown) {
 		return false
 	}
-	if !FogTownDiscovered(w, target_kingdom, target_town) do return false
-	if KingdomAtWar(w, kingdom, target_kingdom) do return false
-	if w.kingdoms[kingdom].towns[town].defendOrders[target_kingdom][target_town] do return false
-	return TownHallSlot(w, target_kingdom, target_town) >= 0
+	if !FogTownDiscovered(w, targetKingdom, targetTown) do return false
+	if KingdomAtWar(w, kingdom, targetKingdom) do return false
+	if w.kingdoms[kingdom].towns[town].defendOrders[targetKingdom][targetTown] do return false
+	return TownHallSlot(w, targetKingdom, targetTown) >= 0
 }
 
 UIAttackTargetExists :: proc(w: ^World, kingdom, town: int) -> bool {
-	for target_kingdom in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[target_kingdom] do continue
-		for target_town in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[target_kingdom].townUsed[target_town] do continue
-			if UIAttackOrderValid(w, kingdom, town, target_kingdom, target_town) do return true
+	for targetKingdom in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[targetKingdom] do continue
+		for targetTown in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[targetKingdom].townUsed[targetTown] do continue
+			if UIAttackOrderValid(w, kingdom, town, targetKingdom, targetTown) do return true
 		}
 	}
 	return false
 }
 
 UIDefendTargetExists :: proc(w: ^World, kingdom, town: int) -> bool {
-	for target_kingdom in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[target_kingdom] do continue
-		for target_town in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[target_kingdom].townUsed[target_town] do continue
-			if UIDefendOrderValid(w, kingdom, town, target_kingdom, target_town) do return true
+	for targetKingdom in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[targetKingdom] do continue
+		for targetTown in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[targetKingdom].townUsed[targetTown] do continue
+			if UIDefendOrderValid(w, kingdom, town, targetKingdom, targetTown) do return true
 		}
 	}
 	return false
@@ -542,9 +542,9 @@ UIDefendTargetExists :: proc(w: ^World, kingdom, town: int) -> bool {
 
 UIFusionTargetExists :: proc(w: ^World, kingdom, town: int) -> bool {
 	if !WorldTownExists(w, kingdom, town) do return false
-	for target_town in 0..<TOWN_CAPACITY {
-		if !w.kingdoms[kingdom].townUsed[target_town] do continue
-		if TownFusionFailure(w, kingdom, town, kingdom, target_town) == .None do return true
+	for targetTown in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdom].townUsed[targetTown] do continue
+		if TownFusionFailure(w, kingdom, town, kingdom, targetTown) == .None do return true
 	}
 	return false
 }
@@ -554,17 +554,17 @@ UITownOrderCount :: proc(w: ^World, kingdom, town: int) -> int {
 	if !WorldTownExists(w, kingdom, town) do return 0
 	orders := &w.kingdoms[kingdom].towns[town]
 	count := 0
-	for target_kingdom in 0..<KINGDOMS_CAPACITY {
-		for target_town in 0..<TOWN_CAPACITY {
-			if !orders.attackOrders[target_kingdom][target_town] do continue
-			if WorldTownExists(w, target_kingdom, target_town) do count += 1
+	for targetKingdom in 0..<KINGDOMS_CAPACITY {
+		for targetTown in 0..<TOWN_CAPACITY {
+			if !orders.attackOrders[targetKingdom][targetTown] do continue
+			if WorldTownExists(w, targetKingdom, targetTown) do count += 1
 		}
 	}
-	for protected_kingdom in 0..<KINGDOMS_CAPACITY {
-		for protected_town in 0..<TOWN_CAPACITY {
-			if !orders.defendOrders[protected_kingdom][protected_town] do continue
-			if !WorldTownExists(w, protected_kingdom, protected_town) do continue
-			if protected_kingdom == kingdom && protected_town == town do continue
+	for protectedKingdom in 0..<KINGDOMS_CAPACITY {
+		for protectedTown in 0..<TOWN_CAPACITY {
+			if !orders.defendOrders[protectedKingdom][protectedTown] do continue
+			if !WorldTownExists(w, protectedKingdom, protectedTown) do continue
+			if protectedKingdom == kingdom && protectedTown == town do continue
 			count += 1
 		}
 	}
@@ -572,24 +572,24 @@ UITownOrderCount :: proc(w: ^World, kingdom, town: int) -> int {
 }
 
 // Orders are listed attacks first, then defends.
-UITownOrderAt :: proc(w: ^World, kingdom, town, index: int) -> (attack: bool, target_kingdom, target_town: int, ok: bool) {
+UITownOrderAt :: proc(w: ^World, kingdom, town, index: int) -> (attack: bool, targetKingdom, targetTown: int, ok: bool) {
 	if !WorldTownExists(w, kingdom, town) do return false, -1, -1, false
 	orders := &w.kingdoms[kingdom].towns[town]
 	count := 0
-	for other_kingdom in 0..<KINGDOMS_CAPACITY {
-		for other_town in 0..<TOWN_CAPACITY {
-			if !orders.attackOrders[other_kingdom][other_town] do continue
-			if !WorldTownExists(w, other_kingdom, other_town) do continue
-			if count == index do return true, other_kingdom, other_town, true
+	for otherKingdom in 0..<KINGDOMS_CAPACITY {
+		for otherTown in 0..<TOWN_CAPACITY {
+			if !orders.attackOrders[otherKingdom][otherTown] do continue
+			if !WorldTownExists(w, otherKingdom, otherTown) do continue
+			if count == index do return true, otherKingdom, otherTown, true
 			count += 1
 		}
 	}
-	for protected_kingdom in 0..<KINGDOMS_CAPACITY {
-		for protected_town in 0..<TOWN_CAPACITY {
-			if !orders.defendOrders[protected_kingdom][protected_town] do continue
-			if !WorldTownExists(w, protected_kingdom, protected_town) do continue
-			if protected_kingdom == kingdom && protected_town == town do continue
-			if count == index do return false, protected_kingdom, protected_town, true
+	for protectedKingdom in 0..<KINGDOMS_CAPACITY {
+		for protectedTown in 0..<TOWN_CAPACITY {
+			if !orders.defendOrders[protectedKingdom][protectedTown] do continue
+			if !WorldTownExists(w, protectedKingdom, protectedTown) do continue
+			if protectedKingdom == kingdom && protectedTown == town do continue
+			if count == index do return false, protectedKingdom, protectedTown, true
 			count += 1
 		}
 	}
@@ -602,11 +602,11 @@ UITownOrderAt :: proc(w: ^World, kingdom, town, index: int) -> (attack: bool, ta
 UIMilestoneTown :: proc(w: ^World) -> (kingdom, town: int, pending: bool) {
 	local := WorldLocalKingdom(w)
 	if local < 0 do return -1, -1, false
-	for town_slot in 0..<TOWN_CAPACITY {
-		if !w.kingdoms[local].townUsed[town_slot] do continue
-		t := &w.kingdoms[local].towns[town_slot]
+	for townSlot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[local].townUsed[townSlot] do continue
+		t := &w.kingdoms[local].towns[townSlot]
 		if t.milestonePending && t.milestonesChosen < TOWN_MILESTONE_TIER_COUNT {
-			return local, town_slot, true
+			return local, townSlot, true
 		}
 	}
 	return -1, -1, false
@@ -632,15 +632,15 @@ UIMilestoneCameraTarget :: proc(w: ^World, kingdom, town: int) -> (rl.Vector2, b
 // centred while its rewards are chosen, and teleport back to the pre-milestone
 // view when nothing is left pending. If another town is queued, pan to it
 // without giving the view back first.
-WorldMilestoneCameraUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32) {
+WorldMilestoneCameraUpdate :: proc(w: ^World, view: ^WorldView, deltaTime: f32) {
 	camera := &view.camera
-	cam := &view.milestone_camera
+	cam := &view.milestoneCamera
 	kingdom, town, pending := UIMilestoneTown(w)
 
 	if !pending {
 		if cam.active {
-			camera.target = cam.return_target
-			camera.zoom = cam.return_zoom
+			camera.target = cam.returnTarget
+			camera.zoom = cam.returnZoom
 			cam^ = {}
 		}
 		return
@@ -649,8 +649,8 @@ WorldMilestoneCameraUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32)
 	target, found := UIMilestoneCameraTarget(w, kingdom, town)
 	if !found {
 		if cam.active {
-			camera.target = cam.return_target
-			camera.zoom = cam.return_zoom
+			camera.target = cam.returnTarget
+			camera.zoom = cam.returnZoom
 			cam^ = {}
 		}
 		return
@@ -658,8 +658,8 @@ WorldMilestoneCameraUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32)
 
 	if !cam.active {
 		cam.active = true
-		cam.return_target = camera.target
-		cam.return_zoom = camera.zoom
+		cam.returnTarget = camera.target
+		cam.returnZoom = camera.zoom
 		cam.kingdom = kingdom
 		cam.town = town
 		cam.start = camera.target
@@ -678,7 +678,7 @@ WorldMilestoneCameraUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32)
 	}
 
 	if cam.panning {
-		cam.elapsed += delta_time
+		cam.elapsed += deltaTime
 		t := clamp(cam.elapsed/cam.duration, 0, 1)
 		smooth := t*t*(3-2*t)
 		camera.target.x = cam.start.x+(cam.target.x-cam.start.x)*smooth
@@ -694,9 +694,9 @@ WorldMilestoneCameraUpdate :: proc(w: ^World, view: ^WorldView, delta_time: f32)
 UIMilestoneRect :: proc() -> rl.Rectangle {
 	width: f32 = 620
 	height: f32 = 340
-	screen_width := f32(rl.GetScreenWidth())
-	screen_height := f32(rl.GetScreenHeight())
-	return rl.Rectangle{(screen_width-width)*0.5, (screen_height-height)*0.5, width, height}
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
+	return rl.Rectangle{(screenWidth-width)*0.5, (screenHeight-height)*0.5, width, height}
 }
 
 UI_MILESTONE_SHARED_H :: 64
@@ -708,24 +708,24 @@ UIMilestoneSharedRewards :: proc(
 ) -> (
 	units: bit_set[UnitKind],
 	unlocks: bit_set[BuildingKind],
-	has_shared: bool,
+	hasShared: bool,
 ) {
-	option_a, ok_a := TownMilestoneOption(w, kingdom, town, 0)
-	option_b, ok_b := TownMilestoneOption(w, kingdom, town, 1)
-	if !ok_a || !ok_b do return
+	optionA, okA := TownMilestoneOption(w, kingdom, town, 0)
+	optionB, okB := TownMilestoneOption(w, kingdom, town, 1)
+	if !okA || !okB do return
 
-	units = option_a.units & option_b.units
-	unlocks = option_a.unlocks & option_b.unlocks
+	units = optionA.units & optionB.units
+	unlocks = optionA.unlocks & optionB.unlocks
 	for kind in UnitKind {
 		if kind in units {
-			has_shared = true
+			hasShared = true
 			break
 		}
 	}
-	if !has_shared {
+	if !hasShared {
 		for kind in BuildingKind {
 			if kind in unlocks {
-				has_shared = true
+				hasShared = true
 				break
 			}
 		}
@@ -734,14 +734,14 @@ UIMilestoneSharedRewards :: proc(
 }
 
 UIMilestoneCardRects :: proc(w: ^World, kingdom, town: int, modal: rl.Rectangle) -> [2]rl.Rectangle {
-	card_width := (modal.width-3*UI_PAD)*0.5
+	cardWidth := (modal.width-3*UI_PAD)*0.5
 	top := modal.y+82
-	_, _, has_shared := UIMilestoneSharedRewards(w, kingdom, town)
-	if has_shared do top += UI_MILESTONE_SHARED_H
+	_, _, hasShared := UIMilestoneSharedRewards(w, kingdom, town)
+	if hasShared do top += UI_MILESTONE_SHARED_H
 	height := modal.height-(top-modal.y)-UI_PAD
 	return [2]rl.Rectangle{
-		{modal.x+UI_PAD, top, card_width, height},
-		{modal.x+2*UI_PAD+card_width, top, card_width, height},
+		{modal.x+UI_PAD, top, cardWidth, height},
+		{modal.x+2*UI_PAD+cardWidth, top, cardWidth, height},
 	}
 }
 
@@ -782,11 +782,11 @@ UIStatCount :: proc(w: ^World, selection: Selection) -> int {
 	return 0
 }
 
-UIUnitEffectCount :: proc(w: ^World, unit_slot: int) -> int {
-	if unit_slot < 0 || unit_slot >= UNIT_CAPACITY || !w.unitUsed[unit_slot] do return 0
+UIUnitEffectCount :: proc(w: ^World, unitSlot: int) -> int {
+	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return 0
 	count := 0
 	for effect in ALL_UNIT_EFFECTS {
-		if w.units[unit_slot].effects[effect] do count += 1
+		if w.units[unitSlot].effects[effect] do count += 1
 	}
 	return count
 }
@@ -818,8 +818,8 @@ UIPanelHeight :: proc(w: ^World, ui: ^UIState) -> f32 {
 
 UIPanelRect :: proc(w: ^World, ui: ^UIState) -> rl.Rectangle {
 	height := UIPanelHeight(w, ui)
-	screen_height := f32(rl.GetScreenHeight())
-	y := max(UI_MARGIN, screen_height-height-UI_MARGIN)
+	screenHeight := f32(rl.GetScreenHeight())
+	y := max(UI_MARGIN, screenHeight-height-UI_MARGIN)
 	return rl.Rectangle{UI_MARGIN, y, UI_PANEL_WIDTH, height}
 }
 
@@ -827,7 +827,7 @@ UITabRects :: proc(panel: rl.Rectangle) -> [2]rl.Rectangle {
 	rects: [2]rl.Rectangle
 	x := panel.x+UI_PAD
 	for label, index in UI_TOWN_TABS {
-		width := rl.MeasureTextEx(ui_font(), label, UI_TEXT_SIZE, 1).x+20
+		width := rl.MeasureTextEx(UIFont(), label, UI_TEXT_SIZE, 1).x+20
 		rects[index] = rl.Rectangle{x, panel.y+UI_TABS_Y, width, UI_TABS_H}
 		x += width+2
 	}
@@ -835,8 +835,8 @@ UITabRects :: proc(panel: rl.Rectangle) -> [2]rl.Rectangle {
 }
 
 UIButtonRects :: proc(panel: rl.Rectangle, index: int) -> (minus, plus: rl.Rectangle) {
-	row_y := panel.y+UI_ROWS_TOP+f32(index)*UI_ROW_HEIGHT
-	plus = rl.Rectangle{panel.x+panel.width-UI_PAD-UI_BUTTON, row_y+8, UI_BUTTON, UI_BUTTON}
+	rowY := panel.y+UI_ROWS_TOP+f32(index)*UI_ROW_HEIGHT
+	plus = rl.Rectangle{panel.x+panel.width-UI_PAD-UI_BUTTON, rowY+8, UI_BUTTON, UI_BUTTON}
 	minus = rl.Rectangle{plus.x-UI_BUTTON-4, plus.y, UI_BUTTON, UI_BUTTON}
 	return
 }
@@ -846,10 +846,10 @@ UIOrdersPanelHeight :: proc(orders: int) -> f32 {
 }
 
 UIOrderCancelRect :: proc(panel: rl.Rectangle, index: int) -> rl.Rectangle {
-	row_y := panel.y+UI_ROWS_TOP+UI_SECTION_HEADER+f32(index)*UI_ROW_HEIGHT
+	rowY := panel.y+UI_ROWS_TOP+UI_SECTION_HEADER+f32(index)*UI_ROW_HEIGHT
 	return rl.Rectangle{
 		panel.x+panel.width-UI_PAD-72,
-		row_y+(UI_ROW_HEIGHT-UI_TEXT_BUTTON_H)*0.5,
+		rowY+(UI_ROW_HEIGHT-UI_TEXT_BUTTON_H)*0.5,
 		72,
 		UI_TEXT_BUTTON_H,
 	}
@@ -942,9 +942,9 @@ UIBuildButtonEnabled :: proc(w: ^World, ui: ^UIState) -> bool {
 
 UIBuildPaletteRects :: proc(w: ^World, kingdom, town: int) -> (rects: [len(UI_COMBAT_BUILD_KINDS)]rl.Rectangle, kinds: [len(UI_COMBAT_BUILD_KINDS)]BuildingKind, count: int) {
 	if !WorldTownExists(w, kingdom, town) do return
-	town_data := &w.kingdoms[kingdom].towns[town]
+	townData := &w.kingdoms[kingdom].towns[town]
 	for kind in UI_COMBAT_BUILD_KINDS {
-		if !(kind in town_data.unlockedBuildings) do continue
+		if !(kind in townData.unlockedBuildings) do continue
 		kinds[count] = kind
 		count += 1
 	}
@@ -1053,23 +1053,23 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 	mouse := rl.GetMousePosition()
 
 	// An unresolved milestone takes over input until the player picks a path.
-	if milestone_kingdom, milestone_town, pending := UIMilestoneTown(w); pending {
+	if milestoneKingdom, milestoneTown, pending := UIMilestoneTown(w); pending {
 		ui.hover = {}
 		ui.command = .Inspect
 		if rl.IsMouseButtonPressed(.LEFT) {
-			UIMilestoneClick(w, milestone_kingdom, milestone_town, mouse)
+			UIMilestoneClick(w, milestoneKingdom, milestoneTown, mouse)
 		}
 		return
 	}
 
 	if UIHudUpdate(w, view, mouse) do return
 
-	over_ui := false
+	overUi := false
 
-	build_rect := UIBuildButtonRect()
-	build_visible := UIBuildButtonVisible(w, ui)
-	if build_visible && rl.CheckCollisionPointRec(mouse, build_rect) {
-		over_ui = true
+	buildRect := UIBuildButtonRect()
+	buildVisible := UIBuildButtonVisible(w, ui)
+	if buildVisible && rl.CheckCollisionPointRec(mouse, buildRect) {
+		overUi = true
 		ui.hover = {}
 		if rl.IsMouseButtonPressed(.LEFT) {
 			UIBuildButtonPress(w, ui)
@@ -1080,7 +1080,7 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 		palette, _, count := UIBuildPaletteRects(w, ui.buildKingdom, ui.buildTown)
 		for index in 0..<count {
 			if !rl.CheckCollisionPointRec(mouse, palette[index]) do continue
-			over_ui = true
+			overUi = true
 			ui.hover = {}
 			if rl.IsMouseButtonPressed(.LEFT) {
 				UIBuildPalettePress(w, ui, mouse)
@@ -1090,12 +1090,12 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 	}
 
 	if UISelectionPlayerTownHall(w, ui.selection) {
-		attack_rect, defend_rect, found_rect, fuse_rect := UICommandBarRects()
-		if rl.CheckCollisionPointRec(mouse, attack_rect) ||
-			rl.CheckCollisionPointRec(mouse, defend_rect) ||
-			rl.CheckCollisionPointRec(mouse, found_rect) ||
-			rl.CheckCollisionPointRec(mouse, fuse_rect) {
-			over_ui = true
+		attackRect, defendRect, foundRect, fuseRect := UICommandBarRects()
+		if rl.CheckCollisionPointRec(mouse, attackRect) ||
+			rl.CheckCollisionPointRec(mouse, defendRect) ||
+			rl.CheckCollisionPointRec(mouse, foundRect) ||
+			rl.CheckCollisionPointRec(mouse, fuseRect) {
+			overUi = true
 			ui.hover = {}
 			if rl.IsMouseButtonPressed(.LEFT) {
 				UICommandBarPress(w, ui, mouse)
@@ -1132,7 +1132,7 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 	}
 
 	panel := UIPanelRect(w, ui)
-	if over_ui {
+	if overUi {
 		ui.hover = {}
 	} else if ui.selection.kind != .None && rl.CheckCollisionPointRec(mouse, panel) {
 		ui.hover = {}
@@ -1158,9 +1158,9 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 			ui.command = .Inspect
 			return
 		}
-		tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse)
+		tileX, tileY, ok := UITileAtMouse(w, camera, mouse)
 		if !ok do return
-		if TownCombatConstructionFailure(w, ui.buildKingdom, ui.buildTown, ui.buildKind, tile_x, tile_y) != .None {
+		if TownCombatConstructionFailure(w, ui.buildKingdom, ui.buildTown, ui.buildKind, tileX, tileY) != .None {
 			return
 		}
 		if !rl.IsMouseButtonPressed(.LEFT) do return
@@ -1170,8 +1170,8 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 			CommandBuildCombat{
 				town = ui.buildTown,
 				kind = ui.buildKind,
-				x = tile_x,
-				y = tile_y,
+				x = tileX,
+				y = tileY,
 			},
 		)
 		return
@@ -1184,11 +1184,11 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 			ui.command = .Inspect
 			return
 		}
-		tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse)
+		tileX, tileY, ok := UITileAtMouse(w, camera, mouse)
 		if !ok do return
-		if TownFoundingFailure(w, kingdom, town, tile_x, tile_y) != .None do return
+		if TownFoundingFailure(w, kingdom, town, tileX, tileY) != .None do return
 		if !rl.IsMouseButtonPressed(.LEFT) do return
-		if KingdomIssueCommand(w, kingdom, CommandFoundTown{town = town, x = tile_x, y = tile_y}) {
+		if KingdomIssueCommand(w, kingdom, CommandFoundTown{town = town, x = tileX, y = tileY}) {
 			ui.command = .Inspect
 		}
 		return
@@ -1202,37 +1202,37 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 
 	switch ui.command {
 	case .Attack, .Defend:
-		target_kingdom, target_town, _, found := UIFindTownAt(w, camera, mouse)
+		targetKingdom, targetTown, _, found := UIFindTownAt(w, camera, mouse)
 		if !found do return
-		valid := UIDefendOrderValid(w, kingdom, town, target_kingdom, target_town)
+		valid := UIDefendOrderValid(w, kingdom, town, targetKingdom, targetTown)
 		if ui.command == .Attack {
-			valid = UIAttackOrderValid(w, kingdom, town, target_kingdom, target_town)
+			valid = UIAttackOrderValid(w, kingdom, town, targetKingdom, targetTown)
 		}
 		if !valid || !rl.IsMouseButtonPressed(.LEFT) do return
 		if ui.command == .Attack {
 			KingdomIssueCommand(
 				w,
 				kingdom,
-				CommandAttackTown{town = town, target_kingdom = target_kingdom, target_town = target_town},
+				CommandAttackTown{town = town, targetKingdom = targetKingdom, targetTown = targetTown},
 			)
 		} else {
 			KingdomIssueCommand(
 				w,
 				kingdom,
-				CommandDefendTown{town = town, target_kingdom = target_kingdom, target_town = target_town},
+				CommandDefendTown{town = town, targetKingdom = targetKingdom, targetTown = targetTown},
 			)
 		}
 		ui.command = .Inspect
 
 	case .Fuse:
-		target_kingdom, target_town, _, found := UIFindTownAt(w, camera, mouse)
+		targetKingdom, targetTown, _, found := UIFindTownAt(w, camera, mouse)
 		if !found do return
-		if TownFusionFailure(w, kingdom, town, target_kingdom, target_town) != .None do return
+		if TownFusionFailure(w, kingdom, town, targetKingdom, targetTown) != .None do return
 		if !rl.IsMouseButtonPressed(.LEFT) do return
 		if KingdomIssueCommand(
 			w,
 			kingdom,
-			CommandFuseTown{town = town, target_kingdom = target_kingdom, target_town = target_town},
+			CommandFuseTown{town = town, targetKingdom = targetKingdom, targetTown = targetTown},
 		) {
 			ui.command = .Inspect
 		}
@@ -1268,19 +1268,19 @@ UIOrdersClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Ve
 	orders := UITownOrderCount(w, kingdom, town)
 	for index in 0..<orders {
 		if !rl.CheckCollisionPointRec(mouse, UIOrderCancelRect(panel, index)) do continue
-		attack, target_kingdom, target_town, found := UITownOrderAt(w, kingdom, town, index)
+		attack, targetKingdom, targetTown, found := UITownOrderAt(w, kingdom, town, index)
 		if !found do return
 		if attack {
 			KingdomIssueCommand(
 				w,
 				kingdom,
-				CommandStopAttack{town = town, target_kingdom = target_kingdom, target_town = target_town},
+				CommandStopAttack{town = town, targetKingdom = targetKingdom, targetTown = targetTown},
 			)
 		} else {
 			KingdomIssueCommand(
 				w,
 				kingdom,
-				CommandStopDefend{town = town, target_kingdom = target_kingdom, target_town = target_town},
+				CommandStopDefend{town = town, targetKingdom = targetKingdom, targetTown = targetTown},
 			)
 		}
 		return
@@ -1289,8 +1289,8 @@ UIOrdersClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Ve
 
 UICommandBarPress :: proc(w: ^World, ui: ^UIState, mouse: rl.Vector2) {
 	kingdom, town := UISelectionTown(w, ui.selection)
-	attack_rect, defend_rect, found_rect, fuse_rect := UICommandBarRects()
-	if rl.CheckCollisionPointRec(mouse, attack_rect) {
+	attackRect, defendRect, foundRect, fuseRect := UICommandBarRects()
+	if rl.CheckCollisionPointRec(mouse, attackRect) {
 		if ui.command == .Attack {
 			ui.command = .Inspect
 		} else if UIAttackTargetExists(w, kingdom, town) {
@@ -1299,7 +1299,7 @@ UICommandBarPress :: proc(w: ^World, ui: ^UIState, mouse: rl.Vector2) {
 		ui.hover = {}
 		return
 	}
-	if rl.CheckCollisionPointRec(mouse, defend_rect) {
+	if rl.CheckCollisionPointRec(mouse, defendRect) {
 		if ui.command == .Defend {
 			ui.command = .Inspect
 		} else if UIDefendTargetExists(w, kingdom, town) {
@@ -1308,7 +1308,7 @@ UICommandBarPress :: proc(w: ^World, ui: ^UIState, mouse: rl.Vector2) {
 		ui.hover = {}
 		return
 	}
-	if rl.CheckCollisionPointRec(mouse, found_rect) {
+	if rl.CheckCollisionPointRec(mouse, foundRect) {
 		if ui.command == .Found {
 			ui.command = .Inspect
 		} else if UIFoundButtonEnabled(w, kingdom, town) {
@@ -1317,7 +1317,7 @@ UICommandBarPress :: proc(w: ^World, ui: ^UIState, mouse: rl.Vector2) {
 		ui.hover = {}
 		return
 	}
-	if rl.CheckCollisionPointRec(mouse, fuse_rect) {
+	if rl.CheckCollisionPointRec(mouse, fuseRect) {
 		if ui.command == .Fuse {
 			ui.command = .Inspect
 		} else if UIFusionTargetExists(w, kingdom, town) {
@@ -1327,7 +1327,7 @@ UICommandBarPress :: proc(w: ^World, ui: ^UIState, mouse: rl.Vector2) {
 	}
 }
 
-UITileAtMouse :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> (tile_x, tile_y: int, ok: bool) {
+UITileAtMouse :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> (tileX, tileY: int, ok: bool) {
 	if w.maxX == 0 || w.maxY == 0 do return 0, 0, false
 	world := rl.GetScreenToWorld2D(mouse, camera)
 	return int(WorldWrapPosition(world.x, f32(w.maxX))),
@@ -1349,76 +1349,76 @@ UIMilestoneClick :: proc(w: ^World, kingdom, town: int, mouse: rl.Vector2) {
 UIFindBuildingAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> Selection {
 	world := rl.GetScreenToWorld2D(mouse, camera)
 	if w.maxX == 0 || w.maxY == 0 do return {}
-	tile_x := int(WorldWrapPosition(world.x, f32(w.maxX)))
-	tile_y := int(WorldWrapPosition(world.y, f32(w.maxY)))
-	if tile_x < 0 || tile_x >= int(w.maxX) || tile_y < 0 || tile_y >= int(w.maxY) {
+	tileX := int(WorldWrapPosition(world.x, f32(w.maxX)))
+	tileY := int(WorldWrapPosition(world.y, f32(w.maxY)))
+	if tileX < 0 || tileX >= int(w.maxX) || tileY < 0 || tileY >= int(w.maxY) {
 		return {}
 	}
-	slot := w.tileBuilding[tile_x*int(w.maxY)+tile_y]
+	slot := w.tileBuilding[tileX*int(w.maxY)+tileY]
 	if slot >= 0 && slot < BUILDING_CAPACITY && w.buildingUsed[slot] && FogBuildingVisible(w, slot) {
 		return Selection{kind = .Building, slot = slot}
 	}
 	return {}
 }
 
-UIFindTownAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> (kingdom, town, hall_slot: int, found: bool) {
+UIFindTownAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> (kingdom, town, hallSlot: int, found: bool) {
 	selection := UIFindBuildingAt(w, camera, mouse)
 	if selection.kind == .Building {
 		kingdom = w.buildings[selection.slot].kingdom
 		town = w.buildings[selection.slot].town
 		if !WorldTownExists(w, kingdom, town) do return -1, -1, -1, false
-		hall_slot = TownHallSlot(w, kingdom, town)
-		if hall_slot < 0 do return -1, -1, -1, false
-		return kingdom, town, hall_slot, true
+		hallSlot = TownHallSlot(w, kingdom, town)
+		if hallSlot < 0 do return -1, -1, -1, false
+		return kingdom, town, hallSlot, true
 	}
 
 	// Discovered but currently fogged towns remain valid order targets.
-	tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse)
+	tileX, tileY, ok := UITileAtMouse(w, camera, mouse)
 	if !ok do return -1, -1, -1, false
-	kingdom, town, found = FogFindTownAt(w, tile_x, tile_y)
+	kingdom, town, found = FogFindTownAt(w, tileX, tileY)
 	if !found do return -1, -1, -1, false
-	hall_slot = TownHallSlot(w, kingdom, town)
+	hallSlot = TownHallSlot(w, kingdom, town)
 	return
 }
 
 UIFindAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> Selection {
 	world := rl.GetScreenToWorld2D(mouse, camera)
-	world_width := f32(w.maxX)
-	world_height := f32(w.maxY)
-	px := WorldWrapPosition(world.x, world_width)
-	py := WorldWrapPosition(world.y, world_height)
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	px := WorldWrapPosition(world.x, worldWidth)
+	py := WorldWrapPosition(world.y, worldHeight)
 
-	best_slot := -1
-	best_distance: f32 = 1e9
-	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] do continue
-		if w.units[unit_slot].type == nil do continue
-		if !FogUnitVisible(w, unit_slot) do continue
-		if state, ok := w.units[unit_slot].state.(StateConverting); ok && state.inside {
+	bestSlot := -1
+	bestDistance: f32 = 1e9
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] do continue
+		if w.units[unitSlot].type == nil do continue
+		if !FogUnitVisible(w, unitSlot) do continue
+		if state, ok := w.units[unitSlot].state.(StateConverting); ok && state.inside {
 			continue
 		}
 
-		scale := UnitSpriteScale(UnitKindOf(w.units[unit_slot].type))
-		x, y := UnitRenderPosition(w, unit_slot)
+		scale := UnitSpriteScale(UnitKindOf(w.units[unitSlot].type))
+		x, y := UnitRenderPosition(w, unitSlot)
 		if px < x-scale*0.5 || px > x+scale*0.5 || py < y+0.5-scale || py > y+0.5 {
 			continue
 		}
 		dx := px-x
 		dy := py-y
 		distance := dx*dx+dy*dy
-		if distance < best_distance {
-			best_distance = distance
-			best_slot = unit_slot
+		if distance < bestDistance {
+			bestDistance = distance
+			bestSlot = unitSlot
 		}
 	}
-	if best_slot >= 0 {
-		return Selection{kind = .Unit, slot = best_slot}
+	if bestSlot >= 0 {
+		return Selection{kind = .Unit, slot = bestSlot}
 	}
 
-	tile_x := int(px)
-	tile_y := int(py)
-	if tile_x >= 0 && tile_x < int(w.maxX) && tile_y >= 0 && tile_y < int(w.maxY) {
-		slot := w.tileBuilding[tile_x*int(w.maxY)+tile_y]
+	tileX := int(px)
+	tileY := int(py)
+	if tileX >= 0 && tileX < int(w.maxX) && tileY >= 0 && tileY < int(w.maxY) {
+		slot := w.tileBuilding[tileX*int(w.maxY)+tileY]
 		if slot >= 0 && slot < BUILDING_CAPACITY && w.buildingUsed[slot] && FogBuildingVisible(w, slot) {
 			return Selection{kind = .Building, slot = slot}
 		}
@@ -1481,7 +1481,7 @@ UIConversionClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: r
 
 WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui: ^UIState) {
 	WorldAlertPrune(w)
-	milestone_kingdom, milestone_town, milestone_pending := UIMilestoneTown(w)
+	milestoneKingdom, milestoneTown, milestonePending := UIMilestoneTown(w)
 
 	UIDrawOrderArrows(w, camera, ui.selection)
 	if ui.command == .Attack || ui.command == .Defend || ui.command == .Fuse {
@@ -1498,7 +1498,7 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 
 	panel := UIPanelRect(w, ui)
 	UIDrawPanel(w, renderer, ui, panel)
-	if !milestone_pending {
+	if !milestonePending {
 		UIDrawCommandBar(w, ui)
 		UIDrawBuildButton(w, ui)
 		UIDrawBuildPalette(w, renderer, ui)
@@ -1506,14 +1506,14 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 	UIDrawBuildPreview(w, renderer, camera, ui)
 	UIDrawFoundPreview(w, renderer, camera, ui)
 	UIDrawCommandHint(w, ui, camera)
-	if !milestone_pending {
+	if !milestonePending {
 		UIDrawHud(w, ui)
 		UIDrawSidePanel(w, ui)
 		UIDrawAlerts(w)
 	}
 
-	if milestone_pending {
-		UIDrawMilestone(w, renderer, milestone_kingdom, milestone_town)
+	if milestonePending {
+		UIDrawMilestone(w, renderer, milestoneKingdom, milestoneTown)
 	}
 }
 
@@ -1526,46 +1526,46 @@ UIDrawTownArea :: proc(w: ^World, camera: rl.Camera2D, selection: Selection, fai
 	UIDrawTownAreaFor(w, camera, building.kingdom, building.town, faint)
 }
 
-UIDrawTownAreaFor :: proc(w: ^World, camera: rl.Camera2D, kingdom, town_slot: int, faint: bool) {
-	if !WorldTownExists(w, kingdom, town_slot) do return
+UIDrawTownAreaFor :: proc(w: ^World, camera: rl.Camera2D, kingdom, townSlot: int, faint: bool) {
+	if !WorldTownExists(w, kingdom, townSlot) do return
 
 	accent := FactionColor(w, kingdom)
-	fill_alpha: u8 = faint ? 8 : 24
-	line_alpha: u8 = faint ? 70 : 140
-	fill := rl.Color{accent[0], accent[1], accent[2], fill_alpha}
-	line := rl.Color{accent[0], accent[1], accent[2], line_alpha}
+	fillAlpha: u8 = faint ? 8 : 24
+	lineAlpha: u8 = faint ? 70 : 140
+	fill := rl.Color{accent[0], accent[1], accent[2], fillAlpha}
+	line := rl.Color{accent[0], accent[1], accent[2], lineAlpha}
 	thickness := 1/camera.zoom
 
-	area_min_x, area_max_x, area_min_y, area_max_y := TownAreaBounds(w, kingdom, town_slot)
-	min_x := max(0, area_min_x)
-	max_x := min(int(w.maxX)-1, area_max_x)
-	min_y := max(0, area_min_y)
-	max_y := min(int(w.maxY)-1, area_max_y)
+	areaMinX, areaMaxX, areaMinY, areaMaxY := TownAreaBounds(w, kingdom, townSlot)
+	minX := max(0, areaMinX)
+	maxX := min(int(w.maxX)-1, areaMaxX)
+	minY := max(0, areaMinY)
+	maxY := min(int(w.maxY)-1, areaMaxY)
 
 	// Only iterate tiles that can actually be on screen.
-	half_width := f32(rl.GetScreenWidth())/(2*camera.zoom)
-	half_height := f32(rl.GetScreenHeight())/(2*camera.zoom)
-	min_x = max(min_x, int(camera.target.x-half_width)-1)
-	max_x = min(max_x, int(camera.target.x+half_width)+1)
-	min_y = max(min_y, int(camera.target.y-half_height)-1)
-	max_y = min(max_y, int(camera.target.y+half_height)+1)
-	if min_x > max_x || min_y > max_y do return
+	halfWidth := f32(rl.GetScreenWidth())/(2*camera.zoom)
+	halfHeight := f32(rl.GetScreenHeight())/(2*camera.zoom)
+	minX = max(minX, int(camera.target.x-halfWidth)-1)
+	maxX = min(maxX, int(camera.target.x+halfWidth)+1)
+	minY = max(minY, int(camera.target.y-halfHeight)-1)
+	maxY = min(maxY, int(camera.target.y+halfHeight)+1)
+	if minX > maxX || minY > maxY do return
 
 	rl.BeginMode2D(camera)
-	for x in min_x ..= max_x {
-		for y in min_y ..= max_y {
-			if !TownPointInArea(w, kingdom, town_slot, x, y) do continue
+	for x in minX ..= maxX {
+		for y in minY ..= maxY {
+			if !TownPointInArea(w, kingdom, townSlot, x, y) do continue
 			rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), 1, 1}, fill)
-			if !TownPointInArea(w, kingdom, town_slot, x+1, y) {
+			if !TownPointInArea(w, kingdom, townSlot, x+1, y) {
 				rl.DrawRectangleRec(rl.Rectangle{f32(x)+1-thickness, f32(y), thickness, 1}, line)
 			}
-			if !TownPointInArea(w, kingdom, town_slot, x-1, y) {
+			if !TownPointInArea(w, kingdom, townSlot, x-1, y) {
 				rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), thickness, 1}, line)
 			}
-			if !TownPointInArea(w, kingdom, town_slot, x, y+1) {
+			if !TownPointInArea(w, kingdom, townSlot, x, y+1) {
 				rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y)+1-thickness, 1, thickness}, line)
 			}
-			if !TownPointInArea(w, kingdom, town_slot, x, y-1) {
+			if !TownPointInArea(w, kingdom, townSlot, x, y-1) {
 				rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), 1, thickness}, line)
 			}
 		}
@@ -1651,21 +1651,21 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 	rl.DrawRectangleLinesEx(portrait, 1, UI_COLOR_BORDER_INNER)
 	UIDrawPortrait(w, renderer, ui, portrait)
 
-	title_x := portrait.x+portrait.width+12
+	titleX := portrait.x+portrait.width+12
 	switch ui.selection.kind {
 	case .Unit:
-		ui_title(UIUnitName(UnitKindOf(w.units[ui.selection.slot].type)), title_x, panel.y+10, UI_COLOR_GOLD)
+		UITitle(UIUnitName(UnitKindOf(w.units[ui.selection.slot].type)), titleX, panel.y+10, UI_COLOR_GOLD)
 	case .Building:
 		kind := BuildingKindOf(w.buildings[ui.selection.slot].type)
 		title := UIBuildingName(kind)
 		if kind == .DistrictHall do title = UIDistrictHallName(w, ui.selection.slot)
-		ui_title(title, title_x, panel.y+10, UI_COLOR_GOLD)
+		UITitle(title, titleX, panel.y+10, UI_COLOR_GOLD)
 	case .None:
 	}
 	if WorldTownExists(w, kingdom, town) {
-		ui_text(
+		UIText(
 			fmt.ctprintf("%s  -  %s", NameKingdomCString(w, kingdom), NameTownCString(w, kingdom, town)),
-			title_x,
+			titleX,
 			panel.y+48,
 			UI_COLOR_DIM,
 		)
@@ -1673,41 +1673,41 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 
 	switch ui.selection.kind {
 	case .Unit:
-		ui_text(UIUnitDescription(UnitKindOf(w.units[ui.selection.slot].type)), panel.x+UI_PAD, panel.y+UI_DESC_Y, UI_COLOR_TEXT)
+		UIText(UIUnitDescription(UnitKindOf(w.units[ui.selection.slot].type)), panel.x+UI_PAD, panel.y+UI_DESC_Y, UI_COLOR_TEXT)
 	case .Building:
-		ui_text(UIBuildingDescription(BuildingKindOf(w.buildings[ui.selection.slot].type)), panel.x+UI_PAD, panel.y+UI_DESC_Y, UI_COLOR_TEXT)
+		UIText(UIBuildingDescription(BuildingKindOf(w.buildings[ui.selection.slot].type)), panel.x+UI_PAD, panel.y+UI_DESC_Y, UI_COLOR_TEXT)
 	case .None:
 	}
 
 	stats: [8]UIStat
-	stat_count := UIFillStats(w, ui, &stats)
+	statCount := UIFillStats(w, ui, &stats)
 	if UISelectionTownHall(w, ui.selection) {
-		left_label_x := panel.x+UI_PAD
-		left_value_x := panel.x+UI_PAD+170
-		right_label_x := panel.x+UI_PAD+186
-		right_value_x := panel.x+panel.width-UI_PAD
-		for i in 0..<stat_count {
+		leftLabelX := panel.x+UI_PAD
+		leftValueX := panel.x+UI_PAD+170
+		rightLabelX := panel.x+UI_PAD+186
+		rightValueX := panel.x+panel.width-UI_PAD
+		for i in 0..<statCount {
 			column := i/4
 			row := i%4
 			y := panel.y+UI_STAT_Y+f32(row)*UI_STAT_H
-			value_color := stats[i].color
-			if value_color.a == 0 do value_color = UI_COLOR_TEXT
+			valueColor := stats[i].color
+			if valueColor.a == 0 do valueColor = UI_COLOR_TEXT
 			if column == 0 {
-				ui_text(stats[i].label, left_label_x, y, UI_COLOR_DIM)
-				ui_text_right(stats[i].value, left_value_x, y, value_color)
+				UIText(stats[i].label, leftLabelX, y, UI_COLOR_DIM)
+				UITextRight(stats[i].value, leftValueX, y, valueColor)
 			} else {
-				ui_text(stats[i].label, right_label_x, y, UI_COLOR_DIM)
-				ui_text_right(stats[i].value, right_value_x, y, value_color)
+				UIText(stats[i].label, rightLabelX, y, UI_COLOR_DIM)
+				UITextRight(stats[i].value, rightValueX, y, valueColor)
 			}
 		}
 		UIDrawConstructionStatus(w, panel, kingdom, town)
 	} else {
-		for i in 0..<stat_count {
+		for i in 0..<statCount {
 			y := panel.y+UI_STAT_Y+f32(i)*UI_STAT_H
-			value_color := stats[i].color
-			if value_color.a == 0 do value_color = UI_COLOR_TEXT
-			ui_text(stats[i].label, panel.x+UI_PAD, y, UI_COLOR_DIM)
-			ui_text(stats[i].value, panel.x+UI_PAD+104, y, value_color)
+			valueColor := stats[i].color
+			if valueColor.a == 0 do valueColor = UI_COLOR_TEXT
+			UIText(stats[i].label, panel.x+UI_PAD, y, UI_COLOR_DIM)
+			UIText(stats[i].value, panel.x+UI_PAD+104, y, valueColor)
 		}
 	}
 
@@ -1732,16 +1732,16 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 	}
 }
 
-UIDistrictHallName :: proc(w: ^World, building_slot: int) -> cstring {
-	if building_slot < 0 || building_slot >= BUILDING_CAPACITY || !w.buildingUsed[building_slot] {
+UIDistrictHallName :: proc(w: ^World, buildingSlot: int) -> cstring {
+	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] {
 		return "District Hall"
 	}
-	building := w.buildings[building_slot]
+	building := w.buildings[buildingSlot]
 	if BuildingKindOf(building.type) != .DistrictHall do return "District Hall"
 	if !WorldTownExists(w, building.kingdom, building.town) do return "District Hall"
 	town := &w.kingdoms[building.kingdom].towns[building.town]
-	for district_index in 0..<town.districtCount {
-		district := &town.districts[district_index]
+	for districtIndex in 0..<town.districtCount {
+		district := &town.districts[districtIndex]
 		if district.x == building.x && district.y == building.y {
 			return cstring(rawptr(&district.name[0]))
 		}
@@ -1749,25 +1749,25 @@ UIDistrictHallName :: proc(w: ^World, building_slot: int) -> cstring {
 	return "District Hall"
 }
 
-UIHomeOccupant :: proc(w: ^World, home_slot: int) -> int {
-	if home_slot < 0 || home_slot >= BUILDING_CAPACITY || !w.buildingUsed[home_slot] do return -1
-	if BuildingKindOf(w.buildings[home_slot].type) != .Home do return -1
-	resident := w.buildings[home_slot].homeResident-1
-	if UnitInsideHome(w, resident) == home_slot do return resident
+UIHomeOccupant :: proc(w: ^World, homeSlot: int) -> int {
+	if homeSlot < 0 || homeSlot >= BUILDING_CAPACITY || !w.buildingUsed[homeSlot] do return -1
+	if BuildingKindOf(w.buildings[homeSlot].type) != .Home do return -1
+	resident := w.buildings[homeSlot].homeResident-1
+	if UnitInsideHome(w, resident) == homeSlot do return resident
 	return -1
 }
 
-UIDrawHomeOccupant :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, home_slot: int) {
+UIDrawHomeOccupant :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, homeSlot: int) {
 	y := panel.y+UI_STAT_Y+UI_STAT_H+10
-	resident := UIHomeOccupant(w, home_slot)
+	resident := UIHomeOccupant(w, homeSlot)
 	if resident < 0 {
-		ui_text("INDOOR OCCUPANT", panel.x+UI_PAD, y, UI_COLOR_DIM)
-		ui_text("No one inside.", panel.x+UI_PAD, y+28, UI_COLOR_DIM)
+		UIText("INDOOR OCCUPANT", panel.x+UI_PAD, y, UI_COLOR_DIM)
+		UIText("No one inside.", panel.x+UI_PAD, y+28, UI_COLOR_DIM)
 		return
 	}
 	label: cstring = "SLEEPING INSIDE"
 	if w.units[resident].state.(StatePacific) == .Hiding do label = "SHELTERING INSIDE"
-	ui_text(label, panel.x+UI_PAD, y, UI_COLOR_DIM)
+	UIText(label, panel.x+UI_PAD, y, UI_COLOR_DIM)
 	kind := UnitKindOf(w.units[resident].type)
 	faction := FactionSpriteIndex(w.units[resident].kingdome)
 	texture := renderer.sprites.unit[faction][kind]
@@ -1776,7 +1776,7 @@ UIDrawHomeOccupant :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectan
 		source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 		rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
 	}
-	ui_text(fmt.ctprintf("%s #%d", UIUnitName(kind), resident+1), icon.x+42, icon.y+6, UI_COLOR_TEXT)
+	UIText(fmt.ctprintf("%s #%d", UIUnitName(kind), resident+1), icon.x+42, icon.y+6, UI_COLOR_TEXT)
 }
 
 UIDrawTownTabs :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle) {
@@ -1787,7 +1787,7 @@ UIDrawTownTabs :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle) {
 
 	kingdom, town := UISelectionTown(w, ui.selection)
 	villagers := TownUnitCount(w, kingdom, town, .Villager)
-	ui_text_right(
+	UITextRight(
 		fmt.ctprintf("%d villagers", villagers),
 		panel.x+panel.width-UI_PAD,
 		panel.y+UI_TABS_Y,
@@ -1806,7 +1806,7 @@ UIDrawTownTabs :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle) {
 		} else if hovered {
 			color = UI_COLOR_TEXT
 		}
-		ui_text(label, rect.x+4, rect.y-1, color)
+		UIText(label, rect.x+4, rect.y-1, color)
 		if active {
 			rl.DrawRectangleRec(
 				rl.Rectangle{rect.x+4, rect.y+UI_TABS_H-2, rect.width-8, 2},
@@ -1873,20 +1873,20 @@ UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[8]UIStat) -> int {
 			} else {
 				stats[3] = {"Era", "5 - complete", UI_COLOR_TEXT}
 			}
-			food_text, food_color := UIResourceCoverage(t.foodPotential, f32(t.citizens)*0.025)
-			water_text, water_color := UIResourceCoverage(t.waterPotential, f32(t.citizens)*0.025)
-			stats[4] = {"Food", food_text, food_color}
-			stats[5] = {"Water", water_text, water_color}
+			foodText, foodColor := UIResourceCoverage(t.foodPotential, f32(t.citizens)*0.025)
+			waterText, waterColor := UIResourceCoverage(t.waterPotential, f32(t.citizens)*0.025)
+			stats[4] = {"Food", foodText, foodColor}
+			stats[5] = {"Water", waterText, waterColor}
 			stats[6] = {"Housing", fmt.ctprintf("%d", t.homes), UI_COLOR_TEXT}
 			return 7
 		}
 		if kind == .DistrictHall {
-			district_name: cstring = "District"
+			districtName: cstring = "District"
 			t := &w.kingdoms[building.kingdom].towns[building.town]
-			for district_index in 0..<t.districtCount {
-				district := &t.districts[district_index]
+			for districtIndex in 0..<t.districtCount {
+				district := &t.districts[districtIndex]
 				if district.x == building.x && district.y == building.y {
-					district_name = fmt.ctprintf("%s", cstring(&district.name[0]))
+					districtName = fmt.ctprintf("%s", cstring(&district.name[0]))
 					break
 				}
 			}
@@ -1895,7 +1895,7 @@ UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[8]UIStat) -> int {
 				fmt.ctprintf("+%d%%", int(TOWN_DISTRICT_GROWTH_BONUS*100)),
 				UI_COLOR_GOOD,
 			}
-			stats[2] = {"District", district_name, UI_COLOR_TEXT}
+			stats[2] = {"District", districtName, UI_COLOR_TEXT}
 			return 3
 		}
 		if BuildingIsTraining(kind) {
@@ -1937,20 +1937,20 @@ UIDrawUnitEffects :: proc(
 	w: ^World,
 	renderer: ^WorldRenderer,
 	panel: rl.Rectangle,
-	unit_slot: int,
+	unitSlot: int,
 ) {
-	count := UIUnitEffectCount(w, unit_slot)
+	count := UIUnitEffectCount(w, unitSlot)
 	if count <= 0 do return
 
 	y := panel.y+UI_STAT_Y+2*UI_STAT_H+3
-	ui_text("Effects", panel.x+UI_PAD, y+3, UI_COLOR_DIM)
+	UIText("Effects", panel.x+UI_PAD, y+3, UI_COLOR_DIM)
 
 	mouse := rl.GetMousePosition()
 	x := panel.x+UI_PAD+78
 	hovered := UnitEffects.NoHome
-	any_hovered := false
+	anyHovered := false
 	for effect in ALL_UNIT_EFFECTS {
-		if !w.units[unit_slot].effects[effect] do continue
+		if !w.units[unitSlot].effects[effect] do continue
 		icon := rl.Rectangle{x, y, 22, 22}
 		hover := rl.CheckCollisionPointRec(mouse, icon)
 		background := UI_COLOR_BUTTON_OFF
@@ -1959,7 +1959,7 @@ UIDrawUnitEffects :: proc(
 			background = UI_COLOR_BUTTON_HOVER
 			border = UI_COLOR_GOLD
 			hovered = effect
-			any_hovered = true
+			anyHovered = true
 		}
 		rl.DrawRectangleRec(icon, background)
 		rl.DrawRectangleLinesEx(icon, 1, border)
@@ -1972,30 +1972,30 @@ UIDrawUnitEffects :: proc(
 		x += 27
 	}
 
-	if any_hovered do UIDrawUnitEffectTooltip(mouse, hovered)
+	if anyHovered do UIDrawUnitEffectTooltip(mouse, hovered)
 }
 
 UIDrawUnitEffectTooltip :: proc(mouse: rl.Vector2, effect: UnitEffects) {
 	title := UIUnitEffectName(effect)
 	body := UIUnitEffectText(effect)
-	title_width := rl.MeasureTextEx(ui_font(), title, UI_TEXT_SIZE, 1).x
-	body_width := rl.MeasureTextEx(ui_font(), body, UI_TEXT_SIZE, 1).x
+	titleWidth := rl.MeasureTextEx(UIFont(), title, UI_TEXT_SIZE, 1).x
+	bodyWidth := rl.MeasureTextEx(UIFont(), body, UI_TEXT_SIZE, 1).x
 	padding: f32 = 8
-	line_height := UIHudLineHeight()
-	width := max(title_width, body_width)+padding*2
-	height := line_height*2+padding*2+4
+	lineHeight := UIHudLineHeight()
+	width := max(titleWidth, bodyWidth)+padding*2
+	height := lineHeight*2+padding*2+4
 
 	x := mouse.x+16
 	y := mouse.y+16
-	screen_width := f32(rl.GetScreenWidth())
-	screen_height := f32(rl.GetScreenHeight())
-	if x+width > screen_width-8 do x = mouse.x-16-width
-	if y+height > screen_height-8 do y = mouse.y-16-height
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
+	if x+width > screenWidth-8 do x = mouse.x-16-width
+	if y+height > screenHeight-8 do y = mouse.y-16-height
 
 	rl.DrawRectangleRec(rl.Rectangle{x, y, width, height}, UI_COLOR_BG)
 	rl.DrawRectangleLinesEx(rl.Rectangle{x, y, width, height}, 1, UI_COLOR_GOLD)
-	ui_text(title, x+padding, y+padding, UI_COLOR_GOLD)
-	ui_text(body, x+padding, y+padding+line_height, UI_COLOR_TEXT)
+	UIText(title, x+padding, y+padding, UI_COLOR_GOLD)
+	UIText(body, x+padding, y+padding+lineHeight, UI_COLOR_TEXT)
 }
 
 UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
@@ -2010,10 +2010,10 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 		} else if t.waterPotential <= 0 && t.foodPotential > 0 {
 			reason = "No growth  -  no water"
 		}
-		ui_text(reason, panel.x+UI_PAD, y, UI_COLOR_BAD)
+		UIText(reason, panel.x+UI_PAD, y, UI_COLOR_BAD)
 	} else {
 		eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
-		ui_text(
+		UIText(
 			fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta))),
 			panel.x+UI_PAD,
 			y,
@@ -2044,7 +2044,7 @@ UIDrawConstructionStatus :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: 
 	if !WorldTownExists(w, kingdom, town) do return
 	t := &w.kingdoms[kingdom].towns[town]
 	y := panel.y+UI_STAT_Y+4*UI_STAT_H
-	ui_text("Construction", panel.x+UI_PAD, y, UI_COLOR_DIM)
+	UIText("Construction", panel.x+UI_PAD, y, UI_COLOR_DIM)
 
 	value: cstring = "None"
 	if t.constructionActive {
@@ -2058,7 +2058,7 @@ UIDrawConstructionStatus :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: 
 			value = fmt.ctprintf("%s  %d%%", UIBuildingName(site.kind), int(progress*100))
 		}
 	}
-	ui_text(value, panel.x+UI_PAD+150, y, UI_COLOR_TEXT)
+	UIText(value, panel.x+UI_PAD+150, y, UI_COLOR_TEXT)
 }
 
 UIDrawConversions :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle, kingdom, town: int) {
@@ -2069,22 +2069,22 @@ UIDrawConversions :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, pan
 	}
 }
 
-UIConversionProgress :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> (assigned, remaining, training: int, progress: f32, has_job: bool) {
+UIConversionProgress :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> (assigned, remaining, training: int, progress: f32, hasJob: bool) {
 	if !WorldTownExists(w, kingdom, town) do return
 	t := &w.kingdoms[kingdom].towns[town]
-	for job_index in 0..<t.conversionCount {
-		job := t.conversions[job_index]
+	for jobIndex in 0..<t.conversionCount {
+		job := t.conversions[jobIndex]
 		if job.to != kind do continue
-		has_job = true
+		hasJob = true
 		assigned += job.assigned
 		remaining += job.remaining
 	}
-	if !has_job do return
+	if !hasJob do return
 
-	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] do continue
-		if w.units[unit_slot].kingdome != kingdom || w.units[unit_slot].town != town do continue
-		state, converting := w.units[unit_slot].state.(StateConverting)
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] do continue
+		if w.units[unitSlot].kingdome != kingdom || w.units[unitSlot].town != town do continue
+		state, converting := w.units[unitSlot].state.(StateConverting)
 		if !converting || state.to != kind || !state.inside do continue
 		training += 1
 		seconds := UnitDefaultTrainingTime(kind)
@@ -2095,39 +2095,39 @@ UIConversionProgress :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> (
 }
 
 UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle, index: int, kind: UnitKind, kingdom, town: int) {
-	row_y := panel.y+UI_ROWS_TOP+f32(index)*UI_ROW_HEIGHT
+	rowY := panel.y+UI_ROWS_TOP+f32(index)*UI_ROW_HEIGHT
 
 	faction := FactionSpriteIndex(kingdom)
 	texture := renderer.sprites.unit[faction][kind]
 	if texture.id != 0 {
-		icon := rl.Rectangle{panel.x+UI_PAD, row_y+2, 32, 32}
+		icon := rl.Rectangle{panel.x+UI_PAD, rowY+2, 32, 32}
 		source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 		rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
 	}
 
 	available := TownUnitAvailable(w, kingdom, town, kind)
-	missing_building := TownUnitUnlocked(w, kingdom, town, kind) && !available
-	label_y := missing_building ? row_y+1 : row_y+8
-	ui_text(UIUnitName(kind), panel.x+UI_PAD+38, label_y, available ? UI_COLOR_TEXT : UI_COLOR_DIM)
-	if missing_building {
-		building_kind := UnitTrainingBuildingKind(kind)
-		hint := fmt.ctprintf("Needs %s", UIBuildingName(building_kind))
+	missingBuilding := TownUnitUnlocked(w, kingdom, town, kind) && !available
+	labelY := missingBuilding ? rowY+1 : rowY+8
+	UIText(UIUnitName(kind), panel.x+UI_PAD+38, labelY, available ? UI_COLOR_TEXT : UI_COLOR_DIM)
+	if missingBuilding {
+		buildingKind := UnitTrainingBuildingKind(kind)
+		hint := fmt.ctprintf("Needs %s", UIBuildingName(buildingKind))
 		t := &w.kingdoms[kingdom].towns[town]
-		if t.constructionActive && t.construction.kind == building_kind {
-			hint = fmt.ctprintf("Building %s", UIBuildingName(building_kind))
+		if t.constructionActive && t.construction.kind == buildingKind {
+			hint = fmt.ctprintf("Building %s", UIBuildingName(buildingKind))
 		}
-		rl.DrawTextEx(ui_font(), hint, rl.Vector2{panel.x+UI_PAD+38, row_y+22}, 12, 1, UI_COLOR_DIM)
+		rl.DrawTextEx(UIFont(), hint, rl.Vector2{panel.x+UI_PAD+38, rowY+22}, 12, 1, UI_COLOR_DIM)
 	}
 
 	minus, plus := UIButtonRects(panel, index)
-	_, remaining, training, progress, has_job := UIConversionProgress(w, kingdom, town, kind)
-	if has_job && remaining > 0 {
-		ui_text(fmt.ctprintf("%d/%d", training, remaining), minus.x-112, row_y+8, UI_COLOR_DIM)
+	_, remaining, training, progress, hasJob := UIConversionProgress(w, kingdom, town, kind)
+	if hasJob && remaining > 0 {
+		UIText(fmt.ctprintf("%d/%d", training, remaining), minus.x-112, rowY+8, UI_COLOR_DIM)
 
-		if !missing_building {
+		if !missingBuilding {
 			bar := rl.Rectangle{
 				panel.x+UI_PAD+38,
-				row_y+31,
+				rowY+31,
 				max(minus.x-130-(panel.x+UI_PAD+38), 20),
 				3,
 			}
@@ -2143,10 +2143,10 @@ UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, p
 
 	pending := UIConversionPending(w, kingdom, town, kind)
 	if pending != 0 {
-		ui_text(fmt.ctprintf("%+d", pending), minus.x-56, row_y+8, UI_COLOR_GOLD)
+		UIText(fmt.ctprintf("%+d", pending), minus.x-56, rowY+8, UI_COLOR_GOLD)
 	}
-	unit_count := TownUnitCount(w, kingdom, town, kind)
-	ui_text_right(fmt.ctprintf("%d", unit_count), minus.x-8, row_y+8, UI_COLOR_TEXT)
+	unitCount := TownUnitCount(w, kingdom, town, kind)
+	UITextRight(fmt.ctprintf("%d", unitCount), minus.x-8, rowY+8, UI_COLOR_TEXT)
 
 	UIButton(minus, "-", UICanConvertFrom(w, kingdom, town, kind))
 	UIButton(plus, "+", UICanConvertTo(w, kingdom, town, kind))
@@ -2157,30 +2157,30 @@ UIDrawOrdersTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle
 	top := panel.y+UI_ROWS_TOP
 	orders := UITownOrderCount(w, kingdom, town)
 
-	ui_text("STANDING ORDERS", panel.x+UI_PAD, top, UI_COLOR_DIM)
-	ui_text_right(fmt.ctprintf("%d orders", orders), panel.x+panel.width-UI_PAD, top, UI_COLOR_DIM)
+	UIText("STANDING ORDERS", panel.x+UI_PAD, top, UI_COLOR_DIM)
+	UITextRight(fmt.ctprintf("%d orders", orders), panel.x+panel.width-UI_PAD, top, UI_COLOR_DIM)
 
 	if orders == 0 {
-		ui_text("No standing orders.", panel.x+UI_PAD, top+UI_SECTION_HEADER+8, UI_COLOR_DIM)
+		UIText("No standing orders.", panel.x+UI_PAD, top+UI_SECTION_HEADER+8, UI_COLOR_DIM)
 		return
 	}
 
 	for index in 0..<orders {
-		attack, target_kingdom, target_town, found := UITownOrderAt(w, kingdom, town, index)
+		attack, targetKingdom, targetTown, found := UITownOrderAt(w, kingdom, town, index)
 		if !found do continue
-		row_y := panel.y+UI_ROWS_TOP+UI_SECTION_HEADER+f32(index)*UI_ROW_HEIGHT
+		rowY := panel.y+UI_ROWS_TOP+UI_SECTION_HEADER+f32(index)*UI_ROW_HEIGHT
 
-		faction := FactionSpriteIndex(target_kingdom)
+		faction := FactionSpriteIndex(targetKingdom)
 		texture := renderer.sprites.building[faction][.TownHall]
 		if texture.id != 0 {
-			icon := rl.Rectangle{panel.x+UI_PAD, row_y+2, 32, 32}
+			icon := rl.Rectangle{panel.x+UI_PAD, rowY+2, 32, 32}
 			source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 			rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
 		}
 
-		label := attack ? fmt.ctprintf("Attack  %s", NameTownCString(w, target_kingdom, target_town)) : fmt.ctprintf("Defend  %s", NameTownCString(w, target_kingdom, target_town))
-		label_color := attack ? UI_COLOR_ATTACK : UI_COLOR_DEFEND
-		ui_text(label, panel.x+UI_PAD+38, row_y+8, label_color)
+		label := attack ? fmt.ctprintf("Attack  %s", NameTownCString(w, targetKingdom, targetTown)) : fmt.ctprintf("Defend  %s", NameTownCString(w, targetKingdom, targetTown))
+		labelColor := attack ? UI_COLOR_ATTACK : UI_COLOR_DEFEND
+		UIText(label, panel.x+UI_PAD+38, rowY+8, labelColor)
 		UIButton(UIOrderCancelRect(panel, index), "Cancel", true)
 	}
 }
@@ -2188,38 +2188,38 @@ UIDrawOrdersTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle
 UIDrawCommandBar :: proc(w: ^World, ui: ^UIState) {
 	if !UISelectionPlayerTownHall(w, ui.selection) do return
 	kingdom, town := UISelectionTown(w, ui.selection)
-	attack_rect, defend_rect, found_rect, fuse_rect := UICommandBarRects()
+	attackRect, defendRect, foundRect, fuseRect := UICommandBarRects()
 	UIDrawCommandIcon(
-		attack_rect,
+		attackRect,
 		.Attack,
 		UIAttackTargetExists(w, kingdom, town),
 		ui.command == .Attack,
 	)
 	UIDrawCommandIcon(
-		defend_rect,
+		defendRect,
 		.Defend,
 		UIDefendTargetExists(w, kingdom, town),
 		ui.command == .Defend,
 	)
 	UIDrawCommandIcon(
-		found_rect,
+		foundRect,
 		.Found,
 		UIFoundButtonEnabled(w, kingdom, town),
 		ui.command == .Found,
 	)
 	if TownEra(w, kingdom, town) >= TOWN_FUSION_ERA {
 		UIDrawCommandIcon(
-			fuse_rect,
+			fuseRect,
 			.Fuse,
 			UIFusionTargetExists(w, kingdom, town),
 			ui.command == .Fuse,
 		)
-		if rl.CheckCollisionPointRec(rl.GetMousePosition(), fuse_rect) {
-			UIDrawFuseHint(w, fuse_rect, kingdom, town)
+		if rl.CheckCollisionPointRec(rl.GetMousePosition(), fuseRect) {
+			UIDrawFuseHint(w, fuseRect, kingdom, town)
 		}
 	}
-	if rl.CheckCollisionPointRec(rl.GetMousePosition(), found_rect) {
-		UIDrawFoundHint(w, found_rect, kingdom, town)
+	if rl.CheckCollisionPointRec(rl.GetMousePosition(), foundRect) {
+		UIDrawFoundHint(w, foundRect, kingdom, town)
 	}
 }
 
@@ -2240,16 +2240,16 @@ UIDrawFoundHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {
 		TOWN_FOUNDING_SETTLERS,
 		builders,
 	)
-	width := rl.MeasureTextEx(ui_font(), text, UI_TEXT_SIZE, 1).x+2*UI_PAD
+	width := rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x+2*UI_PAD
 	height := UI_TEXT_SIZE+2*UI_PAD
-	screen_width := f32(rl.GetScreenWidth())
-	x := clamp(rect.x+rect.width*0.5-width*0.5, 8, screen_width-width-8)
+	screenWidth := f32(rl.GetScreenWidth())
+	x := clamp(rect.x+rect.width*0.5-width*0.5, 8, screenWidth-width-8)
 	y := rect.y-height-8
 	rl.DrawRectangleRec(rl.Rectangle{x, y, width, height}, UI_COLOR_BG)
 	rl.DrawRectangleLinesEx(rl.Rectangle{x, y, width, height}, 1, UI_COLOR_BORDER)
 	color := UI_COLOR_TEXT
 	if !UIFoundButtonEnabled(w, kingdom, town) do color = UI_COLOR_BAD
-	ui_text(text, x+UI_PAD, y+UI_PAD-2, color)
+	UIText(text, x+UI_PAD, y+UI_PAD-2, color)
 }
 
 UIDrawFuseHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {
@@ -2260,10 +2260,10 @@ UIDrawFuseHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {
 		"Fuse era 5 towns  -  costs %d wood  -  shared frontier required",
 		int(cost),
 	)
-	width := rl.MeasureTextEx(ui_font(), text, UI_TEXT_SIZE, 1).x+2*UI_PAD
+	width := rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x+2*UI_PAD
 	height := UI_TEXT_SIZE+2*UI_PAD
-	screen_width := f32(rl.GetScreenWidth())
-	x := clamp(rect.x+rect.width*0.5-width*0.5, 8, screen_width-width-8)
+	screenWidth := f32(rl.GetScreenWidth())
+	x := clamp(rect.x+rect.width*0.5-width*0.5, 8, screenWidth-width-8)
 	y := rect.y-height-8
 	rl.DrawRectangleRec(rl.Rectangle{x, y, width, height}, UI_COLOR_BG)
 	rl.DrawRectangleLinesEx(rl.Rectangle{x, y, width, height}, 1, UI_COLOR_BORDER)
@@ -2272,7 +2272,7 @@ UIDrawFuseHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {
 		!UIFusionTargetExists(w, kingdom, town) {
 		color = UI_COLOR_BAD
 	}
-	ui_text(text, x+UI_PAD, y+UI_PAD-2, color)
+	UIText(text, x+UI_PAD, y+UI_PAD-2, color)
 }
 
 TownFusionFailureText :: proc(failure: FusionFailure) -> cstring {
@@ -2316,7 +2316,7 @@ UIDrawCommandIcon :: proc(rect: rl.Rectangle, command: UICommand, enabled, activ
 	rl.DrawRectangleRec(rect, background)
 
 	border := UI_COLOR_BORDER_INNER
-	border_width: f32 = 1
+	borderWidth: f32 = 1
 	if active {
 		switch command {
 		case .Attack:
@@ -2331,36 +2331,36 @@ UIDrawCommandIcon :: proc(rect: rl.Rectangle, command: UICommand, enabled, activ
 			border = UI_COLOR_BUILD
 		case .Inspect:
 		}
-		border_width = 2
+		borderWidth = 2
 	}
-	rl.DrawRectangleLinesEx(rect, border_width, border)
+	rl.DrawRectangleLinesEx(rect, borderWidth, border)
 
-	icon_color := UI_COLOR_BUILD
+	iconColor := UI_COLOR_BUILD
 	switch command {
 	case .Attack:
-		icon_color = UI_COLOR_ATTACK
+		iconColor = UI_COLOR_ATTACK
 	case .Defend:
-		icon_color = UI_COLOR_DEFEND
+		iconColor = UI_COLOR_DEFEND
 	case .Found:
-		icon_color = UI_COLOR_FOUND
+		iconColor = UI_COLOR_FOUND
 	case .Fuse:
-		icon_color = UI_COLOR_FUSE
+		iconColor = UI_COLOR_FUSE
 	case .Build, .Place, .Inspect:
 	}
-	if !enabled do icon_color = UI_COLOR_DISABLED_TEXT
-	center_x := rect.x+rect.width*0.5
-	center_y := rect.y+23
+	if !enabled do iconColor = UI_COLOR_DISABLED_TEXT
+	centerX := rect.x+rect.width*0.5
+	centerY := rect.y+23
 	switch command {
 	case .Attack:
-		UIDrawAttackIcon(center_x, center_y, icon_color)
+		UIDrawAttackIcon(centerX, centerY, iconColor)
 	case .Defend:
-		UIDrawDefendIcon(center_x, center_y, icon_color)
+		UIDrawDefendIcon(centerX, centerY, iconColor)
 	case .Found:
-		UIDrawFoundIcon(center_x, center_y, icon_color)
+		UIDrawFoundIcon(centerX, centerY, iconColor)
 	case .Fuse:
-		UIDrawFuseIcon(center_x, center_y, icon_color)
+		UIDrawFuseIcon(centerX, centerY, iconColor)
 	case .Build, .Place:
-		UIDrawBuildIcon(center_x, center_y, icon_color)
+		UIDrawBuildIcon(centerX, centerY, iconColor)
 	case .Inspect:
 	}
 
@@ -2376,92 +2376,92 @@ UIDrawCommandIcon :: proc(rect: rl.Rectangle, command: UICommand, enabled, activ
 		label = "FUSE"
 	case .Build, .Place, .Inspect:
 	}
-	label_color := enabled ? UI_COLOR_TEXT : UI_COLOR_DISABLED_TEXT
-	ui_text_center(label, rect.x+rect.width*0.5, rect.y+46, label_color)
+	labelColor := enabled ? UI_COLOR_TEXT : UI_COLOR_DISABLED_TEXT
+	UITextCenter(label, rect.x+rect.width*0.5, rect.y+46, labelColor)
 }
 
-UIDrawFuseIcon :: proc(center_x, center_y: f32, color: rl.Color) {
+UIDrawFuseIcon :: proc(centerX, centerY: f32, color: rl.Color) {
 	dark := rl.Color{12, 11, 14, 230}
 	light := rl.Color{238, 238, 244, 220}
 
 	// Two halls meeting over a shared road.
-	left := rl.Rectangle{center_x-17, center_y-10, 13, 15}
-	right := rl.Rectangle{center_x+4, center_y-10, 13, 15}
+	left := rl.Rectangle{centerX-17, centerY-10, 13, 15}
+	right := rl.Rectangle{centerX+4, centerY-10, 13, 15}
 	rl.DrawRectangleRec(left, dark)
 	rl.DrawRectangleRec(right, dark)
 	rl.DrawRectangleLinesEx(left, 2, color)
 	rl.DrawRectangleLinesEx(right, 2, color)
 	rl.DrawTriangle(
-		rl.Vector2{center_x-10.5, center_y-12},
-		rl.Vector2{center_x-18, center_y-1},
-		rl.Vector2{center_x-3, center_y-1},
+		rl.Vector2{centerX-10.5, centerY-12},
+		rl.Vector2{centerX-18, centerY-1},
+		rl.Vector2{centerX-3, centerY-1},
 		color,
 	)
 	rl.DrawTriangle(
-		rl.Vector2{center_x+10.5, center_y-12},
-		rl.Vector2{center_x+3, center_y-1},
-		rl.Vector2{center_x+18, center_y-1},
+		rl.Vector2{centerX+10.5, centerY-12},
+		rl.Vector2{centerX+3, centerY-1},
+		rl.Vector2{centerX+18, centerY-1},
 		color,
 	)
 	rl.DrawLineEx(
-		rl.Vector2{center_x-3, center_y+4},
-		rl.Vector2{center_x+3, center_y+4},
+		rl.Vector2{centerX-3, centerY+4},
+		rl.Vector2{centerX+3, centerY+4},
 		3,
 		light,
 	)
 	rl.DrawLineEx(
-		rl.Vector2{center_x, center_y-1},
-		rl.Vector2{center_x, center_y+12},
+		rl.Vector2{centerX, centerY-1},
+		rl.Vector2{centerX, centerY+12},
 		3,
 		light,
 	)
 }
 
-UIDrawAttackIcon :: proc(center_x, center_y: f32, color: rl.Color) {
+UIDrawAttackIcon :: proc(centerX, centerY: f32, color: rl.Color) {
 	dark := rl.Color{12, 11, 14, 230}
 	gold := rl.Color{224, 176, 70, 220}
 	grip := rl.Color{132, 98, 64, 230}
 
-	blade_top := rl.Vector2{center_x, center_y-14}
-	blade_bottom := rl.Vector2{center_x, center_y+2}
-	rl.DrawLineEx(blade_top, blade_bottom, 7, dark)
-	rl.DrawLineEx(blade_top, blade_bottom, 4, color)
+	bladeTop := rl.Vector2{centerX, centerY-14}
+	bladeBottom := rl.Vector2{centerX, centerY+2}
+	rl.DrawLineEx(bladeTop, bladeBottom, 7, dark)
+	rl.DrawLineEx(bladeTop, bladeBottom, 4, color)
 	rl.DrawTriangle(
-		rl.Vector2{center_x, center_y-19},
-		rl.Vector2{center_x-4, center_y-12},
-		rl.Vector2{center_x+4, center_y-12},
+		rl.Vector2{centerX, centerY-19},
+		rl.Vector2{centerX-4, centerY-12},
+		rl.Vector2{centerX+4, centerY-12},
 		color,
 	)
 
-	guard_left := rl.Vector2{center_x-9, center_y+3}
-	guard_right := rl.Vector2{center_x+9, center_y+3}
-	rl.DrawLineEx(guard_left, guard_right, 6, dark)
-	rl.DrawLineEx(guard_left, guard_right, 3, gold)
+	guardLeft := rl.Vector2{centerX-9, centerY+3}
+	guardRight := rl.Vector2{centerX+9, centerY+3}
+	rl.DrawLineEx(guardLeft, guardRight, 6, dark)
+	rl.DrawLineEx(guardLeft, guardRight, 3, gold)
 
-	grip_top := rl.Vector2{center_x, center_y+4}
-	grip_bottom := rl.Vector2{center_x, center_y+13}
-	rl.DrawLineEx(grip_top, grip_bottom, 7, dark)
-	rl.DrawLineEx(grip_top, grip_bottom, 4, grip)
-	rl.DrawRectangle(i32(center_x)-2, i32(center_y)+13, 4, 4, gold)
+	gripTop := rl.Vector2{centerX, centerY+4}
+	gripBottom := rl.Vector2{centerX, centerY+13}
+	rl.DrawLineEx(gripTop, gripBottom, 7, dark)
+	rl.DrawLineEx(gripTop, gripBottom, 4, grip)
+	rl.DrawRectangle(i32(centerX)-2, i32(centerY)+13, 4, 4, gold)
 }
 
-UIDrawDefendIcon :: proc(center_x, center_y: f32, color: rl.Color) {
+UIDrawDefendIcon :: proc(centerX, centerY: f32, color: rl.Color) {
 	dark := rl.Color{12, 11, 14, 230}
-	center := rl.Vector2{center_x, center_y+1}
+	center := rl.Vector2{centerX, centerY+1}
 	rl.DrawPoly(center, 5, 18, 90, dark)
 	rl.DrawPoly(center, 5, 15, 90, color)
 
 	emblem := rl.Color{232, 240, 248, 230}
-	x := i32(center_x)
-	y := i32(center_y)
+	x := i32(centerX)
+	y := i32(centerY)
 	rl.DrawRectangle(x-2, y-7, 4, 20, emblem)
 	rl.DrawRectangle(x-7, y+1, 14, 4, emblem)
 }
 
-UIDrawBuildIcon :: proc(center_x, center_y: f32, color: rl.Color) {
+UIDrawBuildIcon :: proc(centerX, centerY: f32, color: rl.Color) {
 	dark := rl.Color{12, 11, 14, 230}
-	x := i32(center_x)
-	y := i32(center_y)
+	x := i32(centerX)
+	y := i32(centerY)
 
 	// Hammer handle.
 	rl.DrawRectangle(x-2, y-2, 4, 18, dark)
@@ -2473,39 +2473,39 @@ UIDrawBuildIcon :: proc(center_x, center_y: f32, color: rl.Color) {
 	rl.DrawRectangle(x-4, y-11, 8, 5, rl.Color{238, 238, 244, 210})
 }
 
-UIDrawFoundIcon :: proc(center_x, center_y: f32, color: rl.Color) {
+UIDrawFoundIcon :: proc(centerX, centerY: f32, color: rl.Color) {
 	dark := rl.Color{12, 11, 14, 230}
-	x := i32(center_x)
-	y := i32(center_y)
+	x := i32(centerX)
+	y := i32(centerY)
 
 	// Small hall with a banner.
 	rl.DrawRectangle(x-10, y+1, 20, 12, dark)
 	rl.DrawRectangle(x-9, y+2, 18, 10, color)
 	rl.DrawRectangle(x-7, y+5, 5, 7, rl.Color{238, 238, 244, 210})
 	rl.DrawTriangle(
-		rl.Vector2{center_x, center_y-11},
-		rl.Vector2{center_x-12, center_y+1},
-		rl.Vector2{center_x+12, center_y+1},
+		rl.Vector2{centerX, centerY-11},
+		rl.Vector2{centerX-12, centerY+1},
+		rl.Vector2{centerX+12, centerY+1},
 		dark,
 	)
 	rl.DrawTriangle(
-		rl.Vector2{center_x, center_y-9},
-		rl.Vector2{center_x-10, center_y+1},
-		rl.Vector2{center_x+10, center_y+1},
+		rl.Vector2{centerX, centerY-9},
+		rl.Vector2{centerX-10, centerY+1},
+		rl.Vector2{centerX+10, centerY+1},
 		color,
 	)
 
 	// Flag.
 	rl.DrawLineEx(
-		rl.Vector2{center_x, center_y-14},
-		rl.Vector2{center_x, center_y-2},
+		rl.Vector2{centerX, centerY-14},
+		rl.Vector2{centerX, centerY-2},
 		3,
 		dark,
 	)
 	rl.DrawTriangle(
-		rl.Vector2{center_x+1, center_y-14},
-		rl.Vector2{center_x+11, center_y-10},
-		rl.Vector2{center_x+1, center_y-6},
+		rl.Vector2{centerX+1, centerY-14},
+		rl.Vector2{centerX+11, centerY-10},
+		rl.Vector2{centerX+1, centerY-6},
 		color,
 	)
 }
@@ -2514,56 +2514,56 @@ UIDrawCommandTargets :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 	kingdom, town := UISelectionTown(w, ui.selection)
 	if !WorldTownExists(w, kingdom, town) do return
 
-	for target_kingdom in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[target_kingdom] do continue
-		for target_town in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[target_kingdom].townUsed[target_town] do continue
+	for targetKingdom in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[targetKingdom] do continue
+		for targetTown in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[targetKingdom].townUsed[targetTown] do continue
 			valid := false
 			switch ui.command {
 			case .Attack:
-				valid = UIAttackOrderValid(w, kingdom, town, target_kingdom, target_town)
+				valid = UIAttackOrderValid(w, kingdom, town, targetKingdom, targetTown)
 			case .Defend:
-				valid = UIDefendOrderValid(w, kingdom, town, target_kingdom, target_town)
+				valid = UIDefendOrderValid(w, kingdom, town, targetKingdom, targetTown)
 			case .Fuse:
-				valid = TownFusionFailure(w, kingdom, town, target_kingdom, target_town) == .None
+				valid = TownFusionFailure(w, kingdom, town, targetKingdom, targetTown) == .None
 			case .Inspect, .Found, .Build, .Place:
 			}
 			if !valid do continue
-			UIDrawTownAreaFor(w, camera, target_kingdom, target_town, true)
-			UIDrawTownHallOutline(w, camera, target_kingdom, target_town, 150, 1.2)
+			UIDrawTownAreaFor(w, camera, targetKingdom, targetTown, true)
+			UIDrawTownHallOutline(w, camera, targetKingdom, targetTown, 150, 1.2)
 		}
 	}
 
-	hover_kingdom, hover_town, _, found := UIFindTownAt(w, camera, rl.GetMousePosition())
+	hoverKingdom, hoverTown, _, found := UIFindTownAt(w, camera, rl.GetMousePosition())
 	if !found do return
 	valid := false
 	switch ui.command {
 	case .Attack:
-		valid = UIAttackOrderValid(w, kingdom, town, hover_kingdom, hover_town)
+		valid = UIAttackOrderValid(w, kingdom, town, hoverKingdom, hoverTown)
 	case .Defend:
-		valid = UIDefendOrderValid(w, kingdom, town, hover_kingdom, hover_town)
+		valid = UIDefendOrderValid(w, kingdom, town, hoverKingdom, hoverTown)
 	case .Fuse:
-		valid = TownFusionFailure(w, kingdom, town, hover_kingdom, hover_town) == .None
+		valid = TownFusionFailure(w, kingdom, town, hoverKingdom, hoverTown) == .None
 	case .Inspect, .Found, .Build, .Place:
 	}
 	if !valid do return
-	UIDrawTownAreaFor(w, camera, hover_kingdom, hover_town, false)
-	UIDrawTownHallOutline(w, camera, hover_kingdom, hover_town, 230, 2)
+	UIDrawTownAreaFor(w, camera, hoverKingdom, hoverTown, false)
+	UIDrawTownHallOutline(w, camera, hoverKingdom, hoverTown, 230, 2)
 
-	preview_color: rl.Color
+	previewColor: rl.Color
 	switch ui.command {
 	case .Attack:
-		preview_color = UI_COLOR_ATTACK
+		previewColor = UI_COLOR_ATTACK
 	case .Defend:
-		preview_color = UI_COLOR_DEFEND
+		previewColor = UI_COLOR_DEFEND
 	case .Fuse:
-		preview_color = UI_COLOR_FUSE
+		previewColor = UI_COLOR_FUSE
 	case .Inspect, .Found, .Build, .Place:
 	}
-	UIDrawOrderArrow(w, camera, kingdom, town, hover_kingdom, hover_town, preview_color, true)
+	UIDrawOrderArrow(w, camera, kingdom, town, hoverKingdom, hoverTown, previewColor, true)
 }
 
-UIDrawTownHallOutline :: proc(w: ^World, camera: rl.Camera2D, kingdom, town: int, alpha: u8, pixel_width: f32) {
+UIDrawTownHallOutline :: proc(w: ^World, camera: rl.Camera2D, kingdom, town: int, alpha: u8, pixelWidth: f32) {
 	hall := TownHallSlot(w, kingdom, town)
 	if hall < 0 do return
 	width, height := BuildingTileSize(w.buildings[hall].type)
@@ -2574,7 +2574,7 @@ UIDrawTownHallOutline :: proc(w: ^World, camera: rl.Camera2D, kingdom, town: int
 		f32(height),
 	}
 	rl.BeginMode2D(camera)
-	rl.DrawRectangleLinesEx(rect, pixel_width/camera.zoom, rl.Color{236, 204, 116, alpha})
+	rl.DrawRectangleLinesEx(rect, pixelWidth/camera.zoom, rl.Color{236, 204, 116, alpha})
 	rl.EndMode2D()
 }
 
@@ -2585,16 +2585,16 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 	orders := &w.kingdoms[kingdom].towns[town]
 
 	// Incoming orders are faint so the selected town's own orders stay readable.
-	for attacker_kingdom in 0..<KINGDOMS_CAPACITY {
-		for attacker_town in 0..<TOWN_CAPACITY {
-			if !orders.attackedBy[attacker_kingdom][attacker_town] do continue
-			if !WorldTownExists(w, attacker_kingdom, attacker_town) do continue
-			if !FogTownDiscovered(w, attacker_kingdom, attacker_town) do continue
+	for attackerKingdom in 0..<KINGDOMS_CAPACITY {
+		for attackerTown in 0..<TOWN_CAPACITY {
+			if !orders.attackedBy[attackerKingdom][attackerTown] do continue
+			if !WorldTownExists(w, attackerKingdom, attackerTown) do continue
+			if !FogTownDiscovered(w, attackerKingdom, attackerTown) do continue
 			UIDrawOrderArrow(
 				w,
 				camera,
-				attacker_kingdom,
-				attacker_town,
+				attackerKingdom,
+				attackerTown,
 				kingdom,
 				town,
 				UI_COLOR_ATTACK_FAINT,
@@ -2602,17 +2602,17 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 			)
 		}
 	}
-	for defender_kingdom in 0..<KINGDOMS_CAPACITY {
-		for defender_town in 0..<TOWN_CAPACITY {
-			if !orders.defendedBy[defender_kingdom][defender_town] do continue
-			if !WorldTownExists(w, defender_kingdom, defender_town) do continue
-			if !FogTownDiscovered(w, defender_kingdom, defender_town) do continue
-			if defender_kingdom == kingdom && defender_town == town do continue
+	for defenderKingdom in 0..<KINGDOMS_CAPACITY {
+		for defenderTown in 0..<TOWN_CAPACITY {
+			if !orders.defendedBy[defenderKingdom][defenderTown] do continue
+			if !WorldTownExists(w, defenderKingdom, defenderTown) do continue
+			if !FogTownDiscovered(w, defenderKingdom, defenderTown) do continue
+			if defenderKingdom == kingdom && defenderTown == town do continue
 			UIDrawOrderArrow(
 				w,
 				camera,
-				defender_kingdom,
-				defender_town,
+				defenderKingdom,
+				defenderTown,
 				kingdom,
 				town,
 				UI_COLOR_DEFEND_FAINT,
@@ -2621,70 +2621,70 @@ UIDrawOrderArrows :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) 
 		}
 	}
 
-	for target_kingdom in 0..<KINGDOMS_CAPACITY {
-		for target_town in 0..<TOWN_CAPACITY {
-			if !orders.attackOrders[target_kingdom][target_town] do continue
-			if !WorldTownExists(w, target_kingdom, target_town) do continue
-			if !FogTownDiscovered(w, target_kingdom, target_town) do continue
-			UIDrawOrderArrow(w, camera, kingdom, town, target_kingdom, target_town, UI_COLOR_ATTACK, false)
+	for targetKingdom in 0..<KINGDOMS_CAPACITY {
+		for targetTown in 0..<TOWN_CAPACITY {
+			if !orders.attackOrders[targetKingdom][targetTown] do continue
+			if !WorldTownExists(w, targetKingdom, targetTown) do continue
+			if !FogTownDiscovered(w, targetKingdom, targetTown) do continue
+			UIDrawOrderArrow(w, camera, kingdom, town, targetKingdom, targetTown, UI_COLOR_ATTACK, false)
 		}
 	}
-	for protected_kingdom in 0..<KINGDOMS_CAPACITY {
-		for protected_town in 0..<TOWN_CAPACITY {
-			if !orders.defendOrders[protected_kingdom][protected_town] do continue
-			if !WorldTownExists(w, protected_kingdom, protected_town) do continue
-			if !FogTownDiscovered(w, protected_kingdom, protected_town) do continue
-			if protected_kingdom == kingdom && protected_town == town do continue
-			UIDrawOrderArrow(w, camera, kingdom, town, protected_kingdom, protected_town, UI_COLOR_DEFEND, false)
+	for protectedKingdom in 0..<KINGDOMS_CAPACITY {
+		for protectedTown in 0..<TOWN_CAPACITY {
+			if !orders.defendOrders[protectedKingdom][protectedTown] do continue
+			if !WorldTownExists(w, protectedKingdom, protectedTown) do continue
+			if !FogTownDiscovered(w, protectedKingdom, protectedTown) do continue
+			if protectedKingdom == kingdom && protectedTown == town do continue
+			UIDrawOrderArrow(w, camera, kingdom, town, protectedKingdom, protectedTown, UI_COLOR_DEFEND, false)
 		}
 	}
 }
 
 // Arrows are drawn in screen space so their heads keep a constant size at any zoom.
-UIDrawOrderArrow :: proc(w: ^World, camera: rl.Camera2D, from_kingdom, from_town, to_kingdom, to_town: int, color: rl.Color, preview: bool) {
-	from_hall := TownHallSlot(w, from_kingdom, from_town)
-	to_hall := TownHallSlot(w, to_kingdom, to_town)
-	if from_hall < 0 || to_hall < 0 do return
+UIDrawOrderArrow :: proc(w: ^World, camera: rl.Camera2D, fromKingdom, fromTown, toKingdom, toTown: int, color: rl.Color, preview: bool) {
+	fromHall := TownHallSlot(w, fromKingdom, fromTown)
+	toHall := TownHallSlot(w, toKingdom, toTown)
+	if fromHall < 0 || toHall < 0 do return
 
-	from_width, from_height := BuildingTileSize(w.buildings[from_hall].type)
-	to_width, to_height := BuildingTileSize(w.buildings[to_hall].type)
-	from_x := f32(w.buildings.x[from_hall])+f32(from_width)*0.5
-	from_y := f32(w.buildings.y[from_hall])+f32(from_height)*0.5
-	to_x := f32(w.buildings.x[to_hall])+f32(to_width)*0.5
-	to_y := f32(w.buildings.y[to_hall])+f32(to_height)*0.5
-	delta_x := WorldShortestWrappedDelta(to_x-from_x, f32(w.maxX))
-	delta_y := WorldShortestWrappedDelta(to_y-from_y, f32(w.maxY))
+	fromWidth, fromHeight := BuildingTileSize(w.buildings[fromHall].type)
+	toWidth, toHeight := BuildingTileSize(w.buildings[toHall].type)
+	fromX := f32(w.buildings.x[fromHall])+f32(fromWidth)*0.5
+	fromY := f32(w.buildings.y[fromHall])+f32(fromHeight)*0.5
+	toX := f32(w.buildings.x[toHall])+f32(toWidth)*0.5
+	toY := f32(w.buildings.y[toHall])+f32(toHeight)*0.5
+	deltaX := WorldShortestWrappedDelta(toX-fromX, f32(w.maxX))
+	deltaY := WorldShortestWrappedDelta(toY-fromY, f32(w.maxY))
 
-	start := rl.GetWorldToScreen2D(rl.Vector2{from_x, from_y}, camera)
-	end := rl.GetWorldToScreen2D(rl.Vector2{from_x+delta_x, from_y+delta_y}, camera)
+	start := rl.GetWorldToScreen2D(rl.Vector2{fromX, fromY}, camera)
+	end := rl.GetWorldToScreen2D(rl.Vector2{fromX+deltaX, fromY+deltaY}, camera)
 	dx := end.x-start.x
 	dy := end.y-start.y
 	length := math.sqrt(dx*dx+dy*dy)
 	if length < 1 do return
 
-	dir_x := dx/length
-	dir_y := dy/length
-	head_length: f32 = preview ? 12 : 16
-	head_half: f32 = preview ? 5 : 7
-	line_width: f32 = preview ? 1.8 : 2.6
-	line_color := color
-	if preview do line_color.a = 150
+	dirX := dx/length
+	dirY := dy/length
+	headLength: f32 = preview ? 12 : 16
+	headHalf: f32 = preview ? 5 : 7
+	lineWidth: f32 = preview ? 1.8 : 2.6
+	lineColor := color
+	if preview do lineColor.a = 150
 
-	base := rl.Vector2{end.x-dir_x*head_length, end.y-dir_y*head_length}
-	perp_x := -dir_y
-	perp_y := dir_x
-	left := rl.Vector2{base.x+perp_x*head_half, base.y+perp_y*head_half}
-	right := rl.Vector2{base.x-perp_x*head_half, base.y-perp_y*head_half}
+	base := rl.Vector2{end.x-dirX*headLength, end.y-dirY*headLength}
+	perpX := -dirY
+	perpY := dirX
+	left := rl.Vector2{base.x+perpX*headHalf, base.y+perpY*headHalf}
+	right := rl.Vector2{base.x-perpX*headHalf, base.y-perpY*headHalf}
 
 	outline := rl.Color{12, 11, 14, 170}
-	rl.DrawLineEx(start, base, line_width+2.2, outline)
-	rl.DrawLineEx(start, base, line_width, line_color)
+	rl.DrawLineEx(start, base, lineWidth+2.2, outline)
+	rl.DrawLineEx(start, base, lineWidth, lineColor)
 
-	outer_tip := rl.Vector2{end.x+dir_x*1.5, end.y+dir_y*1.5}
-	outer_left := rl.Vector2{left.x+perp_x*1.5, left.y+perp_y*1.5}
-	outer_right := rl.Vector2{right.x-perp_x*1.5, right.y-perp_y*1.5}
-	rl.DrawTriangle(outer_tip, outer_left, outer_right, outline)
-	rl.DrawTriangle(end, left, right, line_color)
+	outerTip := rl.Vector2{end.x+dirX*1.5, end.y+dirY*1.5}
+	outerLeft := rl.Vector2{left.x+perpX*1.5, left.y+perpY*1.5}
+	outerRight := rl.Vector2{right.x-perpX*1.5, right.y-perpY*1.5}
+	rl.DrawTriangle(outerTip, outerLeft, outerRight, outline)
+	rl.DrawTriangle(end, left, right, lineColor)
 }
 
 UIPlacementFailureText :: proc(failure: PlacementFailure) -> cstring {
@@ -2717,15 +2717,15 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 	if ui.command == .Inspect do return
 
 	mouse := rl.GetMousePosition()
-	attack_rect, defend_rect, found_rect, fuse_rect := UICommandBarRects()
-	build_rect := UIBuildButtonRect()
-	if rl.CheckCollisionPointRec(mouse, attack_rect) ||
-		rl.CheckCollisionPointRec(mouse, defend_rect) ||
-		rl.CheckCollisionPointRec(mouse, found_rect) ||
-		rl.CheckCollisionPointRec(mouse, fuse_rect) {
+	attackRect, defendRect, foundRect, fuseRect := UICommandBarRects()
+	buildRect := UIBuildButtonRect()
+	if rl.CheckCollisionPointRec(mouse, attackRect) ||
+		rl.CheckCollisionPointRec(mouse, defendRect) ||
+		rl.CheckCollisionPointRec(mouse, foundRect) ||
+		rl.CheckCollisionPointRec(mouse, fuseRect) {
 		return
 	}
-	if UIBuildButtonVisible(w, ui) && rl.CheckCollisionPointRec(mouse, build_rect) do return
+	if UIBuildButtonVisible(w, ui) && rl.CheckCollisionPointRec(mouse, buildRect) do return
 	if ui.command == .Build {
 		palette, _, count := UIBuildPaletteRects(w, ui.buildKingdom, ui.buildTown)
 		for index in 0..<count {
@@ -2749,8 +2749,8 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 			"Click land to found a town  -  %d wood  -  Esc to cancel",
 			int(cost),
 		)
-		if tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse); ok {
-			failure := TownFoundingFailure(w, kingdom, town, tile_x, tile_y)
+		if tileX, tileY, ok := UITileAtMouse(w, camera, mouse); ok {
+			failure := TownFoundingFailure(w, kingdom, town, tileX, tileY)
 			if failure != .None do label = UIPlacementFailureText(failure)
 		}
 	case .Fuse:
@@ -2763,23 +2763,23 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 			"Click an adjacent era 5 town  -  %d wood  -  Esc to cancel",
 			int(cost),
 		)
-		target_kingdom, target_town, _, found := UIFindTownAt(w, camera, mouse)
+		targetKingdom, targetTown, _, found := UIFindTownAt(w, camera, mouse)
 		if found {
-			failure := TownFusionFailure(w, kingdom, town, target_kingdom, target_town)
+			failure := TownFusionFailure(w, kingdom, town, targetKingdom, targetTown)
 			if failure != .None do label = TownFusionFailureText(failure)
 		}
 	case .Build:
 		label = "Choose a combat building  -  Esc to cancel"
 	case .Place:
 		label = fmt.ctprintf("Place %s  -  right click to stop", UIBuildingName(ui.buildKind))
-		if tile_x, tile_y, ok := UITileAtMouse(w, camera, mouse); ok {
+		if tileX, tileY, ok := UITileAtMouse(w, camera, mouse); ok {
 			failure := TownCombatConstructionFailure(
 				w,
 				ui.buildKingdom,
 				ui.buildTown,
 				ui.buildKind,
-				tile_x,
-				tile_y,
+				tileX,
+				tileY,
 			)
 			if failure != .None do label = UIPlacementFailureText(failure)
 		}
@@ -2787,17 +2787,17 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 		return
 	}
 
-	font := ui_font()
-	text_width := rl.MeasureTextEx(font, label, UI_TEXT_SIZE, 1).x
+	font := UIFont()
+	textWidth := rl.MeasureTextEx(font, label, UI_TEXT_SIZE, 1).x
 	box := rl.Rectangle{
-		clamp(mouse.x+18, 0, f32(rl.GetScreenWidth())-text_width-2*UI_PAD),
+		clamp(mouse.x+18, 0, f32(rl.GetScreenWidth())-textWidth-2*UI_PAD),
 		clamp(mouse.y+18, 0, f32(rl.GetScreenHeight())-UI_TEXT_SIZE-2*UI_PAD),
-		text_width+2*UI_PAD,
+		textWidth+2*UI_PAD,
 		UI_TEXT_SIZE+2*UI_PAD,
 	}
 	rl.DrawRectangleRec(box, UI_COLOR_BG)
 	rl.DrawRectangleLinesEx(box, 1, UI_COLOR_BORDER)
-	ui_text(label, box.x+UI_PAD, box.y+UI_PAD-2, UI_COLOR_TEXT)
+	UIText(label, box.x+UI_PAD, box.y+UI_PAD-2, UI_COLOR_TEXT)
 }
 
 UIDrawBuildButton :: proc(w: ^World, ui: ^UIState) {
@@ -2827,35 +2827,35 @@ UIDrawBuildPalette :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 			rl.DrawTexturePro(texture, source, rl.Rectangle{rect.x+8, rect.y+12, 30, 30}, rl.Vector2{0, 0}, 0, rl.WHITE)
 		}
-		ui_text(UIBuildingName(kind), rect.x+44, rect.y+8, UI_COLOR_TEXT)
+		UIText(UIBuildingName(kind), rect.x+44, rect.y+8, UI_COLOR_TEXT)
 		cost := BuildingWoodCost(kind)
-		cost_label: cstring = "Free"
-		cost_color := UI_COLOR_DIM
+		costLabel: cstring = "Free"
+		costColor := UI_COLOR_DIM
 		if cost > 0 {
-			cost_label = fmt.ctprintf("%d wood", int(cost))
+			costLabel = fmt.ctprintf("%d wood", int(cost))
 			town := &w.kingdoms[ui.buildKingdom].towns[ui.buildTown]
-			if town.wood >= cost do cost_color = UI_COLOR_TEXT
-			if town.wood < cost do cost_color = UI_COLOR_ATTACK
+			if town.wood >= cost do costColor = UI_COLOR_TEXT
+			if town.wood < cost do costColor = UI_COLOR_ATTACK
 		}
-		ui_text(cost_label, rect.x+44, rect.y+30, cost_color)
+		UIText(costLabel, rect.x+44, rect.y+30, costColor)
 	}
 }
 
 UIDrawBuildPreview :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui: ^UIState) {
 	if ui.command != .Place do return
-	tile_x, tile_y, ok := UITileAtMouse(w, camera, rl.GetMousePosition())
+	tileX, tileY, ok := UITileAtMouse(w, camera, rl.GetMousePosition())
 	if !ok do return
 
 	kingdom := ui.buildKingdom
 	town := ui.buildTown
 
 	width, height := BuildingTileSize(BuildingTypeFromKind(ui.buildKind))
-	valid := TownCombatConstructionFailure(w, kingdom, town, ui.buildKind, tile_x, tile_y) == .None
+	valid := TownCombatConstructionFailure(w, kingdom, town, ui.buildKind, tileX, tileY) == .None
 	color := rl.Color{110, 218, 128, 220}
 	if !valid do color = rl.Color{228, 92, 82, 220}
 
 	rl.BeginMode2D(camera)
-	rect := rl.Rectangle{f32(tile_x), f32(tile_y), f32(width), f32(height)}
+	rect := rl.Rectangle{f32(tileX), f32(tileY), f32(width), f32(height)}
 	rl.DrawRectangleRec(rect, rl.Color{color[0], color[1], color[2], 48})
 	rl.DrawRectangleLinesEx(rect, 2/camera.zoom, color)
 
@@ -2873,15 +2873,15 @@ UIDrawFoundPreview :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 	kingdom, town := UISelectionTown(w, ui.selection)
 	if !WorldTownExists(w, kingdom, town) do return
 
-	tile_x, tile_y, ok := UITileAtMouse(w, camera, rl.GetMousePosition())
+	tileX, tileY, ok := UITileAtMouse(w, camera, rl.GetMousePosition())
 	if !ok do return
 	width, height := BuildingTileSize(TownHall{})
-	valid := TownFoundingFailure(w, kingdom, town, tile_x, tile_y) == .None
+	valid := TownFoundingFailure(w, kingdom, town, tileX, tileY) == .None
 	color := rl.Color{110, 218, 128, 220}
 	if !valid do color = rl.Color{228, 92, 82, 220}
 
 	rl.BeginMode2D(camera)
-	rect := rl.Rectangle{f32(tile_x), f32(tile_y), f32(width), f32(height)}
+	rect := rl.Rectangle{f32(tileX), f32(tileY), f32(width), f32(height)}
 	rl.DrawRectangleRec(rect, rl.Color{color[0], color[1], color[2], 48})
 	rl.DrawRectangleLinesEx(rect, 2/camera.zoom, color)
 
@@ -2920,8 +2920,8 @@ UIDrawMilestone :: proc(w: ^World, renderer: ^WorldRenderer, kingdom, town: int)
 		UI_COLOR_BORDER_INNER,
 	)
 
-	ui_title("Town Milestone", modal.x+UI_PAD, modal.y+10, UI_COLOR_GOLD)
-	ui_text(
+	UITitle("Town Milestone", modal.x+UI_PAD, modal.y+10, UI_COLOR_GOLD)
+	UIText(
 		fmt.ctprintf(
 			"%s  -  %s  -  %d citizens  -  reward %d of %d",
 			NameKingdomCString(w, kingdom),
@@ -2937,8 +2937,8 @@ UIDrawMilestone :: proc(w: ^World, renderer: ^WorldRenderer, kingdom, town: int)
 
 	mouse := rl.GetMousePosition()
 
-	shared_units, shared_unlocks, has_shared := UIMilestoneSharedRewards(w, kingdom, town)
-	if has_shared {
+	sharedUnits, sharedUnlocks, hasShared := UIMilestoneSharedRewards(w, kingdom, town)
+	if hasShared {
 		band := rl.Rectangle{
 			modal.x+UI_PAD,
 			modal.y+82,
@@ -2949,82 +2949,82 @@ UIDrawMilestone :: proc(w: ^World, renderer: ^WorldRenderer, kingdom, town: int)
 		rl.DrawRectangleLinesEx(band, 1, UI_COLOR_BORDER_INNER)
 
 		title: cstring = "Both paths"
-		title_width := UIHudTextWidth(title)
-		ui_text(title, modal.x+(modal.width-title_width)*0.5, band.y+5, UI_COLOR_GOLD)
+		titleWidth := UIHudTextWidth(title)
+		UIText(title, modal.x+(modal.width-titleWidth)*0.5, band.y+5, UI_COLOR_GOLD)
 
-		total_width: f32 = 0
+		totalWidth: f32 = 0
 		for kind in UnitKind {
-			if !(kind in shared_units) do continue
-			if total_width > 0 do total_width += 16
-			total_width += 24+8+UIHudTextWidth(UIUnitName(kind))
+			if !(kind in sharedUnits) do continue
+			if totalWidth > 0 do totalWidth += 16
+			totalWidth += 24+8+UIHudTextWidth(UIUnitName(kind))
 		}
 		for kind in BuildingKind {
-			if !(kind in shared_unlocks) do continue
-			if total_width > 0 do total_width += 16
-			total_width += 24+8+UIHudTextWidth(UIBuildingName(kind))
+			if !(kind in sharedUnlocks) do continue
+			if totalWidth > 0 do totalWidth += 16
+			totalWidth += 24+8+UIHudTextWidth(UIBuildingName(kind))
 		}
 
-		item_x := modal.x+(modal.width-total_width)*0.5
-		item_y := band.y+28
+		itemX := modal.x+(modal.width-totalWidth)*0.5
+		itemY := band.y+28
 		for kind in UnitKind {
-			if !(kind in shared_units) do continue
+			if !(kind in sharedUnits) do continue
 			texture := renderer.sprites.unit[FactionSpriteIndex(kingdom)][kind]
 			if texture.id != 0 {
 				source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
-				rl.DrawTexturePro(texture, source, rl.Rectangle{item_x, item_y, 24, 24}, rl.Vector2{0, 0}, 0, rl.WHITE)
+				rl.DrawTexturePro(texture, source, rl.Rectangle{itemX, itemY, 24, 24}, rl.Vector2{0, 0}, 0, rl.WHITE)
 			}
-			ui_text(UIUnitName(kind), item_x+32, item_y+2, UI_COLOR_TEXT)
-			item_x += 24+8+UIHudTextWidth(UIUnitName(kind))+16
+			UIText(UIUnitName(kind), itemX+32, itemY+2, UI_COLOR_TEXT)
+			itemX += 24+8+UIHudTextWidth(UIUnitName(kind))+16
 		}
 		for kind in BuildingKind {
-			if !(kind in shared_unlocks) do continue
+			if !(kind in sharedUnlocks) do continue
 			texture := renderer.sprites.building[FactionSpriteIndex(kingdom)][kind]
 			if texture.id != 0 {
 				source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
-				rl.DrawTexturePro(texture, source, rl.Rectangle{item_x, item_y, 24, 24}, rl.Vector2{0, 0}, 0, rl.WHITE)
+				rl.DrawTexturePro(texture, source, rl.Rectangle{itemX, itemY, 24, 24}, rl.Vector2{0, 0}, 0, rl.WHITE)
 			}
-			ui_text(UIBuildingName(kind), item_x+32, item_y+2, UI_COLOR_TEXT)
-			item_x += 24+8+UIHudTextWidth(UIBuildingName(kind))+16
+			UIText(UIBuildingName(kind), itemX+32, itemY+2, UI_COLOR_TEXT)
+			itemX += 24+8+UIHudTextWidth(UIBuildingName(kind))+16
 		}
 	}
 
 	cards := UIMilestoneCardRects(w, kingdom, town, modal)
-	for card, option_index in cards {
+	for card, optionIndex in cards {
 		hovered := rl.CheckCollisionPointRec(mouse, card)
 		background := hovered ? UI_COLOR_BUTTON_HOVER : UI_COLOR_BUTTON
 		rl.DrawRectangleRec(card, background)
 		rl.DrawRectangleLinesEx(card, 1, hovered ? UI_COLOR_GOLD : UI_COLOR_BORDER_INNER)
 
-		option, ok := TownMilestoneOption(w, kingdom, town, option_index)
+		option, ok := TownMilestoneOption(w, kingdom, town, optionIndex)
 		if !ok do continue
 
-		ui_title(UITownPathName(option.path), card.x+UI_PAD, card.y+8, UI_COLOR_GOLD)
+		UITitle(UITownPathName(option.path), card.x+UI_PAD, card.y+8, UI_COLOR_GOLD)
 		row := 0
 		for kind in UnitKind {
-			if !(kind in option.units) || (kind in shared_units) do continue
-			row_y := card.y+42+f32(row)*28
+			if !(kind in option.units) || (kind in sharedUnits) do continue
+			rowY := card.y+42+f32(row)*28
 			texture := renderer.sprites.unit[FactionSpriteIndex(kingdom)][kind]
 			if texture.id != 0 {
-				icon := rl.Rectangle{card.x+UI_PAD, row_y+2, 24, 24}
+				icon := rl.Rectangle{card.x+UI_PAD, rowY+2, 24, 24}
 				source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 				rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
 			}
-			ui_text(UIUnitName(kind), card.x+UI_PAD+32, row_y+2, UI_COLOR_TEXT)
+			UIText(UIUnitName(kind), card.x+UI_PAD+32, rowY+2, UI_COLOR_TEXT)
 			row += 1
 		}
 		for kind in BuildingKind {
-			if !(kind in option.unlocks) || (kind in shared_unlocks) do continue
-			row_y := card.y+42+f32(row)*28
+			if !(kind in option.unlocks) || (kind in sharedUnlocks) do continue
+			rowY := card.y+42+f32(row)*28
 			texture := renderer.sprites.building[FactionSpriteIndex(kingdom)][kind]
 			if texture.id != 0 {
-				icon := rl.Rectangle{card.x+UI_PAD, row_y+2, 24, 24}
+				icon := rl.Rectangle{card.x+UI_PAD, rowY+2, 24, 24}
 				source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 				rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
 			}
-			ui_text(UIBuildingName(kind), card.x+UI_PAD+32, row_y+2, UI_COLOR_TEXT)
+			UIText(UIBuildingName(kind), card.x+UI_PAD+32, rowY+2, UI_COLOR_TEXT)
 			row += 1
 		}
-		ui_text("Click to choose", card.x+UI_PAD, card.y+card.height-26, UI_COLOR_DIM)
+		UIText("Click to choose", card.x+UI_PAD, card.y+card.height-26, UI_COLOR_DIM)
 	}
 }
 
@@ -3041,9 +3041,9 @@ UIButton :: proc(rect: rl.Rectangle, label: cstring, enabled: bool) {
 
 	color := UI_COLOR_TEXT
 	if !enabled do color = UI_COLOR_DISABLED_TEXT
-	width := rl.MeasureTextEx(ui_font(), label, UI_TEXT_SIZE, 1).x
+	width := rl.MeasureTextEx(UIFont(), label, UI_TEXT_SIZE, 1).x
 	rl.DrawTextEx(
-		ui_font(),
+		UIFont(),
 		label,
 		rl.Vector2{rect.x+(rect.width-width)*0.5, rect.y+(rect.height-UI_TEXT_SIZE)*0.5+1},
 		UI_TEXT_SIZE,
@@ -3068,11 +3068,11 @@ UI_ALERT_ROW_H :: 30
 UI_ALERT_MAX_ROWS :: 6
 
 UIHudTextWidth :: proc(text: cstring) -> f32 {
-	return rl.MeasureTextEx(ui_font(), text, UI_TEXT_SIZE, 1).x
+	return rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x
 }
 
 UIHudLineHeight :: proc() -> f32 {
-	return rl.MeasureTextEx(ui_font(), "Ag", UI_TEXT_SIZE, 1).y
+	return rl.MeasureTextEx(UIFont(), "Ag", UI_TEXT_SIZE, 1).y
 }
 
 UIHudTimeLabel :: proc(w: ^World) -> cstring {
@@ -3080,25 +3080,25 @@ UIHudTimeLabel :: proc(w: ^World) -> cstring {
 }
 
 UIHudWarLabel :: proc(w: ^World) -> cstring {
-	war_count := UIWarCount(w)
-	if war_count > 0 do return fmt.ctprintf("AT WAR: %d", war_count)
+	warCount := UIWarCount(w)
+	if warCount > 0 do return fmt.ctprintf("AT WAR: %d", warCount)
 	return "At peace"
 }
 
 UIHudRect :: proc(w: ^World) -> rl.Rectangle {
 	local := WorldLocalKingdom(w)
 	name := local >= 0 ? NameKingdomCString(w, local) : cstring("SPECTATOR")
-	name_width := UIHudTextWidth(name)
-	time_width := UIHudTextWidth(UIHudTimeLabel(w))
-	war_width := UIHudTextWidth(UIHudWarLabel(w))
-	line_width := max(name_width, time_width+24+war_width)
+	nameWidth := UIHudTextWidth(name)
+	timeWidth := UIHudTextWidth(UIHudTimeLabel(w))
+	warWidth := UIHudTextWidth(UIHudWarLabel(w))
+	lineWidth := max(nameWidth, timeWidth+24+warWidth)
 
-	towns_width := UIHudTextWidth("TOWNS")+2*UI_HUD_BUTTON_PAD
-	diplomacy_width := UIHudTextWidth("DIPLOMACY")+2*UI_HUD_BUTTON_PAD
-	buttons_width := towns_width+8+diplomacy_width
+	townsWidth := UIHudTextWidth("TOWNS")+2*UI_HUD_BUTTON_PAD
+	diplomacyWidth := UIHudTextWidth("DIPLOMACY")+2*UI_HUD_BUTTON_PAD
+	buttonsWidth := townsWidth+8+diplomacyWidth
 
 	height := max(UIHudLineHeight()*2, UI_HUD_BUTTON_H)+2*UI_HUD_PAD
-	width := UI_HUD_PAD*2+line_width+UI_HUD_GAP+buttons_width
+	width := UI_HUD_PAD*2+lineWidth+UI_HUD_GAP+buttonsWidth
 	return rl.Rectangle{
 		max(UI_MARGIN, f32(rl.GetScreenWidth())-UI_MARGIN-width),
 		UI_MARGIN,
@@ -3109,12 +3109,12 @@ UIHudRect :: proc(w: ^World) -> rl.Rectangle {
 
 UIHudTownsButtonRect :: proc(w: ^World) -> rl.Rectangle {
 	hud := UIHudRect(w)
-	diplomacy_width := UIHudTextWidth("DIPLOMACY")+2*UI_HUD_BUTTON_PAD
-	towns_width := UIHudTextWidth("TOWNS")+2*UI_HUD_BUTTON_PAD
+	diplomacyWidth := UIHudTextWidth("DIPLOMACY")+2*UI_HUD_BUTTON_PAD
+	townsWidth := UIHudTextWidth("TOWNS")+2*UI_HUD_BUTTON_PAD
 	return rl.Rectangle{
-		hud.x+hud.width-UI_HUD_PAD-diplomacy_width-8-towns_width,
+		hud.x+hud.width-UI_HUD_PAD-diplomacyWidth-8-townsWidth,
 		hud.y+(hud.height-UI_HUD_BUTTON_H)*0.5,
-		towns_width,
+		townsWidth,
 		UI_HUD_BUTTON_H,
 	}
 }
@@ -3133,8 +3133,8 @@ UIPlayerTownCount :: proc(w: ^World) -> int {
 	local := WorldLocalKingdom(w)
 	if local < 0 do return 0
 	count := 0
-	for town_slot in 0..<TOWN_CAPACITY {
-		if w.kingdoms[local].townUsed[town_slot] do count += 1
+	for townSlot in 0..<TOWN_CAPACITY {
+		if w.kingdoms[local].townUsed[townSlot] do count += 1
 	}
 	return count
 }
@@ -3143,9 +3143,9 @@ UIPlayerTownAt :: proc(w: ^World, index: int) -> (int, bool) {
 	local := WorldLocalKingdom(w)
 	if index < 0 || local < 0 do return -1, false
 	seen := 0
-	for town_slot in 0..<TOWN_CAPACITY {
-		if !w.kingdoms[local].townUsed[town_slot] do continue
-		if seen == index do return town_slot, true
+	for townSlot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[local].townUsed[townSlot] do continue
+		if seen == index do return townSlot, true
 		seen += 1
 	}
 	return -1, false
@@ -3155,8 +3155,8 @@ UIDiplomacyCount :: proc(w: ^World) -> int {
 	count := 0
 	local := WorldLocalKingdom(w)
 	if local < 0 do return 0
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if kingdom_slot == local || !KingdomDiscovered(w, kingdom_slot) do continue
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if kingdomSlot == local || !KingdomDiscovered(w, kingdomSlot) do continue
 		count += 1
 	}
 	return count
@@ -3167,9 +3167,9 @@ UIDiplomacyAt :: proc(w: ^World, index: int) -> (int, bool) {
 	local := WorldLocalKingdom(w)
 	if local < 0 do return -1, false
 	seen := 0
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if kingdom_slot == local || !KingdomDiscovered(w, kingdom_slot) do continue
-		if seen == index do return kingdom_slot, true
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if kingdomSlot == local || !KingdomDiscovered(w, kingdomSlot) do continue
+		if seen == index do return kingdomSlot, true
 		seen += 1
 	}
 	return -1, false
@@ -3185,9 +3185,9 @@ UISidePanelRect :: proc(w: ^World, ui: ^UIState) -> rl.Rectangle {
 		rows = max(UIDiplomacyCount(w), 1)
 	case .None:
 	}
-	row_height: f32 = UI_SIDE_ROW_H
-	if ui.panel == .Diplomacy do row_height = UI_DIPLO_ROW_H
-	height := UI_SIDE_HEADER_H+f32(rows)*row_height+12
+	rowHeight: f32 = UI_SIDE_ROW_H
+	if ui.panel == .Diplomacy do rowHeight = UI_DIPLO_ROW_H
+	height := UI_SIDE_HEADER_H+f32(rows)*rowHeight+12
 	if ui.panel == .Towns && UIPlayerTownCount(w) > UI_SIDE_MAX_TOWN_ROWS do height += 30
 	return rl.Rectangle{UI_MARGIN, UI_MARGIN, UI_SIDE_PANEL_W, height}
 }
@@ -3224,9 +3224,9 @@ UIDiplomacyActionRect :: proc(panel: rl.Rectangle, row: int) -> rl.Rectangle {
 UITownUnderAttack :: proc(w: ^World, kingdom, town: int) -> bool {
 	if !WorldTownExists(w, kingdom, town) do return false
 	orders := &w.kingdoms[kingdom].towns[town]
-	for attacker_kingdom in 0..<KINGDOMS_CAPACITY {
-		for attacker_town in 0..<TOWN_CAPACITY {
-			if orders.attackedBy[attacker_kingdom][attacker_town] do return true
+	for attackerKingdom in 0..<KINGDOMS_CAPACITY {
+		for attackerTown in 0..<TOWN_CAPACITY {
+			if orders.attackedBy[attackerKingdom][attackerTown] do return true
 		}
 	}
 	return false
@@ -3236,14 +3236,14 @@ UIWarCount :: proc(w: ^World) -> int {
 	local := WorldLocalKingdom(w)
 	if local < 0 do return 0
 	count := 0
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if KingdomAtWar(w, local, kingdom_slot) do count += 1
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if KingdomAtWar(w, local, kingdomSlot) do count += 1
 	}
 	return count
 }
 
-UIFocusTown :: proc(w: ^World, view: ^WorldView, kingdom_slot, town_slot: int) {
-	hall := TownHallSlot(w, kingdom_slot, town_slot)
+UIFocusTown :: proc(w: ^World, view: ^WorldView, kingdomSlot, townSlot: int) {
+	hall := TownHallSlot(w, kingdomSlot, townSlot)
 	if hall < 0 do return
 	width, height := BuildingTileSize(w.buildings[hall].type)
 	view.camera.target = rl.Vector2{
@@ -3253,7 +3253,7 @@ UIFocusTown :: proc(w: ^World, view: ^WorldView, kingdom_slot, town_slot: int) {
 	view.ui.command = .Inspect
 	view.ui.hover = {}
 	view.ui.selection = {}
-	if FogTownVisible(w, kingdom_slot, town_slot) {
+	if FogTownVisible(w, kingdomSlot, townSlot) {
 		view.ui.selection = Selection{kind = .Building, slot = hall}
 	}
 }
@@ -3285,15 +3285,15 @@ UIAlertTownName :: proc(name: ^Name) -> cstring {
 UIAlertText :: proc(w: ^World, alert: ^Alert) -> cstring {
 	switch alert.kind {
 	case .TownFounded:
-		return fmt.ctprintf("%s founded", UIAlertTownName(&alert.town_name))
+		return fmt.ctprintf("%s founded", UIAlertTownName(&alert.townName))
 	case .TownLost:
-		return fmt.ctprintf("%s lost", UIAlertTownName(&alert.town_name))
+		return fmt.ctprintf("%s lost", UIAlertTownName(&alert.townName))
 	case .UnderAttack:
-		return fmt.ctprintf("%s under attack", UIAlertTownName(&alert.town_name))
+		return fmt.ctprintf("%s under attack", UIAlertTownName(&alert.townName))
 	case .EnemySpotted:
 		return fmt.ctprintf("Enemy spotted: %s", NameKingdomCString(w, alert.other))
 	case .Milestone:
-		return fmt.ctprintf("%s milestone ready", UIAlertTownName(&alert.town_name))
+		return fmt.ctprintf("%s milestone ready", UIAlertTownName(&alert.townName))
 	case .WarDeclared:
 		return fmt.ctprintf("War declared on %s", NameKingdomCString(w, alert.other))
 	case .PeaceMade:
@@ -3301,15 +3301,15 @@ UIAlertText :: proc(w: ^World, alert: ^Alert) -> cstring {
 	case .TownGrowth:
 		return fmt.ctprintf(
 			"%s +%d villagers (%d total)",
-			UIAlertTownName(&alert.town_name),
+			UIAlertTownName(&alert.townName),
 			alert.amount,
 			alert.total,
 		)
 	case .TownFused:
 		return fmt.ctprintf(
 			"%s fused into %s",
-			UIAlertTownName(&alert.other_name),
-			UIAlertTownName(&alert.town_name),
+			UIAlertTownName(&alert.otherName),
+			UIAlertTownName(&alert.townName),
 		)
 	}
 	return ""
@@ -3361,8 +3361,8 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 			switch ui.panel {
 			case .Towns:
 				count := UIPlayerTownCount(w)
-				max_scroll := max(count-UI_SIDE_MAX_TOWN_ROWS, 0)
-				ui.townScroll = clamp(ui.townScroll, 0, max_scroll)
+				maxScroll := max(count-UI_SIDE_MAX_TOWN_ROWS, 0)
+				ui.townScroll = clamp(ui.townScroll, 0, maxScroll)
 
 				if rl.IsMouseButtonPressed(.LEFT) && count > UI_SIDE_MAX_TOWN_ROWS {
 					prev, next := UITownPageButtonRects(panel)
@@ -3370,8 +3370,8 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 						ui.townScroll = max(ui.townScroll-UI_SIDE_MAX_TOWN_ROWS, 0)
 						return true
 					}
-					if rl.CheckCollisionPointRec(mouse, next) && ui.townScroll < max_scroll {
-						ui.townScroll = min(ui.townScroll+UI_SIDE_MAX_TOWN_ROWS, max_scroll)
+					if rl.CheckCollisionPointRec(mouse, next) && ui.townScroll < maxScroll {
+						ui.townScroll = min(ui.townScroll+UI_SIDE_MAX_TOWN_ROWS, maxScroll)
 						return true
 					}
 				}
@@ -3379,8 +3379,8 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 				if rl.IsMouseButtonPressed(.LEFT) {
 					row := int((mouse.y-(panel.y+UI_SIDE_HEADER_H))/UI_SIDE_ROW_H)
 					if row >= 0 && row < min(count, UI_SIDE_MAX_TOWN_ROWS) {
-						if town_slot, found := UIPlayerTownAt(w, ui.townScroll+row); found {
-							UIFocusTown(w, view, local, town_slot)
+						if townSlot, found := UIPlayerTownAt(w, ui.townScroll+row); found {
+							UIFocusTown(w, view, local, townSlot)
 						}
 					}
 				}
@@ -3388,15 +3388,15 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 				if rl.IsMouseButtonPressed(.LEFT) {
 					row := int((mouse.y-(panel.y+UI_SIDE_HEADER_H))/UI_DIPLO_ROW_H)
 					if row >= 0 && row < UIDiplomacyCount(w) {
-						if kingdom_slot, found := UIDiplomacyAt(w, row); found {
+						if kingdomSlot, found := UIDiplomacyAt(w, row); found {
 							if rl.CheckCollisionPointRec(mouse, UIDiplomacyActionRect(panel, row)) {
-								if KingdomAtWar(w, local, kingdom_slot) {
-									KingdomIssueCommand(w, local, CommandMakePeace{other = kingdom_slot})
+								if KingdomAtWar(w, local, kingdomSlot) {
+									KingdomIssueCommand(w, local, CommandMakePeace{other = kingdomSlot})
 								} else {
-									KingdomIssueCommand(w, local, CommandDeclareWar{other = kingdom_slot})
+									KingdomIssueCommand(w, local, CommandDeclareWar{other = kingdomSlot})
 								}
-							} else if town_slot, town_found := FogFirstDiscoveredTown(w, kingdom_slot); town_found {
-								UIFocusTown(w, view, kingdom_slot, town_slot)
+							} else if townSlot, townFound := FogFirstDiscoveredTown(w, kingdomSlot); townFound {
+								UIFocusTown(w, view, kingdomSlot, townSlot)
 							}
 						}
 					}
@@ -3411,12 +3411,12 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 		panel := UIAlertPanelRect(w)
 		if rl.CheckCollisionPointRec(mouse, panel) {
 			row := int((mouse.y-(panel.y+UI_SIDE_HEADER_H))/UI_ALERT_ROW_H)
-			valid_row := row >= 0 && row < min(w.alerts.count, UI_ALERT_MAX_ROWS)
+			validRow := row >= 0 && row < min(w.alerts.count, UI_ALERT_MAX_ROWS)
 			if rl.IsMouseButtonPressed(.RIGHT) {
-				if valid_row do WorldAlertDismiss(w, row)
+				if validRow do WorldAlertDismiss(w, row)
 				return true
 			}
-			if rl.IsMouseButtonPressed(.LEFT) && valid_row {
+			if rl.IsMouseButtonPressed(.LEFT) && validRow {
 				if alert, found := WorldAlertNewest(w, row); found {
 					UIFocusAlert(w, view, alert)
 				}
@@ -3441,17 +3441,17 @@ UIDrawHud :: proc(w: ^World, ui: ^UIState) {
 	local := WorldLocalKingdom(w)
 	if local < 0 {
 		rl.DrawRectangleRec(rl.Rectangle{hud.x+3, hud.y+3, 4, hud.height-6}, UI_COLOR_DIM)
-		line_height := UIHudLineHeight()
-		title_y := hud.y+UI_HUD_PAD
-		detail_y := title_y+line_height
-		ui_text("SPECTATING", hud.x+UI_HUD_PAD, title_y, UI_COLOR_GOLD)
-		ui_text("ESC  PAUSE", hud.x+UI_HUD_PAD, detail_y, UI_COLOR_DIM)
+		lineHeight := UIHudLineHeight()
+		titleY := hud.y+UI_HUD_PAD
+		detailY := titleY+lineHeight
+		UIText("SPECTATING", hud.x+UI_HUD_PAD, titleY, UI_COLOR_GOLD)
+		UIText("ESC  PAUSE", hud.x+UI_HUD_PAD, detailY, UI_COLOR_DIM)
 		winner := w.winnerKingdom
 		if winner >= 0 && w.kingdomUsed[winner] {
-			ui_text(
+			UIText(
 				NameKingdomCString(w, winner),
 				hud.x+UI_HUD_PAD+120,
-				detail_y,
+				detailY,
 				FactionColor(w, winner),
 			)
 		}
@@ -3463,33 +3463,33 @@ UIDrawHud :: proc(w: ^World, ui: ^UIState) {
 		FactionColor(w, local),
 	)
 
-	line_height := UIHudLineHeight()
-	text_x := hud.x+UI_HUD_PAD
-	title_y := hud.y+UI_HUD_PAD
-	detail_y := title_y+line_height
+	lineHeight := UIHudLineHeight()
+	textX := hud.x+UI_HUD_PAD
+	titleY := hud.y+UI_HUD_PAD
+	detailY := titleY+lineHeight
 
-	ui_text(NameKingdomCString(w, local), text_x, title_y, UI_COLOR_GOLD)
+	UIText(NameKingdomCString(w, local), textX, titleY, UI_COLOR_GOLD)
 
-	time_label := UIHudTimeLabel(w)
-	time_width := UIHudTextWidth(time_label)
-	war_label := UIHudWarLabel(w)
-	ui_text(time_label, text_x, detail_y, UI_COLOR_DIM)
-	ui_text(
-		war_label,
-		text_x+time_width+24,
-		detail_y,
+	timeLabel := UIHudTimeLabel(w)
+	timeWidth := UIHudTextWidth(timeLabel)
+	warLabel := UIHudWarLabel(w)
+	UIText(timeLabel, textX, detailY, UI_COLOR_DIM)
+	UIText(
+		warLabel,
+		textX+timeWidth+24,
+		detailY,
 		UIWarCount(w) > 0 ? UI_COLOR_ATTACK : UI_COLOR_DIM,
 	)
 
-	towns_rect := UIHudTownsButtonRect(w)
-	diplomacy_rect := UIHudDiplomacyButtonRect(w)
-	UIButton(towns_rect, "TOWNS", true)
-	UIButton(diplomacy_rect, "DIPLOMACY", true)
+	townsRect := UIHudTownsButtonRect(w)
+	diplomacyRect := UIHudDiplomacyButtonRect(w)
+	UIButton(townsRect, "TOWNS", true)
+	UIButton(diplomacyRect, "DIPLOMACY", true)
 	if ui.panel == .Towns {
-		rl.DrawRectangleLinesEx(towns_rect, 2, UI_COLOR_GOLD)
+		rl.DrawRectangleLinesEx(townsRect, 2, UI_COLOR_GOLD)
 	}
 	if ui.panel == .Diplomacy {
-		rl.DrawRectangleLinesEx(diplomacy_rect, 2, UI_COLOR_GOLD)
+		rl.DrawRectangleLinesEx(diplomacyRect, 2, UI_COLOR_GOLD)
 	}
 }
 
@@ -3508,34 +3508,34 @@ UIDrawSidePanel :: proc(w: ^World, ui: ^UIState) {
 
 	switch ui.panel {
 	case .Towns:
-		ui_text("YOUR TOWNS", panel.x+UI_PAD, panel.y+9, UI_COLOR_GOLD)
+		UIText("YOUR TOWNS", panel.x+UI_PAD, panel.y+9, UI_COLOR_GOLD)
 		count := UIPlayerTownCount(w)
 		if count == 0 {
-			ui_text("No towns yet.", panel.x+UI_PAD, panel.y+UI_SIDE_HEADER_H+6, UI_COLOR_DIM)
+			UIText("No towns yet.", panel.x+UI_PAD, panel.y+UI_SIDE_HEADER_H+6, UI_COLOR_DIM)
 			return
 		}
 		visible := min(count, UI_SIDE_MAX_TOWN_ROWS)
 		for row in 0..<visible {
-			town_slot, found := UIPlayerTownAt(w, ui.townScroll+row)
+			townSlot, found := UIPlayerTownAt(w, ui.townScroll+row)
 			if !found do continue
-			town := &w.kingdoms[local].towns[town_slot]
-			row_rect := rl.Rectangle{
+			town := &w.kingdoms[local].towns[townSlot]
+			rowRect := rl.Rectangle{
 				panel.x+8,
 				panel.y+UI_SIDE_HEADER_H+f32(row)*UI_SIDE_ROW_H,
 				panel.width-16,
 				UI_SIDE_ROW_H-2,
 			}
-			hovered := rl.CheckCollisionPointRec(rl.GetMousePosition(), row_rect)
-			if hovered do rl.DrawRectangleRec(row_rect, UI_COLOR_BUTTON_HOVER)
-			ui_text(NameTownCString(w, local, town_slot), row_rect.x+6, row_rect.y+4, UI_COLOR_TEXT)
-			ui_text_right(
+			hovered := rl.CheckCollisionPointRec(rl.GetMousePosition(), rowRect)
+			if hovered do rl.DrawRectangleRec(rowRect, UI_COLOR_BUTTON_HOVER)
+			UIText(NameTownCString(w, local, townSlot), rowRect.x+6, rowRect.y+4, UI_COLOR_TEXT)
+			UITextRight(
 				fmt.ctprintf("C%d  W%d", town.citizens, int(town.wood)),
-				row_rect.x+row_rect.width-6,
-				row_rect.y+4,
+				rowRect.x+rowRect.width-6,
+				rowRect.y+4,
 				UI_COLOR_DIM,
 			)
-			if UITownUnderAttack(w, local, town_slot) {
-				ui_text("!", row_rect.x+row_rect.width-132, row_rect.y+4, UI_COLOR_ATTACK)
+			if UITownUnderAttack(w, local, townSlot) {
+				UIText("!", rowRect.x+rowRect.width-132, rowRect.y+4, UI_COLOR_ATTACK)
 			}
 		}
 		if count > UI_SIDE_MAX_TOWN_ROWS {
@@ -3544,37 +3544,37 @@ UIDrawSidePanel :: proc(w: ^World, ui: ^UIState) {
 			UIButton(next, "NEXT", ui.townScroll+UI_SIDE_MAX_TOWN_ROWS < count)
 		}
 	case .Diplomacy:
-		ui_text("DIPLOMACY", panel.x+UI_PAD, panel.y+9, UI_COLOR_GOLD)
+		UIText("DIPLOMACY", panel.x+UI_PAD, panel.y+9, UI_COLOR_GOLD)
 		count := UIDiplomacyCount(w)
 		if count == 0 {
-			ui_text("No kingdoms discovered.", panel.x+UI_PAD, panel.y+UI_SIDE_HEADER_H+6, UI_COLOR_DIM)
+			UIText("No kingdoms discovered.", panel.x+UI_PAD, panel.y+UI_SIDE_HEADER_H+6, UI_COLOR_DIM)
 			return
 		}
 		for row in 0..<count {
-			kingdom_slot, found := UIDiplomacyAt(w, row)
+			kingdomSlot, found := UIDiplomacyAt(w, row)
 			if !found do continue
-			row_rect := rl.Rectangle{
+			rowRect := rl.Rectangle{
 				panel.x+8,
 				panel.y+UI_SIDE_HEADER_H+f32(row)*UI_DIPLO_ROW_H,
 				panel.width-16,
 				UI_DIPLO_ROW_H-2,
 			}
-			hovered := rl.CheckCollisionPointRec(rl.GetMousePosition(), row_rect)
-			if hovered do rl.DrawRectangleRec(row_rect, UI_COLOR_BUTTON_HOVER)
+			hovered := rl.CheckCollisionPointRec(rl.GetMousePosition(), rowRect)
+			if hovered do rl.DrawRectangleRec(rowRect, UI_COLOR_BUTTON_HOVER)
 			rl.DrawRectangleRec(
-				rl.Rectangle{row_rect.x+6, row_rect.y+8, 10, 24},
-				FactionColor(w, kingdom_slot),
+				rl.Rectangle{rowRect.x+6, rowRect.y+8, 10, 24},
+				FactionColor(w, kingdomSlot),
 			)
-			ui_text(NameKingdomCString(w, kingdom_slot), row_rect.x+24, row_rect.y+4, UI_COLOR_TEXT)
-			at_war := KingdomAtWar(w, local, kingdom_slot)
-			ui_text(
-				at_war ? "AT WAR" : "Peace",
-				row_rect.x+24,
-				row_rect.y+24,
-				at_war ? UI_COLOR_ATTACK : UI_COLOR_DIM,
+			UIText(NameKingdomCString(w, kingdomSlot), rowRect.x+24, rowRect.y+4, UI_COLOR_TEXT)
+			atWar := KingdomAtWar(w, local, kingdomSlot)
+			UIText(
+				atWar ? "AT WAR" : "Peace",
+				rowRect.x+24,
+				rowRect.y+24,
+				atWar ? UI_COLOR_ATTACK : UI_COLOR_DIM,
 			)
 			action := UIDiplomacyActionRect(panel, row)
-			UIButton(action, at_war ? "Make Peace" : "Declare War", true)
+			UIButton(action, atWar ? "Make Peace" : "Declare War", true)
 		}
 	case .None:
 	}
@@ -3590,25 +3590,25 @@ UIDrawAlerts :: proc(w: ^World) {
 		1,
 		UI_COLOR_BORDER_INNER,
 	)
-	ui_text("ALERTS", panel.x+UI_PAD, panel.y+9, UI_COLOR_GOLD)
+	UIText("ALERTS", panel.x+UI_PAD, panel.y+9, UI_COLOR_GOLD)
 
 	rows := min(w.alerts.count, UI_ALERT_MAX_ROWS)
 	for row in 0..<rows {
 		alert, found := WorldAlertNewest(w, row)
 		if !found do continue
-		row_rect := rl.Rectangle{
+		rowRect := rl.Rectangle{
 			panel.x+8,
 			panel.y+UI_SIDE_HEADER_H+f32(row)*UI_ALERT_ROW_H,
 			panel.width-16,
 			UI_ALERT_ROW_H-2,
 		}
-		if rl.CheckCollisionPointRec(rl.GetMousePosition(), row_rect) {
-			rl.DrawRectangleRec(row_rect, UI_COLOR_BUTTON_HOVER)
+		if rl.CheckCollisionPointRec(rl.GetMousePosition(), rowRect) {
+			rl.DrawRectangleRec(rowRect, UI_COLOR_BUTTON_HOVER)
 		}
 		rl.DrawRectangleRec(
-			rl.Rectangle{row_rect.x+2, row_rect.y+4, 3, row_rect.height-8},
+			rl.Rectangle{rowRect.x+2, rowRect.y+4, 3, rowRect.height-8},
 			UIAlertColor(alert.kind),
 		)
-		ui_text(UIAlertText(w, &alert), row_rect.x+12, row_rect.y+4, UI_COLOR_TEXT)
+		UIText(UIAlertText(w, &alert), rowRect.x+12, rowRect.y+4, UI_COLOR_TEXT)
 	}
 }

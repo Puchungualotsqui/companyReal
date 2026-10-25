@@ -161,14 +161,14 @@ WorldSpawnStreetLamp :: proc(w: ^World, x, y: int) {
 }
 
 WorldTileHasLamp :: proc(w: ^World, x, y: int) -> bool {
-	chunk_size := w.spatial.chunkSize
-	if chunk_size <= 0 do return false
-	wrapped_x := WorldWrapCoordinate(x, int(w.maxX))
-	wrapped_y := WorldWrapCoordinate(y, int(w.maxY))
-	chunk := (wrapped_x/chunk_size)*w.spatial.chunksY+wrapped_y/chunk_size
+	chunkSize := w.spatial.chunkSize
+	if chunkSize <= 0 do return false
+	wrappedX := WorldWrapCoordinate(x, int(w.maxX))
+	wrappedY := WorldWrapCoordinate(y, int(w.maxY))
+	chunk := (wrappedX/chunkSize)*w.spatial.chunksY+wrappedY/chunkSize
 	for slot := w.spatial.decorationHead[chunk]; slot >= 0; slot = w.spatial.decorationNext[slot] {
 		if w.decorations.kind[slot] != .Lamp do continue
-		if int(w.decorations.x[slot]) == wrapped_x && int(w.decorations.y[slot]) == wrapped_y {
+		if int(w.decorations.x[slot]) == wrappedX && int(w.decorations.y[slot]) == wrappedY {
 			return true
 		}
 	}
@@ -203,25 +203,25 @@ DecorationFell :: proc(w: ^World, slot: int) {
 
 // Regrows a stump into a tree once it has rested long enough. Roads and
 // buildings keep the ground claimed, so the stump is dropped instead.
-DecorationRegrowth :: proc(w: ^World, slot: int, delta_time: f32) -> bool {
+DecorationRegrowth :: proc(w: ^World, slot: int, deltaTime: f32) -> bool {
 	if slot < 0 || slot >= DECORATION_CAPACITY || !w.decorationUsed[slot] do return false
 	if w.decorations.kind[slot] != .Stump do return false
 
-	tile_x := int(w.decorations.x[slot])
-	tile_y := int(w.decorations.y[slot])
-	if WorldFireAt(w, tile_x, tile_y) do return false
-	if WorldTileOccupied(w, tile_x, tile_y) {
+	tileX := int(w.decorations.x[slot])
+	tileY := int(w.decorations.y[slot])
+	if WorldFireAt(w, tileX, tileY) do return false
+	if WorldTileOccupied(w, tileX, tileY) {
 		WorldDecorationDespawn(w, slot)
 		return false
 	}
 
-	w.decorations.regrowTimer[slot] += delta_time
+	w.decorations.regrowTimer[slot] += deltaTime
 	if w.decorations.regrowTimer[slot] < DECORATION_REGROW_SECONDS do return false
 
 	kind := DecorationKind.Tree
-	if WorldNoiseHash(tile_x, tile_y, 0xA11CE) < 0.35 do kind = .Pine
+	if WorldNoiseHash(tileX, tileY, 0xA11CE) < 0.35 do kind = .Pine
 	w.decorations.kind[slot] = kind
-	w.decorations.variant[slot] = u8(int(WorldNoiseHash(tile_y, tile_x, 0xA11CF)*4) & 3)
+	w.decorations.variant[slot] = u8(int(WorldNoiseHash(tileY, tileX, 0xA11CF)*4) & 3)
 	w.decorations.health[slot] = DecorationHealth(kind)
 	w.decorations.regrowTimer[slot] = 0
 	w.decorationStumps -= 1
@@ -231,26 +231,26 @@ DecorationRegrowth :: proc(w: ^World, slot: int, delta_time: f32) -> bool {
 
 
 WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> f32 {
-	chunk_size := w.spatial.chunkSize
-	if chunk_size <= 0 || width <= 0 || height <= 0 do return 0
+	chunkSize := w.spatial.chunkSize
+	if chunkSize <= 0 || width <= 0 || height <= 0 do return 0
 
 	harvested: f32 = 0
-	first_chunk_x := x/chunk_size
-	last_chunk_x := (x+width-1)/chunk_size
-	first_chunk_y := y/chunk_size
-	last_chunk_y := (y+height-1)/chunk_size
-	for chunk_y in first_chunk_y ..= last_chunk_y {
-		wrapped_y := WorldWrapCoordinate(chunk_y, w.spatial.chunksY)
-		for chunk_x in first_chunk_x ..= last_chunk_x {
-			wrapped_x := WorldWrapCoordinate(chunk_x, w.spatial.chunksX)
-			chunk := wrapped_x*w.spatial.chunksY+wrapped_y
+	firstChunkX := x/chunkSize
+	lastChunkX := (x+width-1)/chunkSize
+	firstChunkY := y/chunkSize
+	lastChunkY := (y+height-1)/chunkSize
+	for chunkY in firstChunkY ..= lastChunkY {
+		wrappedY := WorldWrapCoordinate(chunkY, w.spatial.chunksY)
+		for chunkX in firstChunkX ..= lastChunkX {
+			wrappedX := WorldWrapCoordinate(chunkX, w.spatial.chunksX)
+			chunk := wrappedX*w.spatial.chunksY+wrappedY
 			slot := w.spatial.decorationHead[chunk]
 			for slot >= 0 {
 				next := w.spatial.decorationNext[slot]
-				decoration_x := int(w.decorations.x[slot])
-				decoration_y := int(w.decorations.y[slot])
-				if decoration_x >= x && decoration_x < x+width &&
-					decoration_y >= y && decoration_y < y+height {
+				decorationX := int(w.decorations.x[slot])
+				decorationY := int(w.decorations.y[slot])
+				if decorationX >= x && decorationX < x+width &&
+					decorationY >= y && decorationY < y+height {
 					harvested += DecorationWoodYield(w.decorations.kind[slot])
 					WorldDecorationDespawn(w, slot)
 				}
@@ -261,23 +261,23 @@ WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> f32 {
 	return harvested
 }
 
-WorldDecorationUpdate :: proc(w: ^World, delta_time: f32) {
+WorldDecorationUpdate :: proc(w: ^World, deltaTime: f32) {
 	if w.decorationStumps == 0 do return
 
 	for slot in 0 ..< DECORATION_CAPACITY {
 		if !w.decorationUsed[slot] do continue
-		DecorationRegrowth(w, slot, delta_time)
+		DecorationRegrowth(w, slot, deltaTime)
 	}
 }
 
 // Places scenery on top of the generated terrain. Forest tiles get actual
 // trees, while the other biomes get their own sparse details.
 WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
 
-	for x in 0 ..< world_width {
-		for y in 0 ..< world_height {
+	for x in 0 ..< worldWidth {
+		for y in 0 ..< worldHeight {
 			kind: DecorationKind
 			found := true
 			roll := WorldNoiseHash(x, y, seed+901)
@@ -355,9 +355,9 @@ WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
 			}
 
 			variant := u8(int(WorldNoiseHash(y, x, seed+907)*4) & 3)
-			jitter_x := 0.15+WorldNoiseHash(x, y, seed+911)*0.7
-			jitter_y := 0.86+WorldNoiseHash(y, x, seed+913)*0.12
-			WorldDecorationSpawn(w, f32(x)+jitter_x, f32(y)+jitter_y, kind, variant)
+			jitterX := 0.15+WorldNoiseHash(x, y, seed+911)*0.7
+			jitterY := 0.86+WorldNoiseHash(y, x, seed+913)*0.12
+			WorldDecorationSpawn(w, f32(x)+jitterX, f32(y)+jitterY, kind, variant)
 		}
 	}
 }
@@ -365,9 +365,9 @@ WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
 WorldTileNearWater :: proc(w: ^World, x, y: int) -> bool {
 	offsets := [4][2]int{{0, -1}, {1, 0}, {0, 1}, {-1, 0}}
 	for offset in offsets {
-		neighbour_x := WorldWrapCoordinate(x+offset[0], int(w.maxX))
-		neighbour_y := WorldWrapCoordinate(y+offset[1], int(w.maxY))
-		switch w.ground[neighbour_x][neighbour_y].type {
+		neighbourX := WorldWrapCoordinate(x+offset[0], int(w.maxX))
+		neighbourY := WorldWrapCoordinate(y+offset[1], int(w.maxY))
+		switch w.ground[neighbourX][neighbourY].type {
 		case .Water, .FreshWater, .River:
 			return true
 		case .Ground, .FertileGround, .Sand, .Forest, .Hill, .Desert:

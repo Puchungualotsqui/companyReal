@@ -109,19 +109,19 @@ AppStartGame :: proc(app: ^App) -> bool {
 	settings.biomeSize = max(8, int(f32(settings.biomeSize)*scale))
 
 	world := new(World)
-	kingdom_count := clamp(app.config.kingdomCount, 2, APP_MAX_KINGDOMS)
-	if !WorldInit(world, uint(size), uint(size), uint(kingdom_count), settings) {
+	kingdomCount := clamp(app.config.kingdomCount, 2, APP_MAX_KINGDOMS)
+	if !WorldInit(world, uint(size), uint(size), uint(kingdomCount), settings) {
 		WorldDeinit(world)
 		free(world)
 		return false
 	}
 
-	local_kingdom := app.config.spectator ? -1 : 0
-	local_color := KINGDOM_COLOR_PALETTE[
+	localKingdom := app.config.spectator ? -1 : 0
+	localColor := KINGDOM_COLOR_PALETTE[
 		clamp(app.config.colorIndex, 0, len(KINGDOM_COLOR_PALETTE)-1)
 	]
-	AssignKingdomColors(local_kingdom, local_color, &world.kingdomColors)
-	WorldConfigureGame(world, local_kingdom, app.config.spectator)
+	AssignKingdomColors(localKingdom, localColor, &world.kingdomColors)
+	WorldConfigureGame(world, localKingdom, app.config.spectator)
 	FogUpdate(world)
 
 	app.world = world
@@ -148,8 +148,8 @@ AppResultFromWorld :: proc(w: ^World) -> GameResult {
 	return .OtherWinner
 }
 
-AppUpdate :: proc(app: ^App, delta_time: f32) {
-	app.menuTime += delta_time
+AppUpdate :: proc(app: ^App, deltaTime: f32) {
+	app.menuTime += deltaTime
 
 	switch app.state {
 	case .MainMenu, .NewGame:
@@ -181,14 +181,14 @@ AppUpdate :: proc(app: ^App, delta_time: f32) {
 			}
 		}
 
-		WorldUpdate(app.world, delta_time)
+		WorldUpdate(app.world, deltaTime)
 		if app.world.gameOver && !app.resultHandled {
 			app.resultHandled = true
 			app.result = AppResultFromWorld(app.world)
 			app.overlay = .Result
 			return
 		}
-		WorldViewUpdate(app.world, &app.view, delta_time)
+		WorldViewUpdate(app.world, &app.view, deltaTime)
 	}
 }
 
@@ -214,23 +214,23 @@ AppDraw :: proc(app: ^App) {
 
 // --- menu layout ------------------------------------------------------------
 
-AppMainMenuButtonRects :: proc() -> (new_game, quit: rl.Rectangle) {
-	screen_width := f32(rl.GetScreenWidth())
-	screen_height := f32(rl.GetScreenHeight())
+AppMainMenuButtonRects :: proc() -> (newGame, quit: rl.Rectangle) {
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
 	width: f32 = 360
 	height: f32 = 62
-	x := (screen_width-width)*0.5
-	new_game = rl.Rectangle{x, screen_height*0.56, width, height}
-	quit = rl.Rectangle{x, screen_height*0.56+height+18, width, height}
+	x := (screenWidth-width)*0.5
+	newGame = rl.Rectangle{x, screenHeight*0.56, width, height}
+	quit = rl.Rectangle{x, screenHeight*0.56+height+18, width, height}
 	return
 }
 
 AppSetupPanelRect :: proc() -> rl.Rectangle {
-	screen_width := f32(rl.GetScreenWidth())
-	screen_height := f32(rl.GetScreenHeight())
-	width := min(1040, screen_width-80)
-	height := min(680, screen_height-60)
-	return rl.Rectangle{(screen_width-width)*0.5, (screen_height-height)*0.5, width, height}
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
+	width := min(1040, screenWidth-80)
+	height := min(680, screenHeight-60)
+	return rl.Rectangle{(screenWidth-width)*0.5, (screenHeight-height)*0.5, width, height}
 }
 
 AppSetupRowRect :: proc(panel: rl.Rectangle, row: int) -> rl.Rectangle {
@@ -238,18 +238,18 @@ AppSetupRowRect :: proc(panel: rl.Rectangle, row: int) -> rl.Rectangle {
 }
 
 AppSetupOptionRect :: proc(panel: rl.Rectangle, row, index: int, width: f32 = 108) -> rl.Rectangle {
-	row_rect := AppSetupRowRect(panel, row)
-	return rl.Rectangle{row_rect.x+220+f32(index)*(width+10), row_rect.y+6, width, 42}
+	rowRect := AppSetupRowRect(panel, row)
+	return rl.Rectangle{rowRect.x+220+f32(index)*(width+10), rowRect.y+6, width, 42}
 }
 
 AppSetupColorRect :: proc(panel: rl.Rectangle, index: int) -> rl.Rectangle {
-	row_rect := AppSetupRowRect(panel, 3)
-	return rl.Rectangle{row_rect.x+220+f32(index)*46, row_rect.y+7, 40, 40}
+	rowRect := AppSetupRowRect(panel, 3)
+	return rl.Rectangle{rowRect.x+220+f32(index)*46, rowRect.y+7, 40, 40}
 }
 
 AppSetupSeedButtonRect :: proc(panel: rl.Rectangle) -> rl.Rectangle {
-	row_rect := AppSetupRowRect(panel, 4)
-	return rl.Rectangle{row_rect.x+470, row_rect.y+8, 150, 38}
+	rowRect := AppSetupRowRect(panel, 4)
+	return rl.Rectangle{rowRect.x+470, rowRect.y+8, 150, 38}
 }
 
 AppSetupStartRect :: proc(panel: rl.Rectangle) -> rl.Rectangle {
@@ -271,27 +271,27 @@ AppResultButtonRects :: proc(panel: rl.Rectangle) -> [3]rl.Rectangle {
 }
 
 AppResultPanelRect :: proc() -> rl.Rectangle {
-	screen_width := f32(rl.GetScreenWidth())
-	screen_height := f32(rl.GetScreenHeight())
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
 	width: f32 = 760
 	height: f32 = 430
-	return rl.Rectangle{(screen_width-width)*0.5, (screen_height-height)*0.5, width, height}
+	return rl.Rectangle{(screenWidth-width)*0.5, (screenHeight-height)*0.5, width, height}
 }
 
 AppSpectatorPanelRect :: proc() -> rl.Rectangle {
-	screen_width := f32(rl.GetScreenWidth())
-	screen_height := f32(rl.GetScreenHeight())
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
 	width: f32 = 540
 	height: f32 = 300
-	return rl.Rectangle{(screen_width-width)*0.5, (screen_height-height)*0.5, width, height}
+	return rl.Rectangle{(screenWidth-width)*0.5, (screenHeight-height)*0.5, width, height}
 }
 
 // --- menu input -------------------------------------------------------------
 
 AppMenuUpdate :: proc(app: ^App) {
 	if app.state == .MainMenu {
-		new_game, quit := AppMainMenuButtonRects()
-		if AppMenuClicked(new_game, true) {
+		newGame, quit := AppMainMenuButtonRects()
+		if AppMenuClicked(newGame, true) {
 			app.state = .NewGame
 			return
 		}
@@ -400,8 +400,8 @@ AppPauseOverlayUpdate :: proc(app: ^App) {
 // --- menu drawing -----------------------------------------------------------
 
 AppMenuDraw :: proc(app: ^App) {
-	screen_width := f32(rl.GetScreenWidth())
-	screen_height := f32(rl.GetScreenHeight())
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
 	rl.DrawRectangleGradientV(
 		0,
 		0,
@@ -412,17 +412,17 @@ AppMenuDraw :: proc(app: ^App) {
 	)
 
 	// Faction banners at the right edge.
-	bar_width: f32 = 12
+	barWidth: f32 = 12
 	for color, index in KINGDOM_COLOR_PALETTE {
 		alpha := u8(32+index*3)
-		x := screen_width-28-f32(index)*18
+		x := screenWidth-28-f32(index)*18
 		rl.DrawRectangleRec(
-			rl.Rectangle{x, 0, bar_width, screen_height},
+			rl.Rectangle{x, 0, barWidth, screenHeight},
 			rl.Color{color.r, color.g, color.b, alpha},
 		)
 	}
 	rl.DrawRectangleRec(
-		rl.Rectangle{0, screen_height-3, screen_width, 3},
+		rl.Rectangle{0, screenHeight-3, screenWidth, 3},
 		rl.Color{UI_COLOR_GOLD.r, UI_COLOR_GOLD.g, UI_COLOR_GOLD.b, 90},
 	)
 
@@ -434,43 +434,43 @@ AppMenuDraw :: proc(app: ^App) {
 }
 
 AppDrawMainMenu :: proc(app: ^App) {
-	screen_width := f32(rl.GetScreenWidth())
-	screen_height := f32(rl.GetScreenHeight())
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
 
 	AppDrawTextCentered(
-		ui_menu_font(),
+		UIMenuFont(),
 		56,
 		2,
 		"COMPANIA REAL",
-		screen_width*0.5,
-		screen_height*0.24,
+		screenWidth*0.5,
+		screenHeight*0.24,
 		UI_COLOR_GOLD,
 	)
 	AppDrawTextCentered(
-		ui_font(),
+		UIFont(),
 		UI_TEXT_SIZE,
 		1,
 		"A living world of crowns, colonies and carnage.",
-		screen_width*0.5,
-		screen_height*0.24+82,
+		screenWidth*0.5,
+		screenHeight*0.24+82,
 		UI_COLOR_DIM,
 	)
 	rl.DrawRectangleRec(
-		rl.Rectangle{screen_width*0.5-220, screen_height*0.24+122, 440, 2},
+		rl.Rectangle{screenWidth*0.5-220, screenHeight*0.24+122, 440, 2},
 		UI_COLOR_DIVIDER,
 	)
 
-	new_game, quit := AppMainMenuButtonRects()
-	AppDrawMenuButton(new_game, "NEW GAME", true, false, true)
+	newGame, quit := AppMainMenuButtonRects()
+	AppDrawMenuButton(newGame, "NEW GAME", true, false, true)
 	AppDrawMenuButton(quit, "QUIT", true, false, false)
 
 	AppDrawTextCentered(
-		ui_font(),
+		UIFont(),
 		UI_TEXT_SIZE,
 		1,
 		"Blood remembers.",
-		screen_width*0.5,
-		screen_height-44,
+		screenWidth*0.5,
+		screenHeight-44,
 		UI_COLOR_DISABLED_TEXT,
 	)
 }
@@ -485,8 +485,8 @@ AppDrawSetup :: proc(app: ^App) {
 		UI_COLOR_BORDER_INNER,
 	)
 
-	ui_title("NEW GAME", panel.x+40, panel.y+18, UI_COLOR_GOLD)
-	ui_text(
+	UITitle("NEW GAME", panel.x+40, panel.y+18, UI_COLOR_GOLD)
+	UIText(
 		"Choose the shape of the war you want to watch.",
 		panel.x+40,
 		panel.y+56,
@@ -535,8 +535,8 @@ AppDrawSetup :: proc(app: ^App) {
 
 	AppSetupLabel(panel, 3, "YOUR COLOUR")
 	if app.config.spectator {
-		row_rect := AppSetupRowRect(panel, 3)
-		ui_text("Observer mode: every kingdom is AI.", row_rect.x+220, row_rect.y+16, UI_COLOR_DIM)
+		rowRect := AppSetupRowRect(panel, 3)
+		UIText("Observer mode: every kingdom is AI.", rowRect.x+220, rowRect.y+16, UI_COLOR_DIM)
 	} else {
 		for color, index in KINGDOM_COLOR_PALETTE {
 			rect := AppSetupColorRect(panel, index)
@@ -554,11 +554,11 @@ AppDrawSetup :: proc(app: ^App) {
 	}
 
 	AppSetupLabel(panel, 4, "SEED")
-	row_rect := AppSetupRowRect(panel, 4)
-	ui_text(
+	rowRect := AppSetupRowRect(panel, 4)
+	UIText(
 		fmt.ctprintf("%08X", u32(app.config.seed & 0xFFFFFFFF)),
-		row_rect.x+220,
-		row_rect.y+16,
+		rowRect.x+220,
+		rowRect.y+16,
 		UI_COLOR_TEXT,
 	)
 	AppDrawMenuButton(AppSetupSeedButtonRect(panel), "NEW SEED", true, false, false)
@@ -570,33 +570,33 @@ AppDrawSetup :: proc(app: ^App) {
 }
 
 AppSetupLabel :: proc(panel: rl.Rectangle, row: int, label: cstring) {
-	row_rect := AppSetupRowRect(panel, row)
-	ui_text(label, row_rect.x, row_rect.y+14, UI_COLOR_GOLD)
+	rowRect := AppSetupRowRect(panel, row)
+	UIText(label, rowRect.x, rowRect.y+14, UI_COLOR_GOLD)
 }
 
 AppDrawRoster :: proc(app: ^App, panel: rl.Rectangle) {
 	x := panel.x+680
 	y := panel.y+112
-	ui_text("CONTROLLERS", x, y, UI_COLOR_GOLD)
+	UIText("CONTROLLERS", x, y, UI_COLOR_GOLD)
 
 	colors: [KINGDOMS_CAPACITY]rl.Color
 	local := app.config.spectator ? -1 : 0
-	local_color := KINGDOM_COLOR_PALETTE[
+	localColor := KINGDOM_COLOR_PALETTE[
 		clamp(app.config.colorIndex, 0, len(KINGDOM_COLOR_PALETTE)-1)
 	]
-	AssignKingdomColors(local, local_color, &colors)
+	AssignKingdomColors(local, localColor, &colors)
 
 	count := clamp(app.config.kingdomCount, 2, APP_MAX_KINGDOMS)
 	for kingdom in 0 ..< count {
-		row_y := y+34+f32(kingdom)*52
-		rect := rl.Rectangle{x, row_y, 22, 22}
+		rowY := y+34+f32(kingdom)*52
+		rect := rl.Rectangle{x, rowY, 22, 22}
 		rl.DrawRectangleRec(rect, colors[kingdom])
 		rl.DrawRectangleLinesEx(rect, 1, UI_COLOR_BORDER)
 		role: cstring = "AI"
-		is_local := kingdom == local
-		if is_local do role = "YOU"
-		ui_text(fmt.ctprintf("Kingdom %d", kingdom+1), x+34, row_y, UI_COLOR_TEXT)
-		ui_text(role, x+34, row_y+20, is_local ? UI_COLOR_GOLD : UI_COLOR_DIM)
+		isLocal := kingdom == local
+		if isLocal do role = "YOU"
+		UIText(fmt.ctprintf("Kingdom %d", kingdom+1), x+34, rowY, UI_COLOR_TEXT)
+		UIText(role, x+34, rowY+20, isLocal ? UI_COLOR_GOLD : UI_COLOR_DIM)
 	}
 
 	total := fmt.ctprintf(
@@ -604,7 +604,7 @@ AppDrawRoster :: proc(app: ^App, panel: rl.Rectangle) {
 		local >= 0 ? 1 : 0,
 		count-(local >= 0 ? 1 : 0),
 	)
-	ui_text(total, x, panel.y+panel.height-64, UI_COLOR_DIM)
+	UIText(total, x, panel.y+panel.height-64, UI_COLOR_DIM)
 }
 
 AppDrawMenuButton :: proc(
@@ -635,7 +635,7 @@ AppDrawMenuButton :: proc(
 	color := enabled ? UI_COLOR_TEXT : UI_COLOR_DISABLED_TEXT
 	if selected do color = UI_COLOR_GOLD
 	AppDrawTextCentered(
-		ui_font(),
+		UIFont(),
 		UI_TEXT_SIZE,
 		1,
 		label,
@@ -650,11 +650,11 @@ AppDrawTextCentered :: proc(
 	size: f32,
 	spacing: f32,
 	text: cstring,
-	center_x, y: f32,
+	centerX, y: f32,
 	color: rl.Color,
 ) {
 	width := rl.MeasureTextEx(font, text, size, spacing).x
-	rl.DrawTextEx(font, text, rl.Vector2{center_x-width*0.5, y}, size, spacing, color)
+	rl.DrawTextEx(font, text, rl.Vector2{centerX-width*0.5, y}, size, spacing, color)
 }
 
 // --- result overlay ---------------------------------------------------------
@@ -674,9 +674,9 @@ AppDrawResultOverlay :: proc(app: ^App) {
 	subtitle: cstring
 	accent := UI_COLOR_GOLD
 	winner := app.world.winnerKingdom
-	winner_name: cstring = "No kingdom remains"
+	winnerName: cstring = "No kingdom remains"
 	if winner >= 0 && app.world.kingdomUsed[winner] {
-		winner_name = NameKingdomCString(app.world, winner)
+		winnerName = NameKingdomCString(app.world, winner)
 	}
 
 	switch app.result {
@@ -689,14 +689,14 @@ AppDrawResultOverlay :: proc(app: ^App) {
 		accent = UI_COLOR_ATTACK
 	case .OtherWinner:
 		title = "A KINGDOM PREVAILS"
-		subtitle = fmt.ctprintf("%s rules what remains.", winner_name)
+		subtitle = fmt.ctprintf("%s rules what remains.", winnerName)
 	case .None:
 		title = "THE WAR ENDS"
-		subtitle = winner_name
+		subtitle = winnerName
 	}
 
 	AppDrawTextCentered(
-		ui_menu_font(),
+		UIMenuFont(),
 		56,
 		2,
 		title,
@@ -705,7 +705,7 @@ AppDrawResultOverlay :: proc(app: ^App) {
 		accent,
 	)
 	AppDrawTextCentered(
-		ui_font(),
+		UIFont(),
 		UI_TEXT_SIZE,
 		1,
 		subtitle,
@@ -716,7 +716,7 @@ AppDrawResultOverlay :: proc(app: ^App) {
 
 	if app.result == .Defeat {
 		AppDrawTextCentered(
-			ui_font(),
+			UIFont(),
 			UI_TEXT_SIZE,
 			1,
 			"The war continues without you.",
@@ -726,10 +726,10 @@ AppDrawResultOverlay :: proc(app: ^App) {
 		)
 	} else if app.result == .OtherWinner {
 		AppDrawTextCentered(
-			ui_font(),
+			UIFont(),
 			UI_TEXT_SIZE,
 			1,
-			fmt.ctprintf("Last crown standing: %s", winner_name),
+			fmt.ctprintf("Last crown standing: %s", winnerName),
 			panel.x+panel.width*0.5,
 			panel.y+174,
 			UI_COLOR_DIM,
@@ -741,7 +741,7 @@ AppDrawResultOverlay :: proc(app: ^App) {
 	AppDrawMenuButton(buttons[1], "NEW GAME", true, false, false)
 	AppDrawMenuButton(buttons[2], "MAIN MENU", true, false, false)
 
-	ui_text(
+	UIText(
 		"Continue watching hands every kingdom to the AI and reveals the map.",
 		panel.x+24,
 		panel.y+panel.height-112,
@@ -749,7 +749,7 @@ AppDrawResultOverlay :: proc(app: ^App) {
 	)
 }
 
-AppDrawPausePanel :: proc(title: cstring, subtitle: cstring, resume_label: cstring) {
+AppDrawPausePanel :: proc(title: cstring, subtitle: cstring, resumeLabel: cstring) {
 	rl.DrawRectangle(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight(), rl.Color{0, 0, 0, 180})
 	panel := AppSpectatorPanelRect()
 	rl.DrawRectangleRec(panel, UI_COLOR_BG)
@@ -761,7 +761,7 @@ AppDrawPausePanel :: proc(title: cstring, subtitle: cstring, resume_label: cstri
 	)
 
 	AppDrawTextCentered(
-		ui_menu_font(),
+		UIMenuFont(),
 		42,
 		2,
 		title,
@@ -770,7 +770,7 @@ AppDrawPausePanel :: proc(title: cstring, subtitle: cstring, resume_label: cstri
 		UI_COLOR_GOLD,
 	)
 	AppDrawTextCentered(
-		ui_font(),
+		UIFont(),
 		UI_TEXT_SIZE,
 		1,
 		subtitle,
@@ -786,6 +786,6 @@ AppDrawPausePanel :: proc(title: cstring, subtitle: cstring, resume_label: cstri
 		(panel.width-60)*0.5,
 		50,
 	}
-	AppDrawMenuButton(resume, resume_label, true, false, true)
+	AppDrawMenuButton(resume, resumeLabel, true, false, true)
 	AppDrawMenuButton(menu, "MAIN MENU", true, false, false)
 }

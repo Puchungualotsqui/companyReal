@@ -16,12 +16,12 @@ GROWTH_VILLAGER_SPEED_BONUS :: 0.005
 GROWTH_VILLAGER_SPEED_CAP :: 0.5
 GROWTH_MAX_SPAWN_PER_TICK :: 32
 
-WorldUpdate :: proc(w: ^World, delta_time: f32) {
-	if delta_time <= 0 do return
+WorldUpdate :: proc(w: ^World, deltaTime: f32) {
+	if deltaTime <= 0 do return
 	// Particles and gore run on the render clock so they stay smooth between
 	// the coarse town simulation ticks.
-	WorldParticleUpdate(w, delta_time)
-	w.simulationAccumulator += delta_time
+	WorldParticleUpdate(w, deltaTime)
+	w.simulationAccumulator += deltaTime
 	for w.simulationAccumulator >= TOWN_SIMULATION_STEP {
 		w.simulationTime += TOWN_SIMULATION_STEP
 		w.dayTime += TOWN_SIMULATION_STEP
@@ -54,47 +54,53 @@ WorldNightAmount :: proc(w: ^World) -> f32 {
 	return (hour-18.5)/3.5
 }
 
-WorldTownExists :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
-	return kingdom_slot >= 0 && kingdom_slot < KINGDOMS_CAPACITY &&
-		town_slot >= 0 && town_slot < TOWN_CAPACITY &&
-		w.kingdomUsed[kingdom_slot] && w.kingdoms[kingdom_slot].townUsed[town_slot]
+// Deep night is where the world is dark enough to shorten unit vision. Dusk
+// and dawn ramp in and out, so the threshold keeps the change from flickering.
+WorldIsNight :: proc(w: ^World) -> bool {
+	return WorldNightAmount(w) >= 0.5
+}
+
+WorldTownExists :: proc(w: ^World, kingdomSlot, townSlot: int) -> bool {
+	return kingdomSlot >= 0 && kingdomSlot < KINGDOMS_CAPACITY &&
+		townSlot >= 0 && townSlot < TOWN_CAPACITY &&
+		w.kingdomUsed[kingdomSlot] && w.kingdoms[kingdomSlot].townUsed[townSlot]
 }
 
 // Scan each town once, rather than repeating the proximity query per sleeper.
 WorldTownAlarmUpdate :: proc(w: ^World) {
 	for kingdom in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom] do continue
-		for town_slot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdom].townUsed[town_slot] do continue
-			town := &w.kingdoms[kingdom].towns[town_slot]
-			town.alarmActive = TownHasNearbyEnemy(w, kingdom, town_slot)
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+			town := &w.kingdoms[kingdom].towns[townSlot]
+			town.alarmActive = TownHasNearbyEnemy(w, kingdom, townSlot)
 		}
 	}
 }
 
-TownHasNearbyEnemy :: proc(w: ^World, kingdom, town_slot: int) -> bool {
-	if !WorldTownExists(w, kingdom, town_slot) do return false
-	chunk_size := w.spatial.chunkSize
-	if chunk_size <= 0 || w.spatial.chunksX <= 0 || w.spatial.chunksY <= 0 do return false
+TownHasNearbyEnemy :: proc(w: ^World, kingdom, townSlot: int) -> bool {
+	if !WorldTownExists(w, kingdom, townSlot) do return false
+	chunkSize := w.spatial.chunkSize
+	if chunkSize <= 0 || w.spatial.chunksX <= 0 || w.spatial.chunksY <= 0 do return false
 	width, height := BuildingTileSize(TownHall{})
 
-	for circle_index in 0..<TownAreaCircleCount(w, kingdom, town_slot) {
-		circle_x, circle_y, circle_radius := TownAreaCircle(w, kingdom, town_slot, circle_index)
-		center_x := f32(circle_x)+f32(width-1)*0.5
-		center_y := f32(circle_y)+f32(height-1)*0.5
-		radius := f32(circle_radius)*TOWN_ALARM_AREA_FACTOR
-		chunk_radius := int((radius+f32(max(width, height)))/f32(chunk_size))+1
-		center_chunk_x, center_chunk_y := int(center_x)/chunk_size, int(center_y)/chunk_size
-		for offset_x in 0..<min(chunk_radius*2+1, w.spatial.chunksX) {
-			chunk_x := WorldWrapCoordinate(center_chunk_x-chunk_radius+offset_x, w.spatial.chunksX)
-			for offset_y in 0..<min(chunk_radius*2+1, w.spatial.chunksY) {
-				chunk_y := WorldWrapCoordinate(center_chunk_y-chunk_radius+offset_y, w.spatial.chunksY)
-				chunk := chunk_x*w.spatial.chunksY+chunk_y
+	for circleIndex in 0..<TownAreaCircleCount(w, kingdom, townSlot) {
+		circleX, circleY, circleRadius := TownAreaCircle(w, kingdom, townSlot, circleIndex)
+		centerX := f32(circleX)+f32(width-1)*0.5
+		centerY := f32(circleY)+f32(height-1)*0.5
+		radius := f32(circleRadius)*TOWN_ALARM_AREA_FACTOR
+		chunkRadius := int((radius+f32(max(width, height)))/f32(chunkSize))+1
+		centerChunkX, centerChunkY := int(centerX)/chunkSize, int(centerY)/chunkSize
+		for offsetX in 0..<min(chunkRadius*2+1, w.spatial.chunksX) {
+			chunkX := WorldWrapCoordinate(centerChunkX-chunkRadius+offsetX, w.spatial.chunksX)
+			for offsetY in 0..<min(chunkRadius*2+1, w.spatial.chunksY) {
+				chunkY := WorldWrapCoordinate(centerChunkY-chunkRadius+offsetY, w.spatial.chunksY)
+				chunk := chunkX*w.spatial.chunksY+chunkY
 				for unit := w.spatial.unitHead[chunk]; unit >= 0; unit = w.spatial.unitNext[unit] {
 					if !w.unitUsed[unit] || UnitHiddenInside(w, unit) do continue
 					if !KingdomAtWar(w, kingdom, w.units[unit].kingdome) do continue
-					dx := math.abs(WorldShortestWrappedDelta(f32(int(w.units.x[unit]))-center_x, f32(w.maxX)))
-					dy := math.abs(WorldShortestWrappedDelta(f32(int(w.units.y[unit]))-center_y, f32(w.maxY)))
+					dx := math.abs(WorldShortestWrappedDelta(f32(int(w.units.x[unit]))-centerX, f32(w.maxX)))
+					dy := math.abs(WorldShortestWrappedDelta(f32(int(w.units.y[unit]))-centerY, f32(w.maxY)))
 					dx = max(0, dx-f32(width-1)*0.5)
 					dy = max(0, dy-f32(height-1)*0.5)
 					if dx*dx+dy*dy <= radius*radius do return true
@@ -105,20 +111,20 @@ TownHasNearbyEnemy :: proc(w: ^World, kingdom, town_slot: int) -> bool {
 	return false
 }
 
-WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
+WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 	WorldHousingUpdate(w)
 	WorldTownAlarmUpdate(w)
-	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] do continue
-		w.units.previousX[unit_slot] = w.units.x[unit_slot]
-		w.units.previousY[unit_slot] = w.units.y[unit_slot]
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] do continue
+		w.units.previousX[unitSlot] = w.units.x[unitSlot]
+		w.units.previousY[unitSlot] = w.units.y[unitSlot]
 	}
 
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] do continue
-		for town_slot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-			town := &w.kingdoms[kingdom_slot].towns[town_slot]
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			town := &w.kingdoms[kingdomSlot].towns[townSlot]
 			town.builders = 0
 			town.waterCollectors = 0
 			town.farmers = 0
@@ -126,56 +132,56 @@ WorldUnitUpdate :: proc(w: ^World, delta_time: f32) {
 		}
 	}
 
-	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] do continue
-		UnitUpdateMilitaryAlarm(w, unit_slot)
-		if _, converting := w.units[unit_slot].state.(StateConverting); converting {
-			if UnitUpdatePacificSafety(w, unit_slot, delta_time) do continue
-			UnitUpdateConverting(w, unit_slot, delta_time)
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] do continue
+		UnitUpdateMilitaryAlarm(w, unitSlot)
+		if _, converting := w.units[unitSlot].state.(StateConverting); converting {
+			if UnitUpdatePacificSafety(w, unitSlot, deltaTime) do continue
+			UnitUpdateConverting(w, unitSlot, deltaTime)
 			continue
 		}
-		switch _ in w.units[unit_slot].type {
+		switch _ in w.units[unitSlot].type {
 		case Villager:
-			UnitUpdateVillager(w, unit_slot, delta_time)
+			UnitUpdateVillager(w, unitSlot, deltaTime)
 		case Builder:
-			UnitUpdateBuilder(w, unit_slot, delta_time)
+			UnitUpdateBuilder(w, unitSlot, deltaTime)
 		case CombatBuilder:
-			CombatBuilderUpdate(w, unit_slot, delta_time)
+			CombatBuilderUpdate(w, unitSlot, deltaTime)
 		case WaterCollector:
-			UnitUpdateWaterCollector(w, unit_slot, delta_time)
+			UnitUpdateWaterCollector(w, unitSlot, deltaTime)
 		case Farmer:
-			UnitUpdateFarmer(w, unit_slot, delta_time)
+			UnitUpdateFarmer(w, unitSlot, deltaTime)
 		case Explorer:
-			UnitUpdateExplorer(w, unit_slot, delta_time)
+			UnitUpdateExplorer(w, unitSlot, deltaTime)
 		case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
-			UnitUpdateWarrior(w, unit_slot, delta_time)
+			UnitUpdateWarrior(w, unitSlot, deltaTime)
 		}
-		if w.unitUsed[unit_slot] do BloodBleedTick(w, unit_slot, delta_time)
+		if w.unitUsed[unitSlot] do BloodBleedTick(w, unitSlot, deltaTime)
 	}
 }
 
-WorldKingdomUpdate :: proc(w: ^World, delta_time: f32) {
-	for kingdom_slot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdom_slot] do continue
-		for town_slot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdom_slot].townUsed[town_slot] do continue
-			KingdomTownUpdate(w, kingdom_slot, town_slot, delta_time)
+WorldKingdomUpdate :: proc(w: ^World, deltaTime: f32) {
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			KingdomTownUpdate(w, kingdomSlot, townSlot, deltaTime)
 		}
 	}
 
 	WorldHousingUpdate(w)
-	shortage_epoch := int(w.simulationTime / 5)
-	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] do continue
-		kingdom_slot := w.units[unit_slot].kingdome
-		town_slot := w.units[unit_slot].town
-		if !WorldTownExists(w, kingdom_slot, town_slot) {
-			UnitClearTownEffects(w, unit_slot)
+	shortageEpoch := int(w.simulationTime / 5)
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] do continue
+		kingdomSlot := w.units[unitSlot].kingdome
+		townSlot := w.units[unitSlot].town
+		if !WorldTownExists(w, kingdomSlot, townSlot) {
+			UnitClearTownEffects(w, unitSlot)
 			continue
 		}
 
-		is_housed := UnitHome(w, unit_slot) >= 0
-		UnitApplyTownEffects(w, unit_slot, is_housed, shortage_epoch, delta_time)
+		isHoused := UnitHome(w, unitSlot) >= 0
+		UnitApplyTownEffects(w, unitSlot, isHoused, shortageEpoch, deltaTime)
 	}
 
 	WorldConversionAssign(w)
@@ -208,9 +214,9 @@ WorldHousingUpdate :: proc(w: ^World) {
 		if unit.sleepInside && UnitInsideHome(w, slot) < 0 do UnitSleepWake(w, slot)
 	}
 
-	free_home: [KINGDOMS_CAPACITY][TOWN_CAPACITY]int
-	for &kingdom in free_home do for &town in kingdom do town = -1
-	next_home: [BUILDING_CAPACITY]int
+	freeHome: [KINGDOMS_CAPACITY][TOWN_CAPACITY]int
+	for &kingdom in freeHome do for &town in kingdom do town = -1
+	nextHome: [BUILDING_CAPACITY]int
 	for home in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[home] do continue
 		building := &w.buildings[home]
@@ -221,31 +227,31 @@ WorldHousingUpdate :: proc(w: ^World) {
 			!WorldTownExists(w, building.kingdom, building.town) {
 			continue
 		}
-		next_home[home] = free_home[building.kingdom][building.town]
-		free_home[building.kingdom][building.town] = home
+		nextHome[home] = freeHome[building.kingdom][building.town]
+		freeHome[building.kingdom][building.town] = home
 	}
 	for slot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[slot] || UnitHome(w, slot) >= 0 do continue
 		unit := &w.units[slot]
 		if !WorldTownExists(w, unit.kingdome, unit.town) do continue
-		head := &free_home[unit.kingdome][unit.town]
+		head := &freeHome[unit.kingdome][unit.town]
 		// Only newly assigned citizens search; existing reservations never shuffle.
-		best, previous, best_previous := -1, -1, -1
-		best_distance: f32 = 0
-		for home := head^; home >= 0; home = next_home[home] {
+		best, previous, bestPrevious := -1, -1, -1
+		bestDistance: f32 = 0
+		for home := head^; home >= 0; home = nextHome[home] {
 			dx := WorldShortestWrappedDelta(f32(w.buildings.x[home])+0.5-unit.x, f32(w.maxX))
 			dy := WorldShortestWrappedDelta(f32(w.buildings.y[home])+0.5-unit.y, f32(w.maxY))
 			distance := dx*dx+dy*dy
-			if best < 0 || distance < best_distance {
-				best, best_previous, best_distance = home, previous, distance
+			if best < 0 || distance < bestDistance {
+				best, bestPrevious, bestDistance = home, previous, distance
 			}
 			previous = home
 		}
 		if best < 0 do continue
-		if best_previous < 0 {
-			head^ = next_home[best]
+		if bestPrevious < 0 {
+			head^ = nextHome[best]
 		} else {
-			next_home[best_previous] = next_home[best]
+			nextHome[bestPrevious] = nextHome[best]
 		}
 		UnitSleepWake(w, slot)
 		unit.homeSlot = best
@@ -256,22 +262,22 @@ WorldHousingUpdate :: proc(w: ^World) {
 // Assigns idle units to queued conversions. Runs once per simulation step over
 // all units, so the cost stays linear in the number of units rather than towns.
 WorldConversionAssign :: proc(w: ^World) {
-	for unit_slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unit_slot] do continue
-		unit := &w.units[unit_slot]
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] do continue
+		unit := &w.units[unitSlot]
 		if _, converting := unit.state.(StateConverting); converting do continue
 		if !WorldTownExists(w, unit.kingdome, unit.town) do continue
 
 		town := &w.kingdoms[unit.kingdome].towns[unit.town]
 		if town.conversionCount == 0 do continue
 		if !UnitIsWarrior(unit.type) && UnitKindOf(unit.type) != .CombatBuilder {
-			if town.alarmActive || UnitFindNearbyEnemy(w, unit_slot, FLEE_THREAT_RADIUS) >= 0 do continue
+			if town.alarmActive || UnitFindNearbyEnemy(w, unitSlot, FLEE_THREAT_RADIUS) >= 0 do continue
 			if state, pacific := unit.state.(StatePacific); pacific && (state == .Hiding || state == .Fleeing) do continue
 		}
 
 		from := UnitKindOf(unit.type)
-		for job_index in 0..<town.conversionCount {
-			job := &town.conversions[job_index]
+		for jobIndex in 0..<town.conversionCount {
+			job := &town.conversions[jobIndex]
 			if job.from != from || job.assigned >= job.remaining do continue
 
 			building := TownFindBuilding(
@@ -281,21 +287,21 @@ WorldConversionAssign :: proc(w: ^World) {
 				UnitTrainingBuildingKind(job.to),
 			)
 			if building < 0 do continue
-			access_x, access_y, found := UnitFindBuildingAccessPoint(
+			accessX, accessY, found := UnitFindBuildingAccessPoint(
 				w,
-				unit_slot,
+				unitSlot,
 				building,
 				UnitTypeFromKind(job.to),
 			)
 			if !found do continue
 
 			job.assigned += 1
-			UnitSleepWake(w, unit_slot)
+			UnitSleepWake(w, unitSlot)
 			unit.state = StateConverting{
 				to = job.to,
 				building = building,
-				accessX = access_x,
-				accessY = access_y,
+				accessX = accessX,
+				accessY = accessY,
 			}
 			unit.pathReady = false
 			break
@@ -303,50 +309,50 @@ WorldConversionAssign :: proc(w: ^World) {
 	}
 }
 
-KingdomTownUpdate :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time: f32) {
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32) {
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 
-	working_farmlands := min(town.farmlands, town.farmers)
+	workingFarmlands := min(town.farmlands, town.farmers)
 	town.foodPotential = 0
 	if town.farmlands > 0 {
-		town.foodPotential = town.farmlandOutput*f32(working_farmlands)/f32(town.farmlands)
+		town.foodPotential = town.farmlandOutput*f32(workingFarmlands)/f32(town.farmlands)
 	}
 	town.waterPotential =
-		TownWaterCollectorOutput(TownWaterAccess(w, kingdom_slot, town_slot))*
+		TownWaterCollectorOutput(TownWaterAccess(w, kingdomSlot, townSlot))*
 		f32(town.waterCollectors)
 	town.foodShortage = TownResourceShortage(town.foodPotential, town.citizens)
 	town.waterShortage = TownResourceShortage(town.waterPotential, town.citizens)
 
-	era := TownEra(w, kingdom_slot, town_slot)
+	era := TownEra(w, kingdomSlot, townSlot)
 	town.growthInterval = TOWN_ERAS[era].interval
-	town.growthBatch = TownEffectiveBatch(w, kingdom_slot, town_slot)
+	town.growthBatch = TownEffectiveBatch(w, kingdomSlot, townSlot)
 	town.growthRate = f32(town.growthBatch)/town.growthInterval
 
-	population_need := f32(town.citizens+town.growthBatch)*GROWTH_FOOD_PER_CITIZEN
-	can_grow := town.foodPotential >= population_need && town.waterPotential >= population_need
-	limiting_supply := min(town.foodPotential, town.waterPotential)
+	populationNeed := f32(town.citizens+town.growthBatch)*GROWTH_FOOD_PER_CITIZEN
+	canGrow := town.foodPotential >= populationNeed && town.waterPotential >= populationNeed
+	limitingSupply := min(town.foodPotential, town.waterPotential)
 	coverage: f32 = 1
-	if population_need > 0 {
-		coverage = clamp(limiting_supply/population_need, 0, 1.5)
+	if populationNeed > 0 {
+		coverage = clamp(limitingSupply/populationNeed, 0, 1.5)
 	}
 	// A town with no food or water at all stalls completely. As soon as it has
 	// any supply the usual minimum speed applies again.
 	speed: f32 = 0
-	if limiting_supply > 0 {
+	if limitingSupply > 0 {
 		speed = clamp(coverage, GROWTH_MIN_SPEED, GROWTH_MAX_SPEED)
 		speed *= 1+min(GROWTH_VILLAGER_SPEED_CAP, f32(town.villagers)*GROWTH_VILLAGER_SPEED_BONUS)
 	}
 	town.growthSpeed = speed
 
-	town.growthCooldown -= delta_time*speed
+	town.growthCooldown -= deltaTime*speed
 	if town.growthCooldown <= 0 {
 		if town.growthPending <= 0 do town.growthPending = town.growthBatch
-		spawn_now := min(town.growthPending, GROWTH_MAX_SPAWN_PER_TICK)
-		spawned := TownSpawnCitizens(w, kingdom_slot, town_slot, spawn_now)
+		spawnNow := min(town.growthPending, GROWTH_MAX_SPAWN_PER_TICK)
+		spawned := TownSpawnCitizens(w, kingdomSlot, townSlot, spawnNow)
 		if spawned > 0 {
 			town.growthPending -= spawned
-			if kingdom_slot == w.observerKingdom {
-				WorldAlertAddGrowth(w, kingdom_slot, town_slot, spawned, town.citizens)
+			if kingdomSlot == w.observerKingdom {
+				WorldAlertAddGrowth(w, kingdomSlot, townSlot, spawned, town.citizens)
 			}
 		}
 		if town.growthPending <= 0 {
@@ -358,9 +364,9 @@ KingdomTownUpdate :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time: f
 	}
 
 	if town.builders > 0 {
-		town.constructionProgress += f32(town.builders)*delta_time
+		town.constructionProgress += f32(town.builders)*deltaTime
 		if town.constructionProgress >= 3 {
-			if TownBuilderConstruct(w, kingdom_slot, town_slot, can_grow) {
+			if TownBuilderConstruct(w, kingdomSlot, townSlot, canGrow) {
 				town.constructionProgress -= 3
 			} else {
 				town.constructionProgress = min(town.constructionProgress, 3)
@@ -368,7 +374,7 @@ KingdomTownUpdate :: proc(w: ^World, kingdom_slot, town_slot: int, delta_time: f
 		}
 	}
 
-	TownMilestoneCheck(w, kingdom_slot, town_slot)
+	TownMilestoneCheck(w, kingdomSlot, townSlot)
 }
 
 
@@ -384,77 +390,77 @@ TownResourceShortage :: proc(potential: f32, citizens: int) -> f32 {
 WATER_COLLECTOR_MAX_OUTPUT :: 0.20
 WATER_COLLECTOR_DRY_OUTPUT :: 0.10
 
-TownWaterCollectorOutput :: proc(water_access: f32) -> f32 {
-	access := clamp(water_access, 0, 1)
+TownWaterCollectorOutput :: proc(waterAccess: f32) -> f32 {
+	access := clamp(waterAccess, 0, 1)
 	return WATER_COLLECTOR_DRY_OUTPUT+
 		(WATER_COLLECTOR_MAX_OUTPUT-WATER_COLLECTOR_DRY_OUTPUT)*access
 }
 
-TownWaterAccess :: proc(w: ^World, kingdom_slot, town_slot: int) -> f32 {
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
+TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	if town.waterAccessCached && town.waterAccessTerrainRevision == w.terrainRevision {
 		return town.waterAccess
 	}
 
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
-	if world_width <= 0 || world_height <= 0 do return 0
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return 0
 
-	center_x := town.x+2
-	center_y := town.y+2
-	nearest_distance_squared: f32 = 0
-	found_water := false
-	for x in 0..<world_width {
-		for y in 0..<world_height {
-			tile_type := w.ground[x][y].type
-			if tile_type != .FreshWater && tile_type != .River do continue
-			delta_x := WorldShortestWrappedDelta(f32(x-center_x), f32(world_width))
-			delta_y := WorldShortestWrappedDelta(f32(y-center_y), f32(world_height))
-			distance_squared := delta_x*delta_x + delta_y*delta_y
-			if !found_water || distance_squared < nearest_distance_squared {
-				nearest_distance_squared = distance_squared
-				found_water = true
+	centerX := town.x+2
+	centerY := town.y+2
+	nearestDistanceSquared: f32 = 0
+	foundWater := false
+	for x in 0..<worldWidth {
+		for y in 0..<worldHeight {
+			tileType := w.ground[x][y].type
+			if tileType != .FreshWater && tileType != .River do continue
+			deltaX := WorldShortestWrappedDelta(f32(x-centerX), f32(worldWidth))
+			deltaY := WorldShortestWrappedDelta(f32(y-centerY), f32(worldHeight))
+			distanceSquared := deltaX*deltaX + deltaY*deltaY
+			if !foundWater || distanceSquared < nearestDistanceSquared {
+				nearestDistanceSquared = distanceSquared
+				foundWater = true
 			}
 		}
 	}
 
 	town.waterAccess = 0
-	if found_water do town.waterAccess = 1/(1+math.sqrt(nearest_distance_squared))
+	if foundWater do town.waterAccess = 1/(1+math.sqrt(nearestDistanceSquared))
 	town.waterAccessTerrainRevision = w.terrainRevision
 	town.waterAccessCached = true
 	return town.waterAccess
 }
 
-TownSpawnCitizen :: proc(w: ^World, kingdom_slot, town_slot: int, role: UnitType) -> int {
-	if !WorldTownExists(w, kingdom_slot, town_slot) do return -1
-	town := &w.kingdoms[kingdom_slot].towns[town_slot]
-	world_width := int(w.maxX)
-	world_height := int(w.maxY)
+TownSpawnCitizen :: proc(w: ^World, kingdomSlot, townSlot: int, role: UnitType) -> int {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return -1
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
 
 	// New villagers step out of the town hall door first.
-	for offset_x in 0 ..= 1 {
-		x := town.x+1+offset_x
+	for offsetX in 0 ..= 1 {
+		x := town.x+1+offsetX
 		y := town.y+4
-		if x < 0 || y < 0 || x >= world_width || y >= world_height do continue
+		if x < 0 || y < 0 || x >= worldWidth || y >= worldHeight do continue
 		if !UnitValidTileType(role, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
 		if WorldUnitAtTile(w, x, y) do continue
-		if unit_slot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdom_slot, town_slot); ok {
-			return unit_slot
+		if unitSlot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdomSlot, townSlot); ok {
+			return unitSlot
 		}
 	}
 
 	for radius in 1..=8 {
-		min_x := max(0, town.x-radius)
-		max_x := min(world_width-1, town.x+4+radius)
-		min_y := max(0, town.y-radius)
-		max_y := min(world_height-1, town.y+4+radius)
-		for x in min_x..=max_x {
-			for y in min_y..=max_y {
+		minX := max(0, town.x-radius)
+		maxX := min(worldWidth-1, town.x+4+radius)
+		minY := max(0, town.y-radius)
+		maxY := min(worldHeight-1, town.y+4+radius)
+		for x in minX..=maxX {
+			for y in minY..=maxY {
 				if x >= town.x && x < town.x+4 && y >= town.y && y < town.y+4 do continue
 				if !UnitValidTileType(role, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
 				if WorldUnitAtTile(w, x, y) do continue
-				if unit_slot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdom_slot, town_slot); ok {
-					return unit_slot
+				if unitSlot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdomSlot, townSlot); ok {
+					return unitSlot
 				}
 			}
 		}
@@ -462,18 +468,18 @@ TownSpawnCitizen :: proc(w: ^World, kingdom_slot, town_slot: int, role: UnitType
 
 	// A merged town can be much larger than the eight-tile ring above. Sweep the
 	// whole compound area so cohorts are not lost when the old hall is crowded.
-	area_min_x, area_max_x, area_min_y, area_max_y := TownAreaBounds(w, kingdom_slot, town_slot)
-	min_x := max(0, area_min_x)
-	max_x := min(world_width-1, area_max_x)
-	min_y := max(0, area_min_y)
-	max_y := min(world_height-1, area_max_y)
-	for x in min_x..=max_x {
-		for y in min_y..=max_y {
-			if !TownPointInArea(w, kingdom_slot, town_slot, x, y) do continue
+	areaMinX, areaMaxX, areaMinY, areaMaxY := TownAreaBounds(w, kingdomSlot, townSlot)
+	minX := max(0, areaMinX)
+	maxX := min(worldWidth-1, areaMaxX)
+	minY := max(0, areaMinY)
+	maxY := min(worldHeight-1, areaMaxY)
+	for x in minX..=maxX {
+		for y in minY..=maxY {
+			if !TownPointInArea(w, kingdomSlot, townSlot, x, y) do continue
 			if !UnitValidTileType(role, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
 			if WorldUnitAtTile(w, x, y) do continue
-			if unit_slot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdom_slot, town_slot); ok {
-				return unit_slot
+			if unitSlot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdomSlot, townSlot); ok {
+				return unitSlot
 			}
 		}
 	}
@@ -482,10 +488,10 @@ TownSpawnCitizen :: proc(w: ^World, kingdom_slot, town_slot: int, role: UnitType
 
 // Spawns as many villagers as there is room for, returning the number created.
 // A partial batch is carried over by the caller instead of being lost.
-TownSpawnCitizens :: proc(w: ^World, kingdom_slot, town_slot, count: int) -> int {
+TownSpawnCitizens :: proc(w: ^World, kingdomSlot, townSlot, count: int) -> int {
 	spawned := 0
 	for _ in 0..<count {
-		if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) < 0 do break
+		if TownSpawnCitizen(w, kingdomSlot, townSlot, Villager{}) < 0 do break
 		spawned += 1
 	}
 	return spawned
@@ -493,9 +499,9 @@ TownSpawnCitizens :: proc(w: ^World, kingdom_slot, town_slot, count: int) -> int
 
 TOWN_INITIAL_VILLAGERS :: 8
 
-TownSpawnInitialPopulation :: proc(w: ^World, kingdom_slot, town_slot: int) -> bool {
+TownSpawnInitialPopulation :: proc(w: ^World, kingdomSlot, townSlot: int) -> bool {
 	for _ in 0..<TOWN_INITIAL_VILLAGERS {
-		if TownSpawnCitizen(w, kingdom_slot, town_slot, Villager{}) < 0 do return false
+		if TownSpawnCitizen(w, kingdomSlot, townSlot, Villager{}) < 0 do return false
 	}
 	return true
 }
