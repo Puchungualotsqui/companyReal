@@ -264,6 +264,15 @@ TownBuilderConstruct :: proc(w: ^World, kingdomSlot, townSlot: int, canGrow: boo
 			}
 		}
 
+		if town.wood >= BuildingWoodCost(.Path) && TownConstructionKindCount(w, kingdomSlot, townSlot, .Path) == 0 {
+			if x, y, found := TownAutoPathSite(w, kingdomSlot, townSlot); found {
+				if TownStartConstruction(w, kingdomSlot, townSlot, .Path, x, y) {
+					startedAny = true
+					continue
+				}
+			}
+		}
+
 		pendingHomes := TownConstructionKindCount(w, kingdomSlot, townSlot, .Home)
 		if town.homes+pendingHomes < town.citizens ||
 			(canGrow && town.homes+pendingHomes == town.citizens) {
@@ -286,14 +295,6 @@ TownBuilderConstruct :: proc(w: ^World, kingdomSlot, townSlot: int, canGrow: boo
 		}
 		if startedTraining do continue
 
-		if town.wood >= 15 {
-			if x, y, found := TownAutoPathSite(w, kingdomSlot, townSlot); found {
-				if TownStartConstruction(w, kingdomSlot, townSlot, .Path, x, y) {
-					startedAny = true
-					continue
-				}
-			}
-		}
 		break
 	}
 	return startedAny
@@ -553,106 +554,164 @@ TownConstructionWork :: proc(
 	return .Completed
 }
 
-// Roads grow automatically: first a stub from the hall, then one tile at a time
-// from the edge of the existing road network toward a building without access.
-TownPathCandidate :: struct {
-	x, y: int,
-	distance: int,
-	score: f32,
-	found: bool,
+TownPathTileKind :: enum {
+	Blocked,
+	Buildable,
+	Road,
 }
 
-TownAutoPathSite :: proc(w: ^World, kingdomSlot, townSlot: int) -> (int, int, bool) {
-	targetX, targetY, found := TownPathTarget(w, kingdomSlot, townSlot)
-	if !found do return 0, 0, false
-
-	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	candidate := TownPathCandidate{distance = max(int), score = -1}
-	seed := u64(kingdomSlot*TOWN_CAPACITY+townSlot)+0xBA7D
-
-	for x in town.x-1 ..= town.x+4 {
-		for y in town.y-1 ..= town.y+4 {
-			if x >= town.x && x < town.x+4 && y >= town.y && y < town.y+4 do continue
-			TownConsiderPathSite(
-				w,
-				kingdomSlot,
-				townSlot,
-				x,
-				y,
-				targetX,
-				targetY,
-				seed,
-				&candidate,
-			)
+TownPathTile :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> TownPathTileKind {
+	if x < 0 || y < 0 || x >= int(w.maxX) || y >= int(w.maxY) do return .Blocked
+	if !TownPointInArea(w, kingdomSlot, townSlot, x, y) do return .Blocked
+	slot := w.tileBuilding[x*int(w.maxY)+y]
+	if slot >= 0 {
+		kind := BuildingKindOf(w.buildings[slot].type)
+		if w.buildings.kingdom[slot] == kingdomSlot && w.buildings.town[slot] == townSlot &&
+			(kind == .Path || kind == .Bridge) {
+			return .Road
 		}
+		return .Blocked
 	}
-
-	for buildingSlot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[buildingSlot] do continue
-		if w.buildings.kingdom[buildingSlot] != kingdomSlot ||
-			w.buildings.town[buildingSlot] != townSlot {
-			continue
-		}
-		if BuildingKindOf(w.buildings[buildingSlot].type) != .Path do continue
-		offsets := [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
-		for offset in offsets {
-			TownConsiderPathSite(
-				w,
-				kingdomSlot,
-				townSlot,
-				WorldWrapCoordinate(w.buildings.x[buildingSlot]+offset[0], int(w.maxX)),
-				WorldWrapCoordinate(w.buildings.y[buildingSlot]+offset[1], int(w.maxY)),
-				targetX,
-				targetY,
-				seed,
-				&candidate,
-			)
-		}
+	for site in w.kingdoms[kingdomSlot].towns[townSlot].constructions {
+		if site.active && site.kind == .Path && site.x == x && site.y == y do return .Road
 	}
-	return candidate.x, candidate.y, candidate.found
+	if !WorldBuildingValid(w, x, y, Path{}) do return .Blocked
+	if CombatSiteOverlaps(w, x, y, .Path) || TownConstructionSiteOverlaps(w, x, y, .Path) do return .Blocked
+	return .Buildable
 }
 
-TownConsiderPathSite :: proc(w: ^World, kingdomSlot, townSlot, x, y, targetX, targetY: int, seed: u64, candidate: ^TownPathCandidate) {
-	if !TownPointInArea(w, kingdomSlot, townSlot, x, y) do return
-	wrappedX := WorldWrapCoordinate(x, int(w.maxX))
-	wrappedY := WorldWrapCoordinate(y, int(w.maxY))
-	if !WorldBuildingValid(w, wrappedX, wrappedY, Path{}) do return
-	if CombatSiteOverlaps(w, wrappedX, wrappedY, .Path) do return
-
-	deltaX := targetX-x
-	deltaY := targetY-y
-	distance := deltaX*deltaX+deltaY*deltaY
-	score := WorldNoiseHash(x, y, seed)
-	if candidate.found && (distance > candidate.distance ||
-		(distance == candidate.distance && score <= candidate.score)) {
-		return
-	}
-	candidate.x = wrappedX
-	candidate.y = wrappedY
-	candidate.distance = distance
-	candidate.score = score
-	candidate.found = true
-}
-
-TownPathTarget :: proc(w: ^World, kingdomSlot, townSlot: int) -> (int, int, bool) {
-	for buildingSlot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[buildingSlot] do continue
-		if w.buildings.kingdom[buildingSlot] != kingdomSlot ||
-			w.buildings.town[buildingSlot] != townSlot {
-			continue
-		}
-		kind := BuildingKindOf(w.buildings[buildingSlot].type)
-		if kind == .Path || kind == .Wall || kind == .TownHall do continue
-
-		width, height := BuildingTileSize(w.buildings[buildingSlot].type)
-		hasPath := false
-		for x in w.buildings.x[buildingSlot]-1 ..= w.buildings.x[buildingSlot]+width {
-			for y in w.buildings.y[buildingSlot]-1 ..= w.buildings.y[buildingSlot]+height {
-				if WorldTileHasPath(w, x, y) do hasPath = true
+// Mark cardinal entrances only; a diagonal road does not provide street access.
+TownMarkPathAccess :: proc(w: ^World, kingdomSlot, townSlot, x, y, width, height: int, networkStamp, goalStamp: u32) -> bool {
+	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
+	marked := false
+	for pass in 0..<2 {
+		for tileX in x-1 ..= x+width {
+			for tileY in y-1 ..= y+height {
+				outsideX := tileX < x || tileX >= x+width
+				outsideY := tileY < y || tileY >= y+height
+				if outsideX == outsideY do continue
+				wrappedX := WorldWrapCoordinate(tileX, worldWidth)
+				wrappedY := WorldWrapCoordinate(tileY, worldHeight)
+				index := wrappedX*worldHeight+wrappedY
+				if pass == 0 {
+					if w.navigationStamp[index] == networkStamp do return false
+				} else if TownPathTile(w, kingdomSlot, townSlot, wrappedX, wrappedY) != .Blocked {
+					w.navigationStamp[index] = goalStamp
+					marked = true
+				}
 			}
 		}
-		if hasPath do continue
-		return w.buildings.x[buildingSlot]+width/2, w.buildings.y[buildingSlot]+height/2, true
+	}
+	return marked
+}
+
+// Reuse connected streets, then find the shortest new branch to an entrance.
+TownAutoPathSite :: proc(w: ^World, kingdomSlot, townSlot: int) -> (int, int, bool) {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
+	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return 0, 0, false
+	if len(w.navigationQueue) < worldWidth*worldHeight do return 0, 0, false
+	if w.navigationSearchId >= max(u32)-1 {
+		for &stamp in w.navigationStamp do stamp = 0
+		w.navigationSearchId = 0
+	}
+	w.navigationSearchId += 2
+	networkStamp, goalStamp := w.navigationSearchId-1, w.navigationSearchId
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	hallWidth, hallHeight := BuildingTileSize(TownHall{})
+	offsets := [4][2]int{{1, 0}, {0, 1}, {-1, 0}, {0, -1}}
+	rotation := int(WorldNoiseHash(town.x, town.y, w.seed+0xBA7D)*4)
+	queueEnd := 0
+
+	// Each district has a local street network rooted at its hall.
+	for circle in 0..<TownAreaCircleCount(w, kingdomSlot, townSlot) {
+		hallX, hallY, _ := TownAreaCircle(w, kingdomSlot, townSlot, circle)
+		for x in hallX-1 ..= hallX+hallWidth {
+			for y in hallY-1 ..= hallY+hallHeight {
+				outsideX := x < hallX || x >= hallX+hallWidth
+				outsideY := y < hallY || y >= hallY+hallHeight
+				if outsideX == outsideY do continue
+				wrappedX, wrappedY := WorldWrapCoordinate(x, worldWidth), WorldWrapCoordinate(y, worldHeight)
+				index := wrappedX*worldHeight+wrappedY
+				if w.navigationStamp[index] == networkStamp do continue
+				if TownPathTile(w, kingdomSlot, townSlot, wrappedX, wrappedY) != .Road do continue
+				w.navigationStamp[index] = networkStamp
+				w.navigationCameFrom[index] = -1
+				w.navigationQueue[queueEnd] = index
+				queueEnd += 1
+			}
+		}
+	}
+	for cursor := 0; cursor < queueEnd; cursor += 1 {
+		index := w.navigationQueue[cursor]
+		for offset in offsets {
+			x := WorldWrapCoordinate(index/worldHeight+offset[0], worldWidth)
+			y := WorldWrapCoordinate(index%worldHeight+offset[1], worldHeight)
+			next := x*worldHeight+y
+			if w.navigationStamp[next] == networkStamp do continue
+			if TownPathTile(w, kingdomSlot, townSlot, x, y) != .Road do continue
+			w.navigationStamp[next] = networkStamp
+			w.navigationCameFrom[next] = -1
+			w.navigationQueue[queueEnd] = next
+			queueEnd += 1
+		}
+	}
+
+	hasTarget := false
+	for slot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdomSlot || w.buildings.town[slot] != townSlot do continue
+		kind := BuildingKindOf(w.buildings[slot].type)
+		if kind == .Path || kind == .Bridge || kind == .Wall || kind == .TownHall || kind == .DistrictHall do continue
+		width, height := BuildingTileSize(w.buildings[slot].type)
+		if TownMarkPathAccess(w, kingdomSlot, townSlot, w.buildings.x[slot], w.buildings.y[slot], width, height, networkStamp, goalStamp) do hasTarget = true
+	}
+	for site in town.constructions {
+		if !site.active || site.kind == .Path || site.kind == .TownHall do continue
+		width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+		if TownMarkPathAccess(w, kingdomSlot, townSlot, site.x, site.y, width, height, networkStamp, goalStamp) do hasTarget = true
+	}
+	if !hasTarget do return 0, 0, false
+
+	// Empty hall-side tiles become the first segment of a new street.
+	for circle in 0..<TownAreaCircleCount(w, kingdomSlot, townSlot) {
+		hallX, hallY, _ := TownAreaCircle(w, kingdomSlot, townSlot, circle)
+		for x in hallX-1 ..= hallX+hallWidth {
+			for y in hallY-1 ..= hallY+hallHeight {
+				outsideX := x < hallX || x >= hallX+hallWidth
+				outsideY := y < hallY || y >= hallY+hallHeight
+				if outsideX == outsideY do continue
+				wrappedX, wrappedY := WorldWrapCoordinate(x, worldWidth), WorldWrapCoordinate(y, worldHeight)
+				index := wrappedX*worldHeight+wrappedY
+				if w.navigationStamp[index] == networkStamp do continue
+				if TownPathTile(w, kingdomSlot, townSlot, wrappedX, wrappedY) != .Buildable do continue
+				if w.navigationStamp[index] == goalStamp do return wrappedX, wrappedY, true
+				w.navigationStamp[index] = networkStamp
+				w.navigationCameFrom[index] = index
+				w.navigationQueue[queueEnd] = index
+				queueEnd += 1
+			}
+		}
+	}
+	for cursor := 0; cursor < queueEnd; cursor += 1 {
+		index := w.navigationQueue[cursor]
+		for direction in 0..<4 {
+			offset := offsets[(direction+rotation)%4]
+			x := WorldWrapCoordinate(index/worldHeight+offset[0], worldWidth)
+			y := WorldWrapCoordinate(index%worldHeight+offset[1], worldHeight)
+			next := x*worldHeight+y
+			if w.navigationStamp[next] == networkStamp do continue
+			kind := TownPathTile(w, kingdomSlot, townSlot, x, y)
+			if kind == .Blocked do continue
+			firstMissing := w.navigationCameFrom[index]
+			if firstMissing < 0 && kind == .Buildable do firstMissing = next
+			if w.navigationStamp[next] == goalStamp && firstMissing >= 0 {
+				return firstMissing/worldHeight, firstMissing%worldHeight, true
+			}
+			w.navigationStamp[next] = networkStamp
+			w.navigationCameFrom[next] = firstMissing
+			w.navigationQueue[queueEnd] = next
+			queueEnd += 1
+		}
 	}
 	return 0, 0, false
 }
@@ -712,7 +771,7 @@ TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType
 			if !WorldBuildingValid(w, x, y, buildingType) do continue
 			access, accessible := TownPlacementAccess(w, field, kingdomSlot, x, y, buildingWidth, buildingHeight)
 			if !accessible do continue
-			score := TownPlacementScore(w, x, y, buildingWidth, buildingHeight, town.x, town.y, kind, seed)
+			score := TownPlacementScore(w, kingdomSlot, townSlot, x, y, buildingWidth, buildingHeight, kind, seed)
 			score += f32(min(access, 12))*0.12
 			if !found || score > bestScore {
 				bestX, bestY, bestScore, found = x, y, score, true
@@ -746,51 +805,79 @@ TownPlacementAccess :: proc(w: ^World, field: ^FlowField, kingdom, x, y, width, 
 	return 0, false
 }
 
-TownPlacementScore :: proc(w: ^World, x, y, width, height, hallX, hallY: int, kind: BuildingKind, seed: u64) -> f32 {
+TownPlacementNeighborhood :: struct {
+	touching, homes: int,
+	nearestGapSquared: int,
+	roadBonus: f32,
+}
+
+TownPlacementConsiderNeighbor :: proc(x, y, width, height: int, kind: BuildingKind, otherX, otherY, otherWidth, otherHeight: int, otherKind: BuildingKind, neighborhood: ^TownPlacementNeighborhood) {
+	gapX := max(0, max(otherX-x-width, x-otherX-otherWidth))
+	gapY := max(0, max(otherY-y-height, y-otherY-otherHeight))
+	gapSquared := gapX*gapX+gapY*gapY
+	if gapSquared > 18 do return
+	if otherKind == .Path || otherKind == .Bridge {
+		frontage := (x < otherX+otherWidth && otherX < x+width) ||
+			(y < otherY+otherHeight && otherY < y+height)
+		bonus: f32 = 0
+		if frontage && gapSquared == 0 {
+			bonus = kind == .Home ? 8 : 2.5
+		} else if frontage && gapSquared <= 1 {
+			bonus = kind == .Home ? 3 : 1
+		} else if gapSquared <= 4 {
+			bonus = 0.5
+		}
+		neighborhood.roadBonus = max(neighborhood.roadBonus, bonus)
+		return
+	}
+	neighborhood.nearestGapSquared = min(neighborhood.nearestGapSquared, gapSquared)
+	if gapSquared == 0 do neighborhood.touching += 1
+	if otherKind == .Home && gapSquared <= 9 do neighborhood.homes += 1
+}
+
+TownPlacementScore :: proc(w: ^World, kingdomSlot, townSlot, x, y, width, height: int, kind: BuildingKind, seed: u64) -> f32 {
 	centerX, centerY := f32(x)+f32(width)*0.5, f32(y)+f32(height)*0.5
-	deltaX, deltaY := centerX-f32(hallX+2), centerY-f32(hallY+2)
-	// Jitter can outweigh a few tiles of distance, but not pull buildings to
-	// random outskirts. Nearby buildings then shape small, loosely spaced groups.
-	score := WorldNoiseHash(x, y, seed)*3.5-math.sqrt(deltaX*deltaX+deltaY*deltaY)*0.7
+	distance: f32 = 1e20
+	for circle in 0..<TownAreaCircleCount(w, kingdomSlot, townSlot) {
+		hallX, hallY, _ := TownAreaCircle(w, kingdomSlot, townSlot, circle)
+		dx, dy := centerX-f32(hallX+2), centerY-f32(hallY+2)
+		distance = min(distance, math.sqrt(dx*dx+dy*dy))
+	}
+	// Streets shape neighborhoods more than distance from the hall does.
+	score := WorldNoiseHash(x, y, seed)*1.5-distance*0.3
+	if kind == .Farmland {
+		town := &w.kingdoms[kingdomSlot].towns[townSlot]
+		score = WorldNoiseHash(x, y, seed)*1.5-math.abs(distance-f32(town.areaRadius)*0.65)*0.3
+	}
 	minX, maxX := max(0, x-3), min(int(w.maxX)-1, x+width+2)
 	minY, maxY := max(0, y-3), min(int(w.maxY)-1, y+height+2)
-	touching, aligned := 0, 0
-	nearestGapSquared := 18
-	roadBonus: f32 = 0
+	neighborhood := TownPlacementNeighborhood{nearestGapSquared = 18}
 	for tileX in minX..=maxX {
 		for tileY in minY..=maxY {
 			slot := w.tileBuilding[tileX*int(w.maxY)+tileY]
 			if slot < 0 do continue
 			otherX, otherY := w.buildings.x[slot], w.buildings.y[slot]
-			// Count each neighboring footprint once, even if its anchor is
-			// outside this small tile-index query.
 			if tileX != max(minX, otherX) || tileY != max(minY, otherY) do continue
 			otherWidth, otherHeight := BuildingTileSize(w.buildings[slot].type)
-			gapX := max(0, max(otherX-x-width, x-otherX-otherWidth))
-			gapY := max(0, max(otherY-y-height, y-otherY-otherHeight))
-			gapSquared := gapX*gapX+gapY*gapY
-			otherKind := BuildingKindOf(w.buildings[slot].type)
-			if otherKind == .Path || otherKind == .Bridge {
-				if gapSquared == 0 do roadBonus = 1.5
-				if gapSquared <= 4 do roadBonus = max(roadBonus, 0.5)
-				continue
-			}
-			nearestGapSquared = min(nearestGapSquared, gapSquared)
-			if gapSquared == 0 do touching += 1
-			if otherKind == kind && (x*2+width == otherX*2+otherWidth ||
-				y*2+height == otherY*2+otherHeight) {
-				aligned += 1
-			}
+			TownPlacementConsiderNeighbor(x, y, width, height, kind, otherX, otherY, otherWidth, otherHeight,
+				BuildingKindOf(w.buildings[slot].type), &neighborhood)
 		}
 	}
-	score += roadBonus+max(0, 3-math.sqrt(f32(nearestGapSquared)))*0.5
+	for site in w.kingdoms[kingdomSlot].towns[townSlot].constructions {
+		if !site.active do continue
+		otherWidth, otherHeight := BuildingTileSize(BuildingTypeFromKind(site.kind))
+		TownPlacementConsiderNeighbor(x, y, width, height, kind, site.x, site.y, otherWidth, otherHeight,
+			site.kind, &neighborhood)
+	}
+	score += neighborhood.roadBonus+max(0, 3-math.sqrt(f32(neighborhood.nearestGapSquared)))*0.5
 	if kind == .Farmland {
-		// Fields may adjoin; retain legal soil rules and favor the existing
-		// two-fertile-tile yield threshold rather than decorative spacing.
-		score -= f32(min(touching, 4))*0.4
+		score -= f32(min(neighborhood.touching, 4))*0.4
 	} else {
-		// Soft penalties allow dense/constrained towns to keep building.
-		score -= f32(min(touching, 4))*2.5+f32(min(aligned, 3))*1.3
+		// Spacing is preferred, not mandatory on small islands or in dense towns.
+		score -= f32(min(neighborhood.touching, 4))*(kind == .Home ? 6 : 3)
+		if kind == .Home {
+			score += f32(min(neighborhood.homes, 3))*0.45-f32(max(0, neighborhood.homes-5))*0.6
+		}
 	}
 	fertileTiles := 0
 	for tileX in x..<x+width {

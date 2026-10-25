@@ -5,6 +5,7 @@ package main
 // regrowth without touching the unit/building passes.
 DECORATION_CAPACITY :: 100_000
 DECORATION_REGROW_SECONDS :: 90
+STREET_LAMP_MIN_SPACING :: 7
 
 DecorationKind :: enum {
 	Tree,
@@ -152,12 +153,49 @@ WorldDecorationSpawn :: proc(w: ^World, x, y: f32, kind: DecorationKind, variant
 	return slot, true
 }
 
-// Roads are decorated automatically: a deterministic share of path tiles gets
-// a street lamp, which also lights the town at night.
+// Sparse road lighting; established bends and junctions get more candidates.
 WorldSpawnStreetLamp :: proc(w: ^World, x, y: int) {
-	if WorldNoiseHash(x, y, 0x1A3B) >= 0.45 do return
-	if WorldTileHasLamp(w, x, y) do return
-	WorldDecorationSpawn(w, f32(x)+0.5, f32(y)+0.9, .Lamp, u8(WorldNoiseHash(y, x, 0x1A3C)*4) & 3)
+	if w.spatial.chunkSize <= 0 || !WorldTileHasPath(w, x, y) do return
+	tileX := WorldWrapCoordinate(x, int(w.maxX))
+	tileY := WorldWrapCoordinate(y, int(w.maxY))
+	roll := WorldNoiseHash(tileX, tileY, 0x1A3B)
+	if roll >= 0.18 do return
+	if roll >= 0.08 {
+		horizontal := WorldTileHasPath(w, tileX-1, tileY) || WorldTileHasPath(w, tileX+1, tileY)
+		vertical := WorldTileHasPath(w, tileX, tileY-1) || WorldTileHasPath(w, tileX, tileY+1)
+		if !horizontal || !vertical do return
+	}
+	if WorldHasNearbyStreetLamp(w, tileX, tileY) do return
+	WorldDecorationSpawn(w, f32(tileX)+0.5, f32(tileY)+0.9, .Lamp, u8(WorldNoiseHash(tileY, tileX, 0x1A3C)*4) & 3)
+}
+
+WorldHasNearbyStreetLamp :: proc(w: ^World, x, y: int) -> bool {
+	chunkSize := w.spatial.chunkSize
+	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
+	if chunkSize <= 0 || worldWidth <= 0 || worldHeight <= 0 do return false
+	centerX := WorldWrapCoordinate(x, worldWidth)
+	centerY := WorldWrapCoordinate(y, worldHeight)
+
+	// Wrap tiles before selecting buckets: edge chunks can be shorter than chunkSize.
+	for tileX := centerX-STREET_LAMP_MIN_SPACING; tileX <= centerX+STREET_LAMP_MIN_SPACING; {
+		wrappedX := WorldWrapCoordinate(tileX, worldWidth)
+		chunkX := wrappedX/chunkSize
+		for tileY := centerY-STREET_LAMP_MIN_SPACING; tileY <= centerY+STREET_LAMP_MIN_SPACING; {
+			wrappedY := WorldWrapCoordinate(tileY, worldHeight)
+			chunk := chunkX*w.spatial.chunksY+wrappedY/chunkSize
+			for slot := w.spatial.decorationHead[chunk]; slot >= 0; slot = w.spatial.decorationNext[slot] {
+				if w.decorations.kind[slot] != .Lamp do continue
+				deltaX := WorldShortestWrappedDelta(f32(int(w.decorations.x[slot])-centerX), f32(worldWidth))
+				deltaY := WorldShortestWrappedDelta(f32(int(w.decorations.y[slot])-centerY), f32(worldHeight))
+				if deltaX*deltaX+deltaY*deltaY < f32(STREET_LAMP_MIN_SPACING*STREET_LAMP_MIN_SPACING) {
+					return true
+				}
+			}
+			tileY += min(chunkSize-wrappedY%chunkSize, worldHeight-wrappedY)
+		}
+		tileX += min(chunkSize-wrappedX%chunkSize, worldWidth-wrappedX)
+	}
+	return false
 }
 
 WorldTileHasLamp :: proc(w: ^World, x, y: int) -> bool {
