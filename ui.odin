@@ -2027,7 +2027,7 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	y := panel.y+UI_GROWTH_Y
 	eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
 	label := fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta)))
-	if WorldIsNight(w) do label = "Growth paused (night)"
+	if WorldIsNight(w) do label = "Night"
 	UIText(
 		label,
 		panel.x+UI_PAD,
@@ -2877,16 +2877,6 @@ UIDrawBuildPalette :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			rl.DrawTexturePro(texture, source, rl.Rectangle{rect.x+8, rect.y+12, 30, 30}, rl.Vector2{0, 0}, 0, rl.WHITE)
 		}
 		UIText(UIBuildingName(kind), rect.x+44, rect.y+8, UI_COLOR_TEXT)
-		cost := BuildingWoodCost(kind)
-		costLabel: cstring = "Free"
-		costColor := UI_COLOR_DIM
-		if cost > 0 {
-			costLabel = fmt.ctprintf("%d wood", int(cost))
-			town := &w.kingdoms[ui.buildKingdom].towns[ui.buildTown]
-			if town.wood >= cost do costColor = UI_COLOR_TEXT
-			if town.wood < cost do costColor = UI_COLOR_ATTACK
-		}
-		UIText(costLabel, rect.x+44, rect.y+30, costColor)
 	}
 }
 

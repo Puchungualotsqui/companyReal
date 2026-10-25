@@ -903,6 +903,7 @@ WarriorEscortValid :: proc(w: ^World, warriorSlot, targetSlot: int) -> bool {
 	}
 	if UnitHiddenInside(w, targetSlot) do return false
 	if w.units[targetSlot].kingdome != w.units[warriorSlot].kingdome do return false
+	if _, combatBuilder := w.units[targetSlot].type.(CombatBuilder); combatBuilder do return false
 	return !UnitIsWarrior(w.units[targetSlot].type)
 }
 
@@ -929,10 +930,8 @@ UnitFindEscortTarget :: proc(w: ^World, warriorSlot, sequence: int) -> int {
 			chunk := chunkX*w.spatial.chunksY+chunkY
 			for candidateSlot := w.spatial.unitHead[chunk]; candidateSlot >= 0;
 				candidateSlot = w.spatial.unitNext[candidateSlot] {
-				if candidateSlot == warriorSlot || !w.unitUsed[candidateSlot] do continue
-				if UnitHiddenInside(w, candidateSlot) do continue
-				if w.units[candidateSlot].kingdome != kingdomSlot do continue
-				if UnitIsWarrior(w.units[candidateSlot].type) do continue
+				if candidateSlot == warriorSlot do continue
+				if !WarriorEscortValid(w, warriorSlot, candidateSlot) do continue
 				deltaX := WorldShortestWrappedDelta(w.units.x[candidateSlot]-unitX, worldWidth)
 				deltaY := WorldShortestWrappedDelta(w.units.y[candidateSlot]-unitY, worldHeight)
 				if deltaX*deltaX+deltaY*deltaY > f32(WARRIOR_ESCORT_RADIUS*WARRIOR_ESCORT_RADIUS) {

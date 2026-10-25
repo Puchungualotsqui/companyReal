@@ -26,8 +26,8 @@ TOWN_FUSION_FRONTIER_SLACK :: 1
 // the hall. A player order preempts automatic construction.
 // Every town the kingdom already owns makes the next charter more expensive,
 // and the settlers are drawn from the source town instead of being created.
-TOWN_FOUNDING_WOOD :: 50
-TOWN_FOUNDING_WOOD_PER_TOWN :: 25
+TOWN_FOUNDING_WOOD :: 45
+TOWN_FOUNDING_WOOD_PER_TOWN :: 20
 TOWN_FOUNDING_MIN_CITIZENS :: 8
 TOWN_FOUNDING_MIN_DISTANCE :: 20
 TOWN_FOUNDING_SETTLERS :: 5
