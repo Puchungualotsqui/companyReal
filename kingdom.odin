@@ -72,9 +72,10 @@ TOWN_ERAS := [6]GrowthEra{
 // reward tiers, one for every era transition.
 TOWN_MILESTONE_TIER_COUNT :: 5
 
-// Share of a town's warriors that always stays home to defend it. The rest
-// is split between the town's attack and defend orders.
-TOWN_GARRISON_RATIO :: 0.5
+// Share of a town's warriors that stays home as a garrison while the town has
+// orders. This is not a defend order against the town itself; the rest is split
+// between its attack and defend orders.
+TOWN_GARRISON_RATIO :: 0.10
 
 Kingdom :: struct {
 	name: Name,
