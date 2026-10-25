@@ -203,18 +203,27 @@ CombatBuilderUpdate :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	townSlot := w.units[unitSlot].town
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return
 
-	if CombatBuilderDefend(w, unitSlot, deltaTime) do return
-
 	builder := &w.units[unitSlot].type.(CombatBuilder)
 	state := &w.units[unitSlot].state.(StatePacific)
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	if builder.orderKingdom != kingdomSlot || builder.orderTown != townSlot ||
 		builder.orderRevision != town.orderRevision {
+		switch previous in builder.order {
+		case WarriorAttack:
+			if !WorldTownExists(w, previous.kingdom, previous.town) ||
+				!town.attackOrders[previous.kingdom][previous.town] {
+				builder.returning = true
+			}
+		case WarriorDefend:
+			if !WorldTownExists(w, previous.kingdom, previous.town) ||
+				!town.defendOrders[previous.kingdom][previous.town] {
+				builder.returning = true
+			}
+		case WarriorGarrison, WarriorIdle:
+		}
 		order := TownUnitOrder(w, unitSlot)
+		if builder.returning do order = WarriorGarrison{}
 		if !WarriorOrderEqual(builder.order, order) {
-			_, wasAttack := builder.order.(WarriorAttack)
-			_, wasDefend := builder.order.(WarriorDefend)
-			builder.returning = wasAttack || wasDefend
 			builder.onStation = false
 			builder.site = -1
 			state^ = .Roaming
@@ -225,6 +234,16 @@ CombatBuilderUpdate :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		builder.orderTown = townSlot
 		builder.orderRevision = town.orderRevision
 	}
+
+	if builder.returning {
+		if UnitWarriorTravel(w, unitSlot, kingdomSlot, townSlot, deltaTime) == .Arrived {
+			builder.returning = false
+			builder.orderKingdom = -1
+			w.units[unitSlot].pathReady = false
+		}
+		return
+	}
+	if CombatBuilderDefend(w, unitSlot, deltaTime) do return
 
 	switch order in builder.order {
 	case WarriorAttack:
@@ -242,12 +261,6 @@ CombatBuilderUpdate :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		CombatBuilderPatrol(w, unitSlot, order.kingdom, order.town, deltaTime)
 		return
 	case WarriorGarrison, WarriorIdle:
-		if builder.returning {
-			result := UnitWarriorTravel(w, unitSlot, kingdomSlot, townSlot, deltaTime)
-			if result == .Travelling do return
-			builder.returning = false
-			w.units[unitSlot].pathReady = false
-		}
 	}
 
 	if builder.site >= 0 && (builder.site >= COMBAT_SITE_CAPACITY || !w.combatSiteUsed[builder.site]) {
@@ -361,6 +374,8 @@ CombatBuilderDefend :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 
 CombatBuilderFindEnemy :: proc(w: ^World, unitSlot: int, radius: f32) -> int {
 	unit := &w.units[unitSlot]
+	builder := &unit.type.(CombatBuilder)
+	combatState := StateWarrior{order = builder.order, retreating = builder.returning}
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
 	chunkSize := w.spatial.chunkSize
@@ -378,9 +393,8 @@ CombatBuilderFindEnemy :: proc(w: ^World, unitSlot: int, radius: f32) -> int {
 			chunk := chunkX*w.spatial.chunksY+chunkY
 			for otherSlot := w.spatial.unitHead[chunk]; otherSlot >= 0;
 				otherSlot = w.spatial.unitNext[otherSlot] {
-				if otherSlot == unitSlot || !w.unitUsed[otherSlot] do continue
-				if UnitHiddenInside(w, otherSlot) do continue
-				if !KingdomAtWar(w, unit.kingdome, w.units[otherSlot].kingdome) do continue
+				if otherSlot == unitSlot do continue
+				if !WarriorCanTargetUnit(w, unitSlot, &combatState, otherSlot) do continue
 				deltaX := WorldShortestWrappedDelta(w.units.x[otherSlot]-unit.x, worldWidth)
 				deltaY := WorldShortestWrappedDelta(w.units.y[otherSlot]-unit.y, worldHeight)
 				distanceSquared := deltaX*deltaX+deltaY*deltaY

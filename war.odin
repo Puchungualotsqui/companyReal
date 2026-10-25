@@ -14,6 +14,7 @@ WARRIOR_ESCORT_CHANCE :: 0.35
 WARRIOR_GARRISON_ESCORT_RATIO :: 0.15
 WARRIOR_ESCORT_RADIUS :: 30
 WARRIOR_BREACH_RADIUS :: 40
+WARRIOR_DEFENSE_AREA_FACTOR :: 1.5
 
 // Melee units stop on a ring around their target and keep personal space, so a
 // crowd does not collapse into the same few pixels.
@@ -22,10 +23,6 @@ MELEE_FAN_STEP :: 0.18
 MELEE_SEPARATION_RADIUS :: 2.0
 MELEE_SEPARATION_MAX_PUSH :: 0.30
 
-// Independent-town guards stay close to their hall and only fight units, never
-// buildings.
-NEUTRAL_GUARD_RADIUS :: 11
-NEUTRAL_GUARD_CHASE_SLACK :: 6
 NEUTRAL_GUARD_PATROL_RADIUS :: 5
 
 StateWarriorInit :: proc(unitSlot, kingdomSlot, townSlot: int) -> StateWarrior {
@@ -50,94 +47,6 @@ UnitWarriorReset :: proc(w: ^World, unitSlot: int) {
 	)
 }
 
-// Independent guards have no orders and no interest in buildings. They patrol
-// their hall and respond to hostile units that enter the small guard radius.
-UnitUpdateIndependentKnight :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
-	unit := &w.units[unitSlot]
-	state, ok := &unit.state.(StateWarrior)
-	if !ok do return
-
-	kingdomSlot := unit.kingdome
-	townSlot := unit.town
-	if !WorldTownExists(w, kingdomSlot, townSlot) {
-		state.target = TargetNone{}
-		return
-	}
-	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-
-	if !IndependentKnightFocusValid(w, unitSlot, state, town.x, town.y) {
-		state.target = TargetNone{}
-	}
-
-	state.scanTimer -= deltaTime
-	if state.scanTimer <= 0 {
-		jitter := 0.75+WorldNoiseHash(unitSlot, state.scanSequence, u64(kingdomSlot)+911)*0.5
-		state.scanTimer = WARRIOR_SCAN_INTERVAL*jitter
-		if _, isNone := state.target.(TargetNone); isNone {
-			state.target = IndependentKnightFindFocus(w, unitSlot, town.x, town.y)
-		}
-	}
-
-	if _, isNone := state.target.(TargetNone); !isNone {
-		state.activity = .Attacking
-		unit.pathReady = false
-		if UnitWarriorEngage(w, unitSlot, state, deltaTime) do return
-		state.target = TargetNone{}
-	}
-
-	state.activity = .Moving
-	UnitWarriorPatrol(
-		w,
-		unitSlot,
-		kingdomSlot,
-		townSlot,
-		NEUTRAL_GUARD_PATROL_RADIUS,
-		deltaTime,
-		state,
-	)
-}
-
-IndependentKnightDistanceSquared :: proc(w: ^World, x, y: f32, townX, townY: int) -> f32 {
-	deltaX := WorldShortestWrappedDelta(x-(f32(townX)+2), f32(w.maxX))
-	deltaY := WorldShortestWrappedDelta(y-(f32(townY)+2), f32(w.maxY))
-	return deltaX*deltaX+deltaY*deltaY
-}
-
-IndependentKnightFocusValid :: proc(
-	w: ^World,
-	unitSlot: int,
-	state: ^StateWarrior,
-	townX, townY: int,
-) -> bool {
-	target, ok := state.target.(TargetUnit)
-	if !ok do return false
-	slot := target.slot
-	if slot < 0 || slot >= UNIT_CAPACITY || !w.unitUsed[slot] do return false
-	if UnitHiddenInside(w, slot) do return false
-
-	unit := &w.units[unitSlot]
-	if !KingdomAtWar(w, unit.kingdome, w.units[slot].kingdome) do return false
-	if IndependentKnightDistanceSquared(w, w.units[slot].x, w.units[slot].y, townX, townY) >
-		f32(NEUTRAL_GUARD_RADIUS*NEUTRAL_GUARD_RADIUS) {
-		return false
-	}
-	chaseRadius := NEUTRAL_GUARD_RADIUS+NEUTRAL_GUARD_CHASE_SLACK
-	return IndependentKnightDistanceSquared(w, unit.x, unit.y, townX, townY) <=
-		f32(chaseRadius*chaseRadius)
-}
-
-IndependentKnightFindFocus :: proc(w: ^World, unitSlot, townX, townY: int) -> WarriorTarget {
-	enemies: [1]UnitNearbyEnemy
-	if UnitCollectNearbyEnemies(w, unitSlot, NEUTRAL_GUARD_RADIUS, enemies[:]) == 0 {
-		return TargetNone{}
-	}
-	slot := enemies[0].slot
-	if IndependentKnightDistanceSquared(w, w.units[slot].x, w.units[slot].y, townX, townY) >
-		f32(NEUTRAL_GUARD_RADIUS*NEUTRAL_GUARD_RADIUS) {
-		return TargetNone{}
-	}
-	return TargetUnit{slot = slot}
-}
 
 // Units react to enemies inside their distraction radius, which is usually
 // wider than the radius that reveals fog for the player.
@@ -156,6 +65,17 @@ UnitUpdateWarrior :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	if state.orderKingdom != kingdomSlot || state.orderTown != townSlot ||
 		state.orderRevision != town.orderRevision {
 		UnitWarriorAssignOrder(w, unitSlot, state)
+	}
+
+	if state.retreating {
+		state.target = TargetNone{}
+		state.activity = .Moving
+		if UnitWarriorTravel(w, unitSlot, kingdomSlot, townSlot, deltaTime) == .Arrived {
+			state.retreating = false
+			state.orderKingdom = -1
+			unit.pathReady = false
+		}
+		return
 	}
 
 	if !WarriorFocusValid(w, unitSlot, state) {
@@ -182,16 +102,18 @@ UnitUpdateWarrior :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	case WarriorIdle:
 		state.activity = .Idle
 	case WarriorGarrison:
+		patrolRadius := WARRIOR_HOME_PATROL_RADIUS
+		if kingdomSlot == NEUTRAL_KINGDOM do patrolRadius = NEUTRAL_GUARD_PATROL_RADIUS
 		if !UnitWarriorFarFromTown(w, unitSlot, kingdomSlot, townSlot) {
-			if UnitWarriorEscort(w, unitSlot, state, deltaTime) do return
+			if kingdomSlot != NEUTRAL_KINGDOM && UnitWarriorEscort(w, unitSlot, state, deltaTime) do return
 			state.activity = .Moving
-			UnitWarriorPatrol(w, unitSlot, kingdomSlot, townSlot, WARRIOR_HOME_PATROL_RADIUS, deltaTime, state)
+			UnitWarriorPatrol(w, unitSlot, kingdomSlot, townSlot, patrolRadius, deltaTime, state)
 			return
 		}
 		state.activity = .Moving
 		if UnitWarriorTravel(w, unitSlot, kingdomSlot, townSlot, deltaTime) == .Arrived {
 			unit.pathReady = false
-			UnitWarriorPatrol(w, unitSlot, kingdomSlot, townSlot, WARRIOR_HOME_PATROL_RADIUS, deltaTime, state)
+			UnitWarriorPatrol(w, unitSlot, kingdomSlot, townSlot, patrolRadius, deltaTime, state)
 		}
 	case WarriorAttack:
 		state.activity = .Moving
@@ -233,7 +155,21 @@ UnitWarriorAssignOrder :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	previous := state.order
 
+	switch order in previous {
+	case WarriorAttack:
+		if !WorldTownExists(w, order.kingdom, order.town) ||
+			!town.attackOrders[order.kingdom][order.town] {
+			state.retreating = true
+		}
+	case WarriorDefend:
+		if !WorldTownExists(w, order.kingdom, order.town) ||
+			!town.defendOrders[order.kingdom][order.town] {
+			state.retreating = true
+		}
+	case WarriorIdle, WarriorGarrison:
+	}
 	newOrder := TownUnitOrder(w, unitSlot)
+	if state.retreating do newOrder = WarriorGarrison{}
 
 	state.order = newOrder
 	state.orderKingdom = kingdomSlot
@@ -301,26 +237,85 @@ WarriorOrderEqual :: proc(a, b: WarriorOrder) -> bool {
 	return false
 }
 
+// Defense follows every district and wraps across map edges.
+TownPointInDefenseArea :: proc(w: ^World, kingdomSlot, townSlot: int, x, y: f32) -> bool {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return false
+	width, height := BuildingTileSize(TownHall{})
+	halfWidth, halfHeight := f32(width)*0.5, f32(height)*0.5
+	for index in 0..<TownAreaCircleCount(w, kingdomSlot, townSlot) {
+		circleX, circleY, circleRadius := TownAreaCircle(w, kingdomSlot, townSlot, index)
+		dx := math.abs(WorldShortestWrappedDelta(x-f32(circleX)-halfWidth, f32(w.maxX)))
+		dy := math.abs(WorldShortestWrappedDelta(y-f32(circleY)-halfHeight, f32(w.maxY)))
+		dx = max(0, dx-halfWidth)
+		dy = max(0, dy-halfHeight)
+		radius := f32(circleRadius)*WARRIOR_DEFENSE_AREA_FACTOR
+		if dx*dx+dy*dy <= radius*radius do return true
+	}
+	return false
+}
+
+WarriorDefenseTown :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) -> (kingdomSlot, townSlot: int, defending: bool) {
+	if state.retreating do return -1, -1, false
+	switch order in state.order {
+	case WarriorGarrison:
+		kingdomSlot, townSlot = w.units.kingdome[unitSlot], w.units.town[unitSlot]
+	case WarriorDefend:
+		kingdomSlot, townSlot = order.kingdom, order.town
+	case WarriorIdle, WarriorAttack:
+		return -1, -1, false
+	}
+	return kingdomSlot, townSlot, WorldTownExists(w, kingdomSlot, townSlot)
+}
+
+WarriorCanTargetUnit :: proc(w: ^World, unitSlot: int, state: ^StateWarrior, targetSlot: int) -> bool {
+	if state.retreating || targetSlot < 0 || targetSlot >= UNIT_CAPACITY || !w.unitUsed[targetSlot] {
+		return false
+	}
+	if UnitHiddenInside(w, targetSlot) do return false
+	unit := &w.units[unitSlot]
+	target := &w.units[targetSlot]
+	if !KingdomAtWar(w, unit.kingdome, target.kingdome) do return false
+	if order, attacking := state.order.(WarriorAttack); attacking {
+		if !WorldTownExists(w, order.kingdom, order.town) do return false
+		return target.kingdome != NEUTRAL_KINGDOM ||
+			(order.kingdom == NEUTRAL_KINGDOM && target.town == order.town)
+	}
+	kingdomSlot, townSlot, defending := WarriorDefenseTown(w, unitSlot, state)
+	if !defending || !TownPointInDefenseArea(w, kingdomSlot, townSlot, unit.x, unit.y) do return false
+	if TownPointInDefenseArea(w, kingdomSlot, townSlot, target.x, target.y) do return true
+
+	// An enemy outside the boundary may be hit, but not pursued.
+	attackRange := UnitDefaultRange(unit.type)
+	if UnitIsMelee(unit.type) do attackRange = max(attackRange, UnitMeleeStandoff(unit.type, target.type))
+	dx := WorldShortestWrappedDelta(target.x-unit.x, f32(w.maxX))
+	dy := WorldShortestWrappedDelta(target.y-unit.y, f32(w.maxY))
+	return dx*dx+dy*dy <= attackRange*attackRange
+}
+
+WarriorCanTargetBuilding :: proc(w: ^World, unitSlot: int, state: ^StateWarrior, buildingSlot: int) -> bool {
+	if state.retreating || buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] {
+		return false
+	}
+	order, attacking := state.order.(WarriorAttack)
+	if !attacking || !WorldTownExists(w, order.kingdom, order.town) do return false
+	return w.buildings.kingdom[buildingSlot] == order.kingdom &&
+		w.buildings.town[buildingSlot] == order.town &&
+		KingdomAtWar(w, w.units.kingdome[unitSlot], order.kingdom)
+}
+
 WarriorFocusValid :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) -> bool {
 	unit := &w.units[unitSlot]
 	switch target in state.target {
 	case TargetNone:
 		return false
 	case TargetUnit:
-		if target.slot < 0 || target.slot >= UNIT_CAPACITY || !w.unitUsed[target.slot] {
-			return false
-		}
-		if UnitHiddenInside(w, target.slot) do return false
-		if !KingdomAtWar(w, unit.kingdome, w.units[target.slot].kingdome) do return false
+		if !WarriorCanTargetUnit(w, unitSlot, state, target.slot) do return false
 		deltaX := WorldShortestWrappedDelta(w.units.x[target.slot]-unit.x, f32(w.maxX))
 		deltaY := WorldShortestWrappedDelta(w.units.y[target.slot]-unit.y, f32(w.maxY))
-		return deltaX*deltaX+deltaY*deltaY <=
-			UnitDistraction(unit.type)*UnitDistraction(unit.type)
+		radius := max(UnitDistraction(unit.type), UnitDefaultRange(unit.type))
+		return deltaX*deltaX+deltaY*deltaY <= radius*radius
 	case TargetBuilding:
-		if target.slot < 0 || target.slot >= BUILDING_CAPACITY || !w.buildingUsed[target.slot] {
-			return false
-		}
-		return KingdomAtWar(w, unit.kingdome, w.buildings[target.slot].kingdom)
+		return WarriorCanTargetBuilding(w, unitSlot, state, target.slot)
 	}
 	return false
 }
@@ -337,11 +332,11 @@ WarriorFindFocus :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) -> Warr
 
 	state.scanSequence += 1
 	nearUnit, unitDistance, nearBuilding, buildingDistance :=
-		WarriorFindNearbyHostiles(w, unitSlot, max(UnitDefaultVision(unit.type, WorldIsNight(w)), aggro))
+		WarriorFindNearbyHostiles(w, unitSlot, state, max(UnitDefaultVision(unit.type, WorldIsNight(w)), aggro, UnitDefaultRange(unit.type)))
 	seed := u64(unitSlot)+u64(state.scanSequence)*7919+1307
 
 	if nearUnit >= 0 {
-		if unitDistance <= aggro do return TargetUnit{slot = nearUnit}
+		if unitDistance <= max(aggro, UnitDefaultRange(unit.type)) do return TargetUnit{slot = nearUnit}
 		if isAttackOrder &&
 			WorldNoiseHash(unitSlot, state.scanSequence, seed) <
 				WARRIOR_CASCADE_UNIT_CHANCE {
@@ -357,7 +352,7 @@ WarriorFindFocus :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) -> Warr
 	return TargetNone{}
 }
 
-WarriorFindNearbyHostiles :: proc(w: ^World, unitSlot: int, radius: f32) -> (nearUnit: int, unitDistance: f32, nearBuilding: int, buildingDistance: f32) {
+WarriorFindNearbyHostiles :: proc(w: ^World, unitSlot: int, state: ^StateWarrior, radius: f32) -> (nearUnit: int, unitDistance: f32, nearBuilding: int, buildingDistance: f32) {
 	nearUnit = -1
 	nearBuilding = -1
 	unitDistance = radius
@@ -383,9 +378,8 @@ WarriorFindNearbyHostiles :: proc(w: ^World, unitSlot: int, radius: f32) -> (nea
 
 			for otherSlot := w.spatial.unitHead[chunk]; otherSlot >= 0;
 				otherSlot = w.spatial.unitNext[otherSlot] {
-				if otherSlot == unitSlot || !w.unitUsed[otherSlot] do continue
-				if UnitHiddenInside(w, otherSlot) do continue
-				if !KingdomAtWar(w, unit.kingdome, w.units[otherSlot].kingdome) do continue
+				if otherSlot == unitSlot do continue
+				if !WarriorCanTargetUnit(w, unitSlot, state, otherSlot) do continue
 				deltaX := WorldShortestWrappedDelta(w.units.x[otherSlot]-unitX, worldWidth)
 				deltaY := WorldShortestWrappedDelta(w.units.y[otherSlot]-unitY, worldHeight)
 				distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
@@ -397,10 +391,7 @@ WarriorFindNearbyHostiles :: proc(w: ^World, unitSlot: int, radius: f32) -> (nea
 
 			for buildingSlot := w.spatial.buildingHead[chunk]; buildingSlot >= 0;
 				buildingSlot = w.spatial.buildingNext[buildingSlot] {
-				if !w.buildingUsed[buildingSlot] do continue
-				buildingKingdom := w.buildings.kingdom[buildingSlot]
-				if buildingKingdom < 0 || buildingKingdom == unit.kingdome do continue
-				if !KingdomAtWar(w, unit.kingdome, buildingKingdom) do continue
+				if !WarriorCanTargetBuilding(w, unitSlot, state, buildingSlot) do continue
 				distance, _, _ := WarriorBuildingNearestPoint(w, unitX, unitY, buildingSlot)
 				if distance < buildingDistance {
 					buildingDistance = distance
@@ -465,7 +456,7 @@ WarriorFindBreachBuilding :: proc(w: ^World, unitSlot, targetKingdom, targetTown
 				buildingSlot = w.spatial.buildingNext[buildingSlot] {
 				if !w.buildingUsed[buildingSlot] do continue
 				if w.buildings.kingdom[buildingSlot] != targetKingdom do continue
-				sameTown := w.buildings.town[buildingSlot] == targetTown
+				if w.buildings.town[buildingSlot] != targetTown do continue
 
 				distance, _, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, buildingSlot)
 				if distance > WARRIOR_BREACH_RADIUS do continue
@@ -477,12 +468,12 @@ WarriorFindBreachBuilding :: proc(w: ^World, unitSlot, targetKingdom, targetTown
 						bestWall = buildingSlot
 					}
 				case .TownHall:
-					if sameTown && distance < bestHallDistance {
+					if distance < bestHallDistance {
 						bestHallDistance = distance
 						bestHall = buildingSlot
 					}
 				case .Home, .Farmland, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall:
-					if sameTown && distance < bestBuildingDistance {
+					if distance < bestBuildingDistance {
 						bestBuildingDistance = distance
 						bestBuilding = buildingSlot
 					}
@@ -504,19 +495,14 @@ UnitWarriorEngage :: proc(w: ^World, unitSlot: int, state: ^StateWarrior, deltaT
 	case TargetNone:
 		return false
 	case TargetUnit:
-		if target.slot < 0 || target.slot >= UNIT_CAPACITY || !w.unitUsed[target.slot] {
-			return false
-		}
-		if UnitHiddenInside(w, target.slot) do return false
+		if !WarriorCanTargetUnit(w, unitSlot, state, target.slot) do return false
 		targetX = w.units.x[target.slot]
 		targetY = w.units.y[target.slot]
 		deltaX := WorldShortestWrappedDelta(targetX-unit.x, f32(w.maxX))
 		deltaY := WorldShortestWrappedDelta(targetY-unit.y, f32(w.maxY))
 		distance = math.sqrt(deltaX*deltaX+deltaY*deltaY)
 	case TargetBuilding:
-		if target.slot < 0 || target.slot >= BUILDING_CAPACITY || !w.buildingUsed[target.slot] {
-			return false
-		}
+		if !WarriorCanTargetBuilding(w, unitSlot, state, target.slot) do return false
 		distance, targetX, targetY =
 			WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
 	}
@@ -549,6 +535,17 @@ UnitWarriorEngage :: proc(w: ^World, unitSlot: int, state: ^StateWarrior, deltaT
 	if distance > attackRange {
 		speed := UnitDefaultSpeed(unit.type)
 		if unit.effects[.NoWater] do speed *= 0.7
+		kingdomSlot, townSlot, defending := WarriorDefenseTown(w, unitSlot, state)
+		if defending {
+			dx := WorldShortestWrappedDelta(moveX-unit.x, f32(w.maxX))
+			dy := WorldShortestWrappedDelta(moveY-unit.y, f32(w.maxY))
+			length := math.sqrt(dx*dx+dy*dy)
+			if length <= 0.0001 do return false
+			step := min(length, speed*deltaTime)
+			nextX := WorldWrapPosition(unit.x+dx/length*step, f32(w.maxX))
+			nextY := WorldWrapPosition(unit.y+dy/length*step, f32(w.maxY))
+			if !TownPointInDefenseArea(w, kingdomSlot, townSlot, nextX, nextY) do return false
+		}
 		_, blocked, _ := UnitStepTowards(w, unitSlot, moveX, moveY, speed*deltaTime)
 		return !blocked
 	}
@@ -643,6 +640,8 @@ WorldMeleeSeparation :: proc(w: ^World) {
 		}
 		newX := WorldWrapPosition(unit.x+pushX, worldWidth)
 		newY := WorldWrapPosition(unit.y+pushY, worldHeight)
+		kingdomSlot, townSlot, defending := WarriorDefenseTown(w, slot, &state)
+		if defending && !TownPointInDefenseArea(w, kingdomSlot, townSlot, newX, newY) do continue
 		if !WorldTileWalkable(w, int(newX), int(newY), unit.type, unit.kingdome) do continue
 		unit.x = newX
 		unit.y = newY
@@ -662,7 +661,7 @@ WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 		impactX := w.units.x[target.slot]
 		impactY := w.units.y[target.slot]
 		if areaRadius > 0 {
-			WarriorAreaUnitDamage(w, unitSlot, impactX, impactY, areaRadius, damage)
+			WarriorAreaUnitDamage(w, unitSlot, state, impactX, impactY, areaRadius, damage)
 		} else {
 			UnitApplyDamage(w, target.slot, damage, unit.x, unit.y, .Melee)
 		}
@@ -698,14 +697,13 @@ WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 			state.target = TargetNone{}
 		}
 		if areaRadius > 0 {
-			WarriorAreaUnitDamage(w, unitSlot, impactX, impactY, areaRadius, damage)
+			WarriorAreaUnitDamage(w, unitSlot, state, impactX, impactY, areaRadius, damage)
 		}
 	}
 }
 
-WarriorAreaUnitDamage :: proc(w: ^World, attackerSlot: int, x, y, radius, damage: f32) {
+WarriorAreaUnitDamage :: proc(w: ^World, attackerSlot: int, state: ^StateWarrior, x, y, radius, damage: f32) {
 	if radius <= 0 do return
-	attacker := &w.units[attackerSlot]
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
 	chunkSize := w.spatial.chunkSize
@@ -724,8 +722,7 @@ WarriorAreaUnitDamage :: proc(w: ^World, attackerSlot: int, x, y, radius, damage
 			slot := w.spatial.unitHead[chunk]
 			for slot >= 0 {
 				next := w.spatial.unitNext[slot]
-				if slot != attackerSlot && w.unitUsed[slot] && !UnitHiddenInside(w, slot) &&
-					KingdomAtWar(w, attacker.kingdome, w.units[slot].kingdome) {
+				if slot != attackerSlot && WarriorCanTargetUnit(w, attackerSlot, state, slot) {
 					deltaX := WorldShortestWrappedDelta(w.units.x[slot]-centerX, worldWidth)
 					deltaY := WorldShortestWrappedDelta(w.units.y[slot]-centerY, worldHeight)
 					if deltaX*deltaX+deltaY*deltaY <= radius*radius {
@@ -904,6 +901,9 @@ WarriorEscortValid :: proc(w: ^World, warriorSlot, targetSlot: int) -> bool {
 	if UnitHiddenInside(w, targetSlot) do return false
 	if w.units[targetSlot].kingdome != w.units[warriorSlot].kingdome do return false
 	if _, combatBuilder := w.units[targetSlot].type.(CombatBuilder); combatBuilder do return false
+	unit := &w.units[warriorSlot]
+	if !TownPointInDefenseArea(w, unit.kingdome, unit.town, unit.x, unit.y) do return false
+	if !TownPointInDefenseArea(w, unit.kingdome, unit.town, w.units.x[targetSlot], w.units.y[targetSlot]) do return false
 	return !UnitIsWarrior(w.units[targetSlot].type)
 }
 
@@ -961,7 +961,9 @@ UnitFindEscortPosition :: proc(w: ^World, warriorSlot, targetSlot, sequence: int
 		direction := (startDirection+offset)%8
 		x := WorldWrapCoordinate(targetX+offsetsX[direction], worldWidth)
 		y := WorldWrapCoordinate(targetY+offsetsY[direction], worldHeight)
-		if !UnitValidTileType(w.units[warriorSlot].type, w.ground[x][y].type) do continue
+		unit := &w.units[warriorSlot]
+		if !TownPointInDefenseArea(w, unit.kingdome, unit.town, f32(x)+0.5, f32(y)+0.5) do continue
+		if !UnitValidTileType(unit.type, w.ground[x][y].type) do continue
 		if WorldTileOccupied(w, x, y) do continue
 		return x, y, true
 	}

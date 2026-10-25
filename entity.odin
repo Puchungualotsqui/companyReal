@@ -439,6 +439,7 @@ StateWarrior :: struct {
 	scanSequence: int,
 	patrolSequence: int,
 	escortTarget: int,
+	retreating: bool, // Ignore targets until the return home is complete.
 }
 
 WarriorActivity :: enum {

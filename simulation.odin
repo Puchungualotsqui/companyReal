@@ -154,11 +154,7 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		case Explorer:
 			UnitUpdateExplorer(w, unitSlot, deltaTime)
 		case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
-			if w.units[unitSlot].kingdome == NEUTRAL_KINGDOM {
-				UnitUpdateIndependentKnight(w, unitSlot, deltaTime)
-			} else {
-				UnitUpdateWarrior(w, unitSlot, deltaTime)
-			}
+			UnitUpdateWarrior(w, unitSlot, deltaTime)
 		}
 		if w.unitUsed[unitSlot] do BloodBleedTick(w, unitSlot, deltaTime)
 	}
@@ -275,6 +271,29 @@ WorldConversionAssign :: proc(w: ^World) {
 
 		town := &w.kingdoms[unit.kingdome].towns[unit.town]
 		if town.conversionCount == 0 do continue
+		assignedOrder: WarriorOrder = WarriorIdle{}
+		if state, warrior := unit.state.(StateWarrior); warrior {
+			if state.retreating do continue
+			assignedOrder = state.order
+		}
+		if builder, combatBuilder := unit.type.(CombatBuilder); combatBuilder {
+			if builder.returning do continue
+			assignedOrder = builder.order
+		}
+		// Controllers can remove an order after this tick's unit updates.
+		switch order in assignedOrder {
+		case WarriorAttack:
+			if !WorldTownExists(w, order.kingdom, order.town) ||
+				!town.attackOrders[order.kingdom][order.town] {
+				continue
+			}
+		case WarriorDefend:
+			if !WorldTownExists(w, order.kingdom, order.town) ||
+				!town.defendOrders[order.kingdom][order.town] {
+				continue
+			}
+		case WarriorIdle, WarriorGarrison:
+		}
 		if !UnitIsWarrior(unit.type) && UnitKindOf(unit.type) != .CombatBuilder {
 			if town.alarmActive || UnitFindNearbyEnemy(w, unitSlot, FLEE_THREAT_RADIUS) >= 0 do continue
 			if state, pacific := unit.state.(StatePacific); pacific && (state == .Hiding || state == .Fleeing) do continue
