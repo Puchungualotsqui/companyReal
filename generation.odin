@@ -233,8 +233,9 @@ WorldGenerateLakes :: proc(w: ^World, settings: WorldGenerationSettings) {
 	}
 }
 
-// A distance field guarantees that every river reaches existing water even on
-// flat ground, while local elevation and noise choose between downhill routes.
+// A distance field guarantees that every river reaches existing water. The
+// tracer follows that field downhill but is allowed lateral steps and a
+// meandering flow so the result reads as a winding valley stream.
 WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 	if settings.riverCount <= 0 do return
 	worldWidth := int(w.maxX)
@@ -244,6 +245,17 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 	defer delete(distance)
 	queue := make([dynamic]int, nodeCount)
 	defer delete(queue)
+	offsets := [8][2]int{
+		{1, 0},
+		{-1, 0},
+		{0, 1},
+		{0, -1},
+		{1, 1},
+		{1, -1},
+		{-1, 1},
+		{-1, -1},
+	}
+
 	head, tail := 0, 0
 	for x in 0..<worldWidth {
 		for y in 0..<worldHeight {
@@ -262,16 +274,9 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 		index := queue[head]
 		head += 1
 		x, y := index/worldHeight, index%worldHeight
-		for direction in 0..<4 {
-			nx, ny := x, y
-			switch direction {
-			case 0: nx += 1
-			case 1: nx -= 1
-			case 2: ny += 1
-			case 3: ny -= 1
-			}
-			nx = WorldWrapCoordinate(nx, worldWidth)
-			ny = WorldWrapCoordinate(ny, worldHeight)
+		for offset in offsets {
+			nx := WorldWrapCoordinate(x+offset[0], worldWidth)
+			ny := WorldWrapCoordinate(y+offset[1], worldHeight)
 			next := nx*worldHeight+ny
 			if distance[next] >= 0 do continue
 			distance[next] = distance[index]+1
@@ -280,50 +285,188 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 		}
 	}
 
+	visited := make([]u32, nodeCount)
+	defer delete(visited)
+	stamp: u32 = 0
+
 	for river in 0..<settings.riverCount {
+		riverSeed := settings.seed+u64(river)*139+1901
 		start := -1
-		for attempt in 0..<96 {
-			seed := settings.seed+u64(river)*139+1901
-			x := int(WorldNoiseHash(attempt, 0, seed)*f32(worldWidth))
-			y := int(WorldNoiseHash(attempt, 1, seed)*f32(worldHeight))
+		fallback := -1
+		for attempt in 0..<128 {
+			x := int(WorldNoiseHash(attempt, 0, riverSeed)*f32(worldWidth))
+			y := int(WorldNoiseHash(attempt, 1, riverSeed)*f32(worldHeight))
 			index := x*worldHeight+y
-			if distance[index] < 10 || w.ground[x][y].type != .Hill do continue
-			start = index
-			break
+			if distance[index] < 10 do continue
+			if w.ground[x][y].type == .River do continue
+			if w.ground[x][y].type == .Hill {
+				start = index
+				break
+			}
+			if fallback < 0 do fallback = index
 		}
+		if start < 0 do start = fallback
 		if start < 0 do continue
 
+		startDistance := distance[start]
+		lateralBudget := max(2, startDistance/2)
+		stamp += 1
 		current := start
-		for distance[current] > 0 {
+		headingX: f32 = 0
+		headingY: f32 = 0
+		// The BFS queue is free now; reuse it for the river centre line.
+		pathLength := 0
+		maxSteps := startDistance*3+20
+
+		for _ in 0..<maxSteps {
 			x, y := current/worldHeight, current%worldHeight
-			if w.ground[x][y].type == .River do break
+			tile := w.ground[x][y].type
+			if tile == .River || tile == .Water || tile == .FreshWater do break
+
+			w.ground[x][y].type = .River
+			visited[current] = stamp
+			queue[pathLength] = current
+			pathLength += 1
+
+			// The distance field points downhill toward existing water. The
+			// meander noise rotates that flow so the path bends through valleys.
+			left := distance[WorldWrapCoordinate(x-1, worldWidth)*worldHeight+
+				WorldWrapCoordinate(y, worldHeight)]
+			right := distance[WorldWrapCoordinate(x+1, worldWidth)*worldHeight+
+				WorldWrapCoordinate(y, worldHeight)]
+			up := distance[WorldWrapCoordinate(x, worldWidth)*worldHeight+
+				WorldWrapCoordinate(y-1, worldHeight)]
+			down := distance[WorldWrapCoordinate(x, worldWidth)*worldHeight+
+				WorldWrapCoordinate(y+1, worldHeight)]
+			flowX := f32(left-right)
+			flowY := f32(up-down)
+			flowLength := math.sqrt(flowX*flowX+flowY*flowY)
+			if flowLength > 0.001 {
+				flowX /= flowLength
+				flowY /= flowLength
+			} else {
+				flowX = headingX
+				flowY = headingY
+			}
+			if flowX == 0 && flowY == 0 {
+				angle := WorldNoiseHash(x, y, riverSeed+3301)*6.2831853
+				flowX = math.cos(angle)
+				flowY = math.sin(angle)
+			}
+
+			fine := WorldPeriodicNoise(
+				x,
+				y,
+				worldWidth,
+				worldHeight,
+				max(1, worldWidth/8),
+				max(1, worldHeight/8),
+				riverSeed+3371,
+			)
+			broad := WorldPeriodicNoise(
+				x,
+				y,
+				worldWidth,
+				worldHeight,
+				max(1, worldWidth/20),
+				max(1, worldHeight/20),
+				riverSeed+3377,
+			)
+			meander := (fine-0.5)*1.6+(broad-0.5)*0.8
+			cosA := math.cos(meander)
+			sinA := math.sin(meander)
+			desiredX := flowX*cosA-flowY*sinA
+			desiredY := flowX*sinA+flowY*cosA
+
 			best := -1
-			bestScore := f32(2)
-			for direction in 0..<4 {
-				nx, ny := x, y
-				switch direction {
-				case 0: nx += 1
-				case 1: nx -= 1
-				case 2: ny += 1
-				case 3: ny -= 1
-				}
-				nx = WorldWrapCoordinate(nx, worldWidth)
-				ny = WorldWrapCoordinate(ny, worldHeight)
+			bestScore: f32 = -1e9
+			bestDirX: f32 = 0
+			bestDirY: f32 = 0
+			currentDistance := distance[current]
+			for offset in offsets {
+				nx := WorldWrapCoordinate(x+offset[0], worldWidth)
+				ny := WorldWrapCoordinate(y+offset[1], worldHeight)
 				next := nx*worldHeight+ny
-				if distance[next] >= distance[current] do continue
-				score := WorldPeriodicNoise(nx, ny, worldWidth, worldHeight,
-					max(1, worldWidth/24), max(1, worldHeight/24), settings.seed+u64(river)*19+2017)*0.75 +
-					WorldNoiseHash(nx, ny, settings.seed+2019)*0.25
-				if w.ground[nx][ny].type == .Hill do score += 0.15
-				if w.ground[nx][ny].type == .River do score -= 0.3
-				if score < bestScore {
+				if visited[next] == stamp do continue
+				nextDistance := distance[next]
+				if nextDistance < 0 || nextDistance > currentDistance do continue
+				if nextDistance == currentDistance && lateralBudget <= 0 do continue
+
+				dirLength := math.sqrt(f32(offset[0]*offset[0]+offset[1]*offset[1]))
+				dirX := f32(offset[0])/dirLength
+				dirY := f32(offset[1])/dirLength
+				score: f32 = 0
+				if nextDistance < currentDistance {
+					score += 0.75
+				} else {
+					// Lateral steps are only for meandering; they do not progress.
+					score -= 0.45
+				}
+				score += (dirX*desiredX+dirY*desiredY)*1.2
+				score += (dirX*headingX+dirY*headingY)*0.5
+				switch w.ground[nx][ny].type {
+				case .Hill:
+					score -= 0.35
+				case .Desert:
+					score -= 0.10
+				case .Forest:
+					score += 0.05
+				case .Ground, .FertileGround, .Sand:
+					score += 0.12
+				case .Water, .FreshWater, .River:
+					score += 1.5
+				}
+				score += (WorldNoiseHash(nx, ny, riverSeed+3433)-0.5)*0.35
+				if score > bestScore {
 					bestScore = score
 					best = next
+					bestDirX = dirX
+					bestDirY = dirY
 				}
 			}
 			if best < 0 do break
-			w.ground[x][y].type = .River
+
+			bestX := best/worldHeight
+			bestY := best%worldHeight
+			bestTile := w.ground[bestX][bestY].type
+			if bestTile == .Water || bestTile == .FreshWater || bestTile == .River do break
+			if distance[best] == currentDistance do lateralBudget -= 1
+			headingX = bestDirX
+			headingY = bestDirY
 			current = best
+		}
+
+		// Widen the lower course in places. Side tiles are added after the
+		// centre line is complete so they cannot cut the trace short.
+		if pathLength > 2 {
+			for pathIndex in 0..<pathLength {
+				progress := f32(pathIndex)/f32(max(pathLength-1, 1))
+				if progress < 0.45 do continue
+				if WorldNoiseHash(pathIndex, river, riverSeed+3499) >= progress*0.45 {
+					continue
+				}
+				index := queue[pathIndex]
+				x, y := index/worldHeight, index%worldHeight
+				previous := queue[max(pathIndex-1, 0)]
+				next := queue[min(pathIndex+1, pathLength-1)]
+				dirX := f32(next/worldHeight-previous/worldHeight)
+				dirY := f32(next%worldHeight-previous%worldHeight)
+				side := int(WorldNoiseHash(x, y, riverSeed+3491)*2)*2-1
+				sideX := 0
+				sideY := 0
+				if abs(dirX) > abs(dirY) {
+					sideY = side
+				} else {
+					sideX = side
+				}
+				wx := WorldWrapCoordinate(x+sideX, worldWidth)
+				wy := WorldWrapCoordinate(y+sideY, worldHeight)
+				switch w.ground[wx][wy].type {
+				case .Water, .FreshWater, .River:
+				case .Ground, .FertileGround, .Sand, .Forest, .Hill, .Desert:
+					w.ground[wx][wy].type = .River
+				}
+			}
 		}
 	}
 }
