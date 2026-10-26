@@ -72,9 +72,12 @@ DistrictHall :: struct {}
 	BuildingOrder :: struct {
 		orderCooldown: f32,
 		orderActive: f32,
+		orderTelegraph: f32,
 		orderTargetX, orderTargetY: f32,
 		orderTick: f32,
+		orderMitigation: f32,
 		orderKind: OrderKind,
+		orderPending: bool,
 		type: BuildingOrderType
 	}
 

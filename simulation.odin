@@ -31,6 +31,7 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 		}
 		WorldUnitUpdate(w, TOWN_SIMULATION_STEP)
 		WorldBuildingUpdate(w, TOWN_SIMULATION_STEP)
+		WorldAegisUpdate(w, TOWN_SIMULATION_STEP)
 		WorldFireUpdate(w, TOWN_SIMULATION_STEP)
 		WorldDecorationUpdate(w, TOWN_SIMULATION_STEP)
 		BloodUpdate(w, TOWN_SIMULATION_STEP)

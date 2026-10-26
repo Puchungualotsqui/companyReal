@@ -862,7 +862,8 @@ UIStatCount :: proc(w: ^World, selection: Selection) -> int {
 		}
 		kind := BuildingKindOf(w.buildings[selection.slot].type)
 		if kind == .DistrictHall do return 3
-		if kind == .GiantMortar || kind == .AlchemistWorkshop || kind == .FireworksGuild || kind == .StarfallSpire {
+		if kind == .GiantMortar || kind == .MagicSchool || kind == .SiegeWorkshop ||
+			kind == .AlchemistWorkshop || kind == .FireworksGuild || kind == .StarfallSpire {
 			return 3
 		}
 		if kind == .Harbor || kind == .Granary do return 2
@@ -1671,6 +1672,7 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 	if ui.command == .Attack || ui.command == .Defend || ui.command == .Fuse {
 		UIDrawCommandTargets(w, camera, ui)
 	}
+	UIDrawAegisDomes(w, camera)
 	UIDrawOrderActiveAreas(w, camera)
 	UIDrawOrderPreview(w, camera, ui)
 	UIDrawSurveyOverlay(w, camera, ui)
@@ -1758,6 +1760,106 @@ UIDrawTownAreaFor :: proc(w: ^World, camera: rl.Camera2D, kingdom, townSlot: int
 				rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), 1, thickness}, line)
 			}
 		}
+	}
+	rl.EndMode2D()
+}
+
+// A soft shield over every town that still has Aegis left. The dome follows the
+// town footprint so it reads as protection rather than a generic circle.
+UIDrawAegisDomes :: proc(w: ^World, camera: rl.Camera2D) {
+	for kingdomSlot in 0..<KINGDOM_SLOTS {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			if !FogTownDiscovered(w, kingdomSlot, townSlot) do continue
+			UIDrawAegisDome(w, camera, kingdomSlot, townSlot)
+		}
+	}
+}
+
+UIDrawAegisDome :: proc(w: ^World, camera: rl.Camera2D, kingdom, townSlot: int) {
+	if !WorldTownExists(w, kingdom, townSlot) do return
+	t := &w.kingdoms[kingdom].towns[townSlot]
+	maximum := TownAegisMax(w, kingdom, townSlot)
+	if maximum <= 0 do return
+
+	ratio := clamp(t.orderWard/maximum, 0, 1)
+	flash := clamp(t.aegisFlash/0.65, 0, 1)
+	if ratio <= 0 && flash <= 0 do return
+
+	accent := FactionColor(w, kingdom)
+	pulse := 0.5+0.5*math.sin(w.simulationTime*2.1)
+	fillAlpha := u8(clamp((8+14*ratio)*(0.78+0.22*pulse)+44*flash, 0, 255))
+	lineAlpha := u8(clamp(58+92*ratio+80*flash, 0, 255))
+	shield := rl.Color{
+		u8((int(accent[0])+118*2)/3),
+		u8((int(accent[1])+200*2)/3),
+		u8((int(accent[2])+240*2)/3),
+		fillAlpha,
+	}
+	line := rl.Color{shield.r, shield.g, shield.b, lineAlpha}
+	thickness := 1/camera.zoom
+
+	areaMinX, areaMaxX, areaMinY, areaMaxY := TownAreaBounds(w, kingdom, townSlot)
+	halfWidth := f32(rl.GetScreenWidth())/(2*camera.zoom)
+	halfHeight := f32(rl.GetScreenHeight())/(2*camera.zoom)
+	minX := max(max(0, areaMinX), int(camera.target.x-halfWidth)-1)
+	maxX := min(min(int(w.maxX)-1, areaMaxX), int(camera.target.x+halfWidth)+1)
+	minY := max(max(0, areaMinY), int(camera.target.y-halfHeight)-1)
+	maxY := min(min(int(w.maxY)-1, areaMaxY), int(camera.target.y+halfHeight)+1)
+	if minX > maxX || minY > maxY do return
+
+	rl.BeginMode2D(camera)
+	for x in minX ..= maxX {
+		for y in minY ..= maxY {
+			if !TownPointInArea(w, kingdom, townSlot, x, y) do continue
+			rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), 1, 1}, shield)
+			if !TownPointInArea(w, kingdom, townSlot, x+1, y) {
+				rl.DrawRectangleRec(rl.Rectangle{f32(x)+1-thickness, f32(y), thickness, 1}, line)
+			}
+			if !TownPointInArea(w, kingdom, townSlot, x-1, y) {
+				rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), thickness, 1}, line)
+			}
+			if !TownPointInArea(w, kingdom, townSlot, x, y+1) {
+				rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y)+1-thickness, 1, thickness}, line)
+			}
+			if !TownPointInArea(w, kingdom, townSlot, x, y-1) {
+				rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), 1, thickness}, line)
+			}
+		}
+	}
+
+	// A faint bubble outline and an impact ripple make the ward legible without
+	// hiding the town underneath.
+	bubble := rl.Color{shield.r, shield.g, shield.b, u8(30+38*ratio)}
+	for index in 0..<TownAreaCircleCount(w, kingdom, townSlot) {
+		circleX, circleY, radius := TownAreaCircle(w, kingdom, townSlot, index)
+		centerX := f32(circleX)+2
+		centerY := f32(circleY)+2
+		if abs(WorldShortestWrappedDelta(centerX-camera.target.x, f32(w.maxX))) >
+			halfWidth+f32(radius)+2 {
+			continue
+		}
+		if abs(WorldShortestWrappedDelta(centerY-camera.target.y, f32(w.maxY))) >
+			halfHeight+f32(radius)+2 {
+			continue
+		}
+		rl.DrawCircleLines(i32(centerX), i32(centerY), f32(radius)+1.2, bubble)
+	}
+	if flash > 0 {
+		progress := 1-flash
+		ripple := rl.Color{214, 240, 255, u8(flash*170)}
+		rl.DrawCircleV(
+			rl.Vector2{t.aegisFlashX, t.aegisFlashY},
+			0.5+progress*1.4,
+			rl.Color{198, 238, 255, u8(flash*44)},
+		)
+		rl.DrawCircleLines(
+			i32(t.aegisFlashX),
+			i32(t.aegisFlashY),
+			0.7+progress*2.6,
+			ripple,
+		)
 	}
 	rl.EndMode2D()
 }
@@ -1927,6 +2029,7 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 	}
 
 	if UISelectionTownHall(w, ui.selection) {
+		if kingdom != NEUTRAL_KINGDOM do UIDrawAegisBar(w, panel, kingdom, town)
 		if kingdom != NEUTRAL_KINGDOM do UIDrawGrowthBar(w, panel, kingdom, town)
 		if UICanControlKingdom(w, kingdom) {
 			UIDrawTownTabs(w, ui, panel)
@@ -2131,17 +2234,25 @@ UIFillStats :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, stats: ^[
 			stats[1] = {"Growth", "+10%", UI_COLOR_GOOD, {}}
 			return 2
 		}
-		if kind == .GiantMortar || kind == .AlchemistWorkshop ||
-			kind == .FireworksGuild || kind == .StarfallSpire {
+		if kind == .GiantMortar || kind == .MagicSchool || kind == .SiegeWorkshop ||
+			kind == .AlchemistWorkshop || kind == .FireworksGuild || kind == .StarfallSpire {
 			order, isOrder := BuildingOrderState(w, ui.selection.slot)
-			if isOrder && order.orderActive > 0 {
+			if isOrder && order.orderPending {
+				stats[1] = {
+					"Order",
+					fmt.ctprintf("Strike  %.1fs", order.orderTelegraph),
+					UIOrderColor(order.orderKind),
+					{},
+				}
+			} else if isOrder && order.orderActive > 0 {
 				stats[1] = {"Order", fmt.ctprintf("Firing  %ds", int(math.ceil(order.orderActive))), UI_COLOR_ATTACK, {}}
 			} else if isOrder && order.orderCooldown > 0 {
 				stats[1] = {"Order", fmt.ctprintf("Cooldown  %ds", int(math.ceil(order.orderCooldown))), UI_COLOR_DIM, {}}
 			} else {
 				stats[1] = {"Order", "Ready", UI_COLOR_GOOD, {}}
 			}
-			stats[2] = {"Ability", isOrder ? OrderName(order.orderKind) : "None", UI_COLOR_TEXT, {}}
+			ability, _ := BuildingOrderKind(kind)
+			stats[2] = {"Ability", OrderName(ability), UI_COLOR_TEXT, {}}
 			return 3
 		}
 		if kind == .DistrictHall {
@@ -2265,6 +2376,47 @@ UIDrawUnitEffectTooltip :: proc(mouse: rl.Vector2, effect: UnitEffects) {
 	rl.DrawRectangleLinesEx(rl.Rectangle{x, y, width, height}, 1, UI_COLOR_GOLD)
 	UIText(title, x+padding, y+padding, UI_COLOR_GOLD)
 	UIText(body, x+padding, y+padding+lineHeight, UI_COLOR_TEXT)
+}
+
+UIDrawAegisBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
+	if !WorldTownExists(w, kingdom, town) do return
+	t := &w.kingdoms[kingdom].towns[town]
+	maximum := TownAegisMax(w, kingdom, town)
+	if maximum <= 0 do return
+
+	y := panel.y+UI_STAT_Y+4*UI_STAT_H+4
+	labelColor := UI_COLOR_DEFEND
+	if t.orderWardRegenDelay > 0 && t.orderWard < maximum do labelColor = UI_COLOR_DIM
+	UIText("AEGIS", panel.x+UI_PAD, y, labelColor)
+	bar := rl.Rectangle{
+		panel.x+UI_PAD+62,
+		y+7,
+		panel.width-2*UI_PAD-62-42,
+		9,
+	}
+	ratio := clamp(t.orderWard/maximum, 0, 1)
+	rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
+	if ratio > 0 {
+		rl.DrawRectangleRec(
+			rl.Rectangle{bar.x, bar.y, bar.width*ratio, bar.height},
+			rl.Color{118, 200, 240, 255},
+		)
+	}
+	rl.DrawRectangleLinesEx(bar, 1, UI_COLOR_BORDER_INNER)
+	if t.aegisFlash > 0 {
+		flash := clamp(t.aegisFlash/0.65, 0, 1)
+		rl.DrawRectangleLinesEx(bar, 2, rl.Color{214, 240, 255, u8(200*flash)})
+	}
+	text := fmt.ctprintf("%d%%", int(ratio*100))
+	textWidth := rl.MeasureTextEx(UIFont(), text, 14, 1).x
+	rl.DrawTextEx(
+		UIFont(),
+		text,
+		rl.Vector2{panel.x+panel.width-UI_PAD-textWidth, y+3},
+		14,
+		1,
+		UI_COLOR_TEXT,
+	)
 }
 
 UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
@@ -3378,7 +3530,7 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 			if !OrderTargetValid(w, kingdom, ui.orderKind, f32(tileX)+0.5, f32(tileY)+0.5) {
 				label = "Target must be explored"
 			} else if OrderSourceReadyCount(w, kingdom, ui.orderKind) <= 0 {
-				label = fmt.ctprintf("%s reloading  -  the closest ready source fires", OrderName(ui.orderKind))
+				label = fmt.ctprintf("%s reloading  -  wait for a ready source", OrderName(ui.orderKind))
 			}
 		}
 	case .Place:
@@ -3535,6 +3687,28 @@ UIOrderTargetingUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mou
 	}
 }
 
+UIOrderColor :: proc(kind: OrderKind) -> rl.Color {
+	switch kind {
+	case .GiantMortar:
+		return rl.Color{232, 128, 82, 235}
+	case .Blockade:
+		return rl.Color{226, 72, 64, 235}
+	case .GlacierShell:
+		return rl.Color{134, 220, 248, 235}
+	case .SiegeTremor:
+		return rl.Color{226, 168, 92, 235}
+	case .Starfall:
+		return rl.Color{255, 176, 108, 235}
+	case .WaterBomber:
+		return rl.Color{96, 168, 240, 235}
+	case .MiasmaBarrage:
+		return rl.Color{132, 214, 116, 235}
+	case .NapalmBarrage:
+		return rl.Color{255, 108, 58, 235}
+	}
+	unreachable()
+}
+
 UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 	local := WorldLocalKingdom(w)
 	if local < 0 do return
@@ -3564,13 +3738,15 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 		ready := OrderSourceReadyCount(w, local, kind)
 		total := OrderSourceCount(w, local, kind)
 		active := OrderSourceActiveCount(w, local, kind)
+		warning := OrderWarningRemaining(w, local, kind)
 		hovered := rl.CheckCollisionPointRec(mouse, rect)
 
 		background := hovered ? UI_COLOR_BUTTON_HOVER : UI_COLOR_BUTTON
 		rl.DrawRectangleRec(rect, background)
 		border := UI_COLOR_BORDER_INNER
-		if active > 0 do border = UI_COLOR_ATTACK
 		if ready > 0 do border = UI_COLOR_GOLD
+		if active > 0 do border = UI_COLOR_ATTACK
+		if warning > 0 do border = UIOrderColor(kind)
 		if ui.command == .OrderAim && ui.orderKind == kind do border = UI_COLOR_ATTACK
 		rl.DrawRectangleLinesEx(rect, ui.command == .OrderAim && ui.orderKind == kind ? 2 : 1, border)
 
@@ -3599,7 +3775,21 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			1,
 			ready > 0 ? UI_COLOR_TEXT : UI_COLOR_DIM,
 		)
-		if active > 0 {
+		if warning > 0 {
+			warningText := fmt.ctprintf("%ds", int(math.ceil(warning)))
+			warningWidth := rl.MeasureTextEx(UIFont(), warningText, 14, 1).x
+			pulse := 0.6+0.4*math.sin(w.simulationTime*9)
+			color := UIOrderColor(kind)
+			color.a = u8(150+100*pulse)
+			rl.DrawTextEx(
+				UIFont(),
+				warningText,
+				rl.Vector2{rect.x+rect.width-warningWidth-4, rect.y+rect.height-20},
+				14,
+				1,
+				color,
+			)
+		} else if active > 0 {
 			activeText := fmt.ctprintf("%ds", int(math.ceil(OrderActiveRemaining(w, local, kind))))
 			activeWidth := rl.MeasureTextEx(UIFont(), activeText, 14, 1).x
 			rl.DrawTextEx(
@@ -3639,8 +3829,11 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 	next := OrderNextCooldown(w, local, kind)
 
 	title := OrderName(kind)
+	warning := OrderWarningRemaining(w, local, kind)
 	status: cstring
-	if active > 0 {
+	if warning > 0 {
+		status = fmt.ctprintf("Strike in %ds", int(math.ceil(warning)))
+	} else if active > 0 {
 		status = fmt.ctprintf("Active  -  %ds remaining", int(math.ceil(active)))
 	} else if ready > 0 {
 		status = fmt.ctprintf("Ready  -  %d of %d built", ready, total)
@@ -3648,7 +3841,7 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 		status = fmt.ctprintf("Next ready in %ds  -  %d built", int(math.ceil(next)), total)
 	}
 
-	height: f32 = 130
+	height: f32 = 148
 	x := clamp(rect.x-UI_ORDER_TOOLTIP_W-12, UI_MARGIN, f32(rl.GetScreenWidth())-UI_ORDER_TOOLTIP_W-UI_MARGIN)
 	y := clamp(rect.y, UI_MARGIN, f32(rl.GetScreenHeight())-height-UI_MARGIN)
 	box := rl.Rectangle{x, y, UI_ORDER_TOOLTIP_W, height}
@@ -3661,7 +3854,7 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 	)
 	UIText(title, box.x+UI_PAD, box.y+8, UI_COLOR_GOLD)
 	UIText(OrderDescription(kind), box.x+UI_PAD, box.y+34, UI_COLOR_TEXT)
-	UIText(status, box.x+UI_PAD, box.y+58, active > 0 ? UI_COLOR_ATTACK : UI_COLOR_DIM)
+	UIText(status, box.x+UI_PAD, box.y+58, warning > 0 ? UIOrderColor(kind) : active > 0 ? UI_COLOR_ATTACK : UI_COLOR_DIM)
 	if kind == .Blockade {
 		UIText("Blockades for 90s, then a 180s cooldown.", box.x+UI_PAD, box.y+80, UI_COLOR_DIM)
 	} else if OrderDuration(kind) > 0 {
@@ -3680,6 +3873,17 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 		)
 	}
 	UIText("Uses the nearest ready source.", box.x+UI_PAD, box.y+102, UI_COLOR_DIM)
+	if OrderWardCost(kind) > 0 {
+		UIText(
+			fmt.ctprintf(
+				"Town Aegis absorbs up to %d%% of the strike.",
+				int(TOWN_AEGIS_MAX_MITIGATION*100),
+			),
+			box.x+UI_PAD,
+			box.y+124,
+			UI_COLOR_DEFEND,
+		)
+	}
 }
 
 UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
@@ -3699,10 +3903,11 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 		color = rl.Color{224, 176, 70, 220}
 	}
 
-	if ui.orderKind == .Blockade {
-		if targetKingdom, targetTown, found := TownAtPoint(w, centerX, centerY); found {
+	if targetKingdom, targetTown, found := TownAtPoint(w, centerX, centerY); found {
+		if ui.orderKind == .Blockade {
 			UIDrawTownAreaFor(w, camera, targetKingdom, targetTown, false)
 		}
+		UIDrawAegisDome(w, camera, targetKingdom, targetTown)
 	}
 
 	radius := OrderRadius(ui.orderKind)
@@ -3747,7 +3952,12 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 		ringRadius := max(f32(width), f32(height))*0.5+0.9
 		ringColor := rl.Color{224, 176, 70, 130}
 		fillColor := rl.Color{224, 176, 70, 24}
-		if order.orderActive > 0 {
+		if order.orderTelegraph > 0 {
+			color := UIOrderColor(ui.orderKind)
+			pulse := 0.55+0.45*math.sin(w.simulationTime*9)
+			ringColor = rl.Color{color.r, color.g, color.b, u8(110+80*pulse)}
+			fillColor = rl.Color{color.r, color.g, color.b, 26}
+		} else if order.orderActive > 0 {
 			pulse := 0.55+0.45*math.sin(w.simulationTime*5)
 			ringColor = rl.Color{226, 96, 76, u8(90+80*pulse)}
 			fillColor = rl.Color{226, 96, 76, 20}
@@ -3817,7 +4027,9 @@ UIDrawOrderActiveAreas :: proc(w: ^World, camera: rl.Camera2D) {
 	for slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] do continue
 		order, isOrder := BuildingOrderState(w, slot)
-		if !isOrder || order.orderActive <= 0 do continue
+		if !isOrder do continue
+		pending := order.orderPending && order.orderTelegraph > 0
+		if !pending && order.orderActive <= 0 do continue
 		if !FogTileExplored(w, int(order.orderTargetX), int(order.orderTargetY)) do continue
 
 		sourceX, sourceY := OrderBuildingCenter(w, slot)
@@ -3825,13 +4037,70 @@ UIDrawOrderActiveAreas :: proc(w: ^World, camera: rl.Camera2D) {
 		centerY := order.orderTargetY
 		deltaX := WorldShortestWrappedDelta(centerX-sourceX, f32(w.maxX))
 		deltaY := WorldShortestWrappedDelta(centerY-sourceY, f32(w.maxY))
-		pulse := 0.55+0.45*math.sin(w.simulationTime*5)
-		color := rl.Color{226, 96, 76, u8(90+80*pulse)}
 		radius := OrderRadius(order.orderKind)
+		if radius <= 0 do radius = 2.5
+		color := UIOrderColor(order.orderKind)
 
 		rl.BeginMode2D(camera)
-		rl.DrawCircleV(rl.Vector2{centerX, centerY}, radius, rl.Color{color.r, color.g, color.b, 28})
-		rl.DrawCircleLines(i32(centerX), i32(centerY), radius, color)
+		if pending {
+			telegraph := max(OrderTelegraph(order.orderKind), 0.01)
+			progress := 1-clamp(order.orderTelegraph/telegraph, 0, 1)
+			pulse := 0.5+0.5*math.sin(w.simulationTime*11)
+			color.a = 255
+			rl.DrawCircleV(
+				rl.Vector2{centerX, centerY},
+				radius,
+				rl.Color{color.r, color.g, color.b, u8(16+24*progress)},
+			)
+			if progress > 0.02 {
+				rl.DrawCircleV(
+					rl.Vector2{centerX, centerY},
+					radius*progress,
+					rl.Color{color.r, color.g, color.b, u8(26+30*progress)},
+				)
+			}
+			rl.DrawCircleLines(
+				i32(centerX),
+				i32(centerY),
+				radius,
+				rl.Color{color.r, color.g, color.b, u8(150+90*pulse)},
+			)
+			for tick in 0..<4 {
+				angle := w.simulationTime*1.6+f32(tick)*math.PI*0.5
+				rl.DrawLineEx(
+					rl.Vector2{
+						centerX+math.cos(angle)*radius*0.84,
+						centerY+math.sin(angle)*radius*0.84,
+					},
+					rl.Vector2{
+						centerX+math.cos(angle)*radius*0.97,
+						centerY+math.sin(angle)*radius*0.97,
+					},
+					2/camera.zoom,
+					color,
+				)
+			}
+			// Munitions streaking in from the source while the strike charges.
+			for i in 0..<3 {
+				travel := math.mod(w.simulationTime*0.9+f32(i)/3, 1)
+				px := sourceX+deltaX*travel
+				py := sourceY+deltaY*travel
+				rl.DrawCircleV(
+					rl.Vector2{px, py},
+					0.1+0.05*travel,
+					rl.Color{color.r, color.g, color.b, u8(120+120*travel)},
+				)
+			}
+		} else {
+			pulse := 0.55+0.45*math.sin(w.simulationTime*5)
+			color.a = u8(90+80*pulse)
+			rl.DrawCircleV(
+				rl.Vector2{centerX, centerY},
+				radius,
+				rl.Color{color.r, color.g, color.b, 28},
+			)
+			rl.DrawCircleLines(i32(centerX), i32(centerY), radius, color)
+		}
 		rl.DrawLineEx(
 			rl.Vector2{sourceX, sourceY},
 			rl.Vector2{sourceX+deltaX, sourceY+deltaY},
@@ -3839,6 +4108,26 @@ UIDrawOrderActiveAreas :: proc(w: ^World, camera: rl.Camera2D) {
 			rl.Color{color.r, color.g, color.b, 120},
 		)
 		rl.EndMode2D()
+
+		if pending {
+			anchor := rl.GetWorldToScreen2D(
+				rl.Vector2{centerX, centerY-radius-0.65},
+				camera,
+			)
+			label := fmt.ctprintf("%.1fs", order.orderTelegraph)
+			labelWidth := rl.MeasureTextEx(UIFont(), label, 14, 1).x
+			box := rl.Rectangle{anchor.x-labelWidth*0.5-6, anchor.y-4, labelWidth+12, 20}
+			rl.DrawRectangleRec(box, rl.Color{20, 18, 22, 210})
+			rl.DrawRectangleLinesEx(box, 1, rl.Color{color.r, color.g, color.b, 220})
+			rl.DrawTextEx(
+				UIFont(),
+				label,
+				rl.Vector2{anchor.x-labelWidth*0.5, anchor.y-1},
+				14,
+				1,
+				rl.Color{color.r, color.g, color.b, 255},
+			)
+		}
 	}
 
 	for kingdomSlot in 0..<KINGDOM_SLOTS {

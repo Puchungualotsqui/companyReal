@@ -240,6 +240,11 @@ Town :: struct {
 	coastalAreaRadius, coastalDistricts: int,
 	blockadeUntil: f32,
 	blockadeBy: int,
+	orderWard: f32,
+	orderWardRegenDelay: f32,
+	aegisFlash: f32,
+	aegisFlashX: f32,
+	aegisFlashY: f32,
 	areaRadius: int,
 	districts: [MAX_TOWN_DISTRICTS]TownDistrict,
 	districtCount: int,
@@ -441,6 +446,7 @@ TownInitialize :: proc(w: ^World, kingdomSlot, townSlot, hallSlot, x, y: int, st
 	if KingdomHasTech(w, kingdomSlot, .Metropolis) do town.areaRadius += 1
 	town.buildingSlots[.TownHall] = hallSlot
 	town.buildingCounts[.TownHall] = 1
+	town.orderWard = TownAegisMax(w, kingdomSlot, townSlot)
 	town.growthCooldown = TOWN_ERAS[0].interval
 	town.growthInterval = TOWN_ERAS[0].interval
 	town.growthBatch = TOWN_ERAS[0].batch
@@ -452,6 +458,77 @@ TownInitialize :: proc(w: ^World, kingdomSlot, townSlot, hallSlot, x, y: int, st
 TownEra :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	return clamp(town.milestonesEarned, 0, len(TOWN_ERAS)-1)
+}
+
+// --- town aegis ------------------------------------------------------------
+
+// High orders are aimed at a whole town, so towns need a defence that is not a
+// dedicated counter building. Aegis capacity comes from the town's own halls,
+// walls, towers and cannons, which means losing those structures weakens the
+// shield. Every high order spends ward when it lands; the spent amount absorbs
+// part of the strike and the ward regenerates slowly afterwards.
+TOWN_AEGIS_CAP :: 100.0
+TOWN_AEGIS_REGEN_PER_SECOND :: 1.25
+TOWN_AEGIS_REGEN_DELAY :: 10.0
+TOWN_AEGIS_MAX_MITIGATION :: 0.65
+
+TownAegisMax :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
+	t := &w.kingdoms[kingdomSlot].towns[townSlot]
+	value := f32(t.buildingCounts[.TownHall])*10+
+		f32(t.buildingCounts[.DistrictHall])*5+
+		f32(t.buildingCounts[.Watchtower])*8+
+		f32(t.buildingCounts[.Cannon])*5+
+		f32(t.buildingCounts[.Wall])*2
+	return min(value, TOWN_AEGIS_CAP)
+}
+
+// Returns the fraction of the incoming order that the town absorbed. The ward
+// is spent even when it cannot cover the full cost, so repeated strikes break it.
+TownAegisAbsorb :: proc(w: ^World, kingdomSlot, townSlot: int, cost, x, y: f32) -> f32 {
+	if cost <= 0 || !WorldTownExists(w, kingdomSlot, townSlot) do return 0
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	maximum := TownAegisMax(w, kingdomSlot, townSlot)
+	if maximum <= 0 || town.orderWard <= 0 do return 0
+
+	before := town.orderWard
+	spend := min(town.orderWard, cost)
+	mitigation := clamp(spend/cost, 0, TOWN_AEGIS_MAX_MITIGATION)
+	town.orderWard = max(town.orderWard-spend, 0)
+	town.orderWardRegenDelay = TOWN_AEGIS_REGEN_DELAY
+	town.aegisFlash = 0.65
+	town.aegisFlashX = x
+	town.aegisFlashY = y
+	TownAegisAbsorbBurst(w, x, y)
+	if before > 0 && town.orderWard <= 0 {
+		centerX, centerY, radius := TownAreaCircle(w, kingdomSlot, townSlot, 0)
+		TownAegisShatterBurst(w, kingdomSlot, f32(centerX), f32(centerY), f32(radius))
+	}
+	return mitigation
+}
+
+WorldAegisUpdate :: proc(w: ^World, deltaTime: f32) {
+	for kingdomSlot in 0..<KINGDOM_SLOTS {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			town := &w.kingdoms[kingdomSlot].towns[townSlot]
+			maximum := TownAegisMax(w, kingdomSlot, townSlot)
+			town.aegisFlash = max(town.aegisFlash-deltaTime, 0)
+			if maximum <= 0 {
+				town.orderWard = 0
+				continue
+			}
+			if town.orderWardRegenDelay > 0 {
+				town.orderWardRegenDelay = max(town.orderWardRegenDelay-deltaTime, 0)
+			} else {
+				town.orderWard = min(
+					town.orderWard+TOWN_AEGIS_REGEN_PER_SECOND*deltaTime,
+					maximum,
+				)
+			}
+			town.orderWard = min(town.orderWard, maximum)
+		}
+	}
 }
 
 TownBaseBatch :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {

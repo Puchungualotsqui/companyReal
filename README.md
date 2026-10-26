@@ -1,8 +1,6 @@
 # Things to do
-- Description to enrich the world of the buildings and units. Some descriptions already overflow by accident the inspection windows. It should resize automatically, so we can translate to other languages later.
-- Counter defense against high orders
-- Add some biome that actually makes something in the world
-- Weather and enviroment events
+- Add some biome that actually makes something in the world Weather and enviroment events
+- Description to enrich the world of the buildings and units. Some descriptions already overflow by accident the inspection windows. It should resize automatically, so we can translate to other languages later. It should even introduce some interesting lore and mystic
 - Debug/stress world with a command argument to test the whole game with a lot of buildings and units already, etc.
 - Optimization and bugs solving
 - RL AI implementation

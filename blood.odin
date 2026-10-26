@@ -923,6 +923,67 @@ DecorationDebris :: proc(w: ^World, x, y: f32, kind: DecorationKind) {
 	}
 }
 
+// The ward flares where the strike lands, not at the town hall.
+TownAegisAbsorbBurst :: proc(w: ^World, x, y: f32) {
+	for _ in 0..<12 {
+		angle := PRandom(w)*6.2831853
+		distance := 0.35+PRandom(w)*1.0
+		ParticleSpawn(w, Particle{
+			x = WorldWrapPosition(x+math.cos(angle)*distance, f32(w.maxX)),
+			y = WorldWrapPosition(y+math.sin(angle)*distance, f32(w.maxY)),
+			z = PRandomRange(w, 0.2, 1.4),
+			vx = -math.cos(angle)*PRandomRange(w, 0.4, 1.6),
+			vy = -math.sin(angle)*PRandomRange(w, 0.4, 1.6),
+			vz = PRandomRange(w, 0.3, 1.6),
+			life = PRandomRange(w, 0.3, 0.8),
+			size = PRandomRange(w, 0.1, 0.24),
+			drag = 2.5,
+			gravity = -0.4,
+			kind = .Spark,
+			tint = rl.Color{206, 244, 255, 255},
+		})
+	}
+}
+
+TownAegisShatterBurst :: proc(w: ^World, kingdom: int, x, y, radius: f32) {
+	accent := rl.Color{176, 226, 255, 255}
+	if kingdom >= 0 && kingdom < KINGDOMS_CAPACITY do accent = w.kingdomColors[kingdom]
+	for i in 0..<24 {
+		angle := f32(i)/24*6.2831853+PRandom(w)*0.12
+		distance := radius*(0.75+PRandom(w)*0.3)
+		ParticleSpawn(w, Particle{
+			x = WorldWrapPosition(x+math.cos(angle)*distance, f32(w.maxX)),
+			y = WorldWrapPosition(y+math.sin(angle)*distance, f32(w.maxY)),
+			z = PRandomRange(w, 0.25, 1.3),
+			vx = math.cos(angle)*PRandomRange(w, 0.2, 1.2),
+			vy = math.sin(angle)*PRandomRange(w, 0.2, 1.2),
+			vz = PRandomRange(w, 0.4, 1.8),
+			life = PRandomRange(w, 0.5, 1.4),
+			size = PRandomRange(w, 0.08, 0.18),
+			drag = 1.2,
+			gravity = 2.5,
+			kind = .Spark,
+			tint = rl.Color{210, 244, 255, 255},
+		})
+		if i%3 == 0 {
+			ParticleSpawn(w, Particle{
+				x = WorldWrapPosition(x+math.cos(angle)*distance, f32(w.maxX)),
+				y = WorldWrapPosition(y+math.sin(angle)*distance, f32(w.maxY)),
+				z = PRandomRange(w, 0.3, 0.9),
+				vx = math.cos(angle)*PRandomRange(w, 0.1, 0.6),
+				vy = math.sin(angle)*PRandomRange(w, 0.1, 0.6),
+				vz = PRandomRange(w, 0.2, 0.8),
+				life = PRandomRange(w, 0.7, 1.6),
+				size = PRandomRange(w, 0.25, 0.45),
+				drag = 1.4,
+				gravity = -0.2,
+				kind = .Dust,
+				tint = rl.Color{accent[0], accent[1], accent[2], 190},
+			})
+		}
+	}
+}
+
 // Dust ring and shaken leaves for attacks that tear through scenery.
 DecorationBlastBurst :: proc(w: ^World, x, y, radius: f32) {
 	worldWidth := f32(w.maxX)
