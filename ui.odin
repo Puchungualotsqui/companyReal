@@ -132,6 +132,24 @@ UIStat :: struct {
 	color:       rl.Color,
 }
 
+UI_FOUND_REQ_ICON : f32 : 18
+UI_FOUND_REQ_GAP : f32 : 14
+UI_FOUND_REQ_TEXT_GAP : f32 : 5
+UI_FOUND_HINT_TEXT_SIZE : f32 : 16
+
+UIFoundRequirementIcon :: enum {
+	Wood,
+	Citizens,
+	Settlers,
+	Builders,
+	TownSlot,
+}
+
+UIFoundRequirement :: struct {
+	icon:             UIFoundRequirementIcon,
+	current, required: int,
+}
+
 UI_FONT_BODY_DATA :: #load("assets/fonts/PixelifySans-Regular.ttf")
 UI_FONT_TITLE_DATA :: #load("assets/fonts/PixelifySans-Bold.ttf")
 
@@ -616,6 +634,7 @@ UIMilestoneTown :: proc(w: ^World) -> (kingdom, town: int, pending: bool) {
 }
 
 MILESTONE_CAMERA_PAN_SECONDS : f32 : 0.9
+UI_FOCUS_CAMERA_PAN_SECONDS : f32 : 0.12
 
 UIMilestoneCameraTarget :: proc(w: ^World, kingdom, town: int) -> (rl.Vector2, bool) {
 	if !WorldTownExists(w, kingdom, town) do return {}, false
@@ -844,6 +863,11 @@ UIButtonRects :: proc(panel: rl.Rectangle, index: int) -> (minus, plus: rl.Recta
 	plus = rl.Rectangle{panel.x+panel.width-UI_PAD-UI_BUTTON, rowY+8, UI_BUTTON, UI_BUTTON}
 	minus = rl.Rectangle{plus.x-UI_BUTTON-4, plus.y, UI_BUTTON, UI_BUTTON}
 	return
+}
+
+UIUnitIconRect :: proc(panel: rl.Rectangle, index: int) -> rl.Rectangle {
+	rowY := panel.y+UI_ROWS_TOP+f32(index)*UI_ROW_HEIGHT
+	return rl.Rectangle{panel.x+UI_PAD, rowY+2, 32, 32}
 }
 
 UIOrdersPanelHeight :: proc(orders: int) -> f32 {
@@ -1151,7 +1175,7 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 
 	if !rl.IsMouseButtonPressed(.LEFT) do return
 	if ui.selection.kind != .None && rl.CheckCollisionPointRec(mouse, panel) {
-		UIPanelClick(w, ui, panel, mouse)
+		UIPanelClick(w, view, panel, mouse)
 		return
 	}
 	ui.selection = ui.hover
@@ -1251,7 +1275,8 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 	}
 }
 
-UIPanelClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Vector2) {
+UIPanelClick :: proc(w: ^World, view: ^WorldView, panel: rl.Rectangle, mouse: rl.Vector2) {
+	ui := &view.ui
 	if UISelectionPlayerTownHall(w, ui.selection) {
 		for rect, index in UITabRects(panel) {
 			if rl.CheckCollisionPointRec(mouse, rect) {
@@ -1262,7 +1287,7 @@ UIPanelClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Vec
 
 		switch ui.tab {
 		case .Town:
-			UIConversionClick(w, ui, panel, mouse)
+			UIConversionClick(w, view, panel, mouse)
 		case .Orders:
 			UIOrdersClick(w, ui, panel, mouse)
 		case .Works:
@@ -1271,7 +1296,7 @@ UIPanelClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Vec
 		return
 	}
 
-	UIConversionClick(w, ui, panel, mouse)
+	UIConversionClick(w, view, panel, mouse)
 }
 
 UIOrdersClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Vector2) {
@@ -1437,7 +1462,8 @@ UIFindAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> Selection
 	return {}
 }
 
-UIConversionClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Vector2) {
+UIConversionClick :: proc(w: ^World, view: ^WorldView, panel: rl.Rectangle, mouse: rl.Vector2) {
+	ui := &view.ui
 	if !UISelectionTownHall(w, ui.selection) do return
 	kingdom, town := UISelectionTown(w, ui.selection)
 	if !UICanControlKingdom(w, kingdom) do return
@@ -1448,6 +1474,10 @@ UIConversionClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: r
 	if rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT) do step = 10
 	for i in 0..<count {
 		kind := kinds[i]
+		if rl.CheckCollisionPointRec(mouse, UIUnitIconRect(panel, i)) {
+			UIUnitFocusCamera(w, view, kingdom, town, kind)
+			return
+		}
 		minus, plus := UIButtonRects(panel, i)
 		if rl.CheckCollisionPointRec(mouse, plus) {
 			if UICanConvertTo(w, kingdom, town, kind) {
@@ -1486,6 +1516,60 @@ UIConversionClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: r
 			return
 		}
 	}
+}
+
+// Clicking a unit icon cycles the camera through that town's units of the
+// kind, so repeated clicks visit each one in turn.
+UIUnitFocusCamera :: proc(w: ^World, view: ^WorldView, kingdom, town: int, kind: UnitKind) {
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
+
+	cam := &view.focusCamera
+	startSlot := 0
+	if cam.hasUnit && cam.kind == kind && cam.kingdom == kingdom && cam.town == town {
+		startSlot = cam.unitSlot+1
+	}
+
+	for offset in 0..<UNIT_CAPACITY {
+		slot := WorldWrapCoordinate(startSlot+offset, UNIT_CAPACITY)
+		if !w.unitUsed[slot] || w.units[slot].type == nil do continue
+		if w.units[slot].kingdome != kingdom || w.units[slot].town != town do continue
+		if UnitKindOf(w.units[slot].type) != kind do continue
+
+		camera := &view.camera
+		camera.target.x = WorldWrapPosition(camera.target.x, worldWidth)
+		camera.target.y = WorldWrapPosition(camera.target.y, worldHeight)
+
+		x, y := UnitRenderPosition(w, slot)
+		cam.kind = kind
+		cam.unitSlot = slot
+		cam.hasUnit = true
+		cam.kingdom = kingdom
+		cam.town = town
+		cam.active = true
+		cam.elapsed = 0
+		cam.duration = UI_FOCUS_CAMERA_PAN_SECONDS
+		cam.start = camera.target
+		cam.target = rl.Vector2{
+			camera.target.x+WorldShortestWrappedDelta(x-camera.target.x, worldWidth),
+			camera.target.y+WorldShortestWrappedDelta(y-camera.target.y, worldHeight),
+		}
+		return
+	}
+}
+
+WorldFocusCameraUpdate :: proc(view: ^WorldView, deltaTime: f32) {
+	cam := &view.focusCamera
+	if !cam.active do return
+
+	cam.elapsed += deltaTime
+	t := clamp(cam.elapsed/max(cam.duration, 0.0001), 0, 1)
+	// Ease-out keeps the jump quick while still reading as motion.
+	smooth := 1-(1-t)*(1-t)
+	view.camera.target.x = cam.start.x+(cam.target.x-cam.start.x)*smooth
+	view.camera.target.y = cam.start.y+(cam.target.y-cam.start.y)*smooth
+	if t >= 1 do cam.active = false
 }
 
 // --- drawing --------------------------------------------------------------
@@ -2092,9 +2176,16 @@ UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, p
 	rowY := panel.y+UI_ROWS_TOP+f32(index)*UI_ROW_HEIGHT
 
 	faction := FactionSpriteIndex(kingdom)
+	unitCount := TownUnitCount(w, kingdom, town, kind)
+	icon := UIUnitIconRect(panel, index)
+	interactive := unitCount > 0
+	iconHovered := interactive && rl.CheckCollisionPointRec(rl.GetMousePosition(), icon)
+	background := interactive ? UI_COLOR_BUTTON : UI_COLOR_BUTTON_OFF
+	if iconHovered do background = UI_COLOR_BUTTON_HOVER
+	rl.DrawRectangleRec(icon, background)
+	rl.DrawRectangleLinesEx(icon, 1, iconHovered ? UI_COLOR_GOLD : UI_COLOR_BORDER_INNER)
 	texture := renderer.sprites.unit[faction][kind]
 	if texture.id != 0 {
-		icon := rl.Rectangle{panel.x+UI_PAD, rowY+2, 32, 32}
 		source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 		rl.DrawTexturePro(texture, source, icon, rl.Vector2{0, 0}, 0, rl.WHITE)
 	}
@@ -2138,7 +2229,6 @@ UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, p
 	if pending != 0 {
 		UIText(fmt.ctprintf("%+d", pending), minus.x-56, rowY+8, UI_COLOR_GOLD)
 	}
-	unitCount := TownUnitCount(w, kingdom, town, kind)
 	UITextRight(fmt.ctprintf("%d", unitCount), minus.x-8, rowY+8, UI_COLOR_TEXT)
 
 	UIButton(minus, "-", UICanConvertFrom(w, kingdom, town, kind))
@@ -2272,33 +2362,119 @@ UIDrawCommandBar :: proc(w: ^World, ui: ^UIState) {
 	}
 }
 
-// Found-button hover readout: shows exactly which requirement is missing, so
-// expansion never feels blocked for an unexplained reason.
+// Found-button hover readout: one chip per requirement, each with an icon and
+// a red/green current/required readout so the missing piece is obvious.
+UIFoundRequirements :: proc(w: ^World, kingdom, town: int) -> ([5]UIFoundRequirement, int) {
+	townState := &w.kingdoms[kingdom].towns[town]
+	freeSlot := KingdomFreeTownSlot(w, kingdom)
+	requirements := [5]UIFoundRequirement{
+		{.Wood, int(townState.wood), int(TownFoundingWoodCost(w, kingdom))},
+		{.Citizens, townState.citizens, TOWN_FOUNDING_MIN_CITIZENS},
+		{.Settlers, TownUnitCount(w, kingdom, town, .Villager), TOWN_FOUNDING_SETTLERS},
+		{.Builders, TownUnitCount(w, kingdom, town, .Builder), 1},
+		{.TownSlot, freeSlot >= 0 ? 1 : 0, 1},
+	}
+	return requirements, len(requirements)
+}
+
+UIDrawFoundRequirementIcon :: proc(icon: UIFoundRequirementIcon, x, y: f32, color: rl.Color) {
+	dark := rl.Color{12, 11, 14, 230}
+	centerX := x+UI_FOUND_REQ_ICON*0.5
+	switch icon {
+	case .Wood:
+		// A log with a visible end grain.
+		rl.DrawRectangleRec(rl.Rectangle{x+1, y+6, 14, 7}, dark)
+		rl.DrawRectangleRec(rl.Rectangle{x+2, y+7, 11, 5}, color)
+		rl.DrawCircle(i32(x)+15, i32(y)+9, 4, dark)
+		rl.DrawCircle(i32(x)+15, i32(y)+9, 3, color)
+	case .Citizens:
+		rl.DrawCircle(i32(centerX), i32(y)+5, 4, color)
+		rl.DrawTriangle(
+			rl.Vector2{x+1, y+18},
+			rl.Vector2{x+17, y+18},
+			rl.Vector2{centerX, y+9},
+			color,
+		)
+	case .Settlers:
+		// A traveller carrying a banner.
+		rl.DrawCircle(i32(centerX)-3, i32(y)+5, 3, color)
+		rl.DrawTriangle(
+			rl.Vector2{x, y+18},
+			rl.Vector2{x+12, y+18},
+			rl.Vector2{x+6, y+9},
+			color,
+		)
+		rl.DrawLineEx(rl.Vector2{x+14, y+1}, rl.Vector2{x+14, y+12}, 2, dark)
+		rl.DrawTriangle(
+			rl.Vector2{x+15, y+1},
+			rl.Vector2{x+18, y+4},
+			rl.Vector2{x+15, y+7},
+			color,
+		)
+	case .Builders:
+		// Hammer.
+		rl.DrawRectangleRec(rl.Rectangle{centerX-1, y+6, 3, 12}, color)
+		rl.DrawRectangleRec(rl.Rectangle{x+1, y+2, 16, 6}, dark)
+		rl.DrawRectangleRec(rl.Rectangle{x+2, y+3, 14, 4}, color)
+	case .TownSlot:
+		// Hall with a flag.
+		rl.DrawRectangleRec(rl.Rectangle{x+2, y+8, 14, 9}, color)
+		rl.DrawTriangle(
+			rl.Vector2{centerX, y+1},
+			rl.Vector2{x+1, y+9},
+			rl.Vector2{x+17, y+9},
+			color,
+		)
+		rl.DrawRectangleRec(rl.Rectangle{x+7, y+11, 4, 6}, dark)
+	}
+}
+
 UIDrawFoundHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {
 	if !WorldTownExists(w, kingdom, town) do return
-	t := &w.kingdoms[kingdom].towns[town]
-	builders := TownUnitCount(w, kingdom, town, .Builder)
-	villagers := TownUnitCount(w, kingdom, town, .Villager)
-	text := fmt.ctprintf(
-		"Found town  -  wood %d/%d   citizens %d/%d   settlers %d/%d   builders %d/1",
-		int(t.wood),
-		int(TownFoundingWoodCost(w, kingdom)),
-		t.citizens,
-		TOWN_FOUNDING_MIN_CITIZENS,
-		villagers,
-		TOWN_FOUNDING_SETTLERS,
-		builders,
-	)
-	width := rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x+2*UI_PAD
-	height := UI_TEXT_SIZE+2*UI_PAD
+	requirements, count := UIFoundRequirements(w, kingdom, town)
+
+	title: cstring = "FOUND TOWN"
+	titleWidth := rl.MeasureTextEx(UIFont(), title, UI_TEXT_SIZE, 1).x
+	chips: [5]f32
+	chipsWidth: f32 = 0
+	allMet := true
+	for requirement, index in requirements[:count] {
+		text := fmt.ctprintf("%d/%d", requirement.current, requirement.required)
+		chips[index] = UI_FOUND_REQ_ICON+UI_FOUND_REQ_TEXT_GAP+
+			rl.MeasureTextEx(UIFont(), text, UI_FOUND_HINT_TEXT_SIZE, 1).x
+		chipsWidth += chips[index]
+		if index > 0 do chipsWidth += UI_FOUND_REQ_GAP
+		if requirement.current < requirement.required do allMet = false
+	}
+
+	width := max(titleWidth, chipsWidth)+2*UI_PAD
+	height := 2*UI_PAD+UI_TEXT_SIZE+2+UI_FOUND_REQ_ICON
 	screenWidth := f32(rl.GetScreenWidth())
 	x := clamp(rect.x+rect.width*0.5-width*0.5, 8, screenWidth-width-8)
 	y := rect.y-height-8
-	rl.DrawRectangleRec(rl.Rectangle{x, y, width, height}, UI_COLOR_BG)
-	rl.DrawRectangleLinesEx(rl.Rectangle{x, y, width, height}, 1, UI_COLOR_BORDER)
-	color := UI_COLOR_TEXT
-	if !UIFoundButtonEnabled(w, kingdom, town) do color = UI_COLOR_BAD
-	UIText(text, x+UI_PAD, y+UI_PAD-2, color)
+	box := rl.Rectangle{x, y, width, height}
+	rl.DrawRectangleRec(box, UI_COLOR_BG)
+	border := allMet ? UI_COLOR_GOOD : UI_COLOR_BORDER
+	rl.DrawRectangleLinesEx(box, 1, border)
+
+	UIText(title, x+UI_PAD, y+UI_PAD-3, allMet ? UI_COLOR_GOOD : UI_COLOR_GOLD)
+	chipX := x+UI_PAD+max((width-2*UI_PAD-chipsWidth)*0.5, 0)
+	chipY := y+UI_PAD+UI_TEXT_SIZE+2
+	for requirement, index in requirements[:count] {
+		met := requirement.current >= requirement.required
+		statusColor := met ? UI_COLOR_GOOD : UI_COLOR_BAD
+		UIDrawFoundRequirementIcon(requirement.icon, chipX, chipY, statusColor)
+		text := fmt.ctprintf("%d/%d", requirement.current, requirement.required)
+		rl.DrawTextEx(
+			UIFont(),
+			text,
+			rl.Vector2{chipX+UI_FOUND_REQ_ICON+UI_FOUND_REQ_TEXT_GAP, chipY-1},
+			UI_FOUND_HINT_TEXT_SIZE,
+			1,
+			statusColor,
+		)
+		chipX += chips[index]+UI_FOUND_REQ_GAP
+	}
 }
 
 UIDrawFuseHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {

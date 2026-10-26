@@ -47,11 +47,26 @@ MilestoneCamera :: struct {
 	kingdom, town: int,
 }
 
+// Fast, non-blocking camera pan started from a unit icon in the town panel.
+FocusCamera :: struct {
+	active:    bool,
+	elapsed:   f32,
+	duration:  f32,
+	start:     rl.Vector2,
+	target:    rl.Vector2,
+	kind:      UnitKind,
+	unitSlot:  int,
+	hasUnit:   bool,
+	kingdom:   int,
+	town:      int,
+}
+
 WorldView :: struct {
 	renderer:         WorldRenderer,
 	camera:           rl.Camera2D,
 	ui:               UIState,
 	milestoneCamera: MilestoneCamera,
+	focusCamera:     FocusCamera,
 }
 
 WorldViewInit :: proc(w: ^World) -> WorldView {
@@ -102,6 +117,7 @@ WorldCameraFocus :: proc(w: ^World) -> (f32, f32) {
 WorldViewUpdate :: proc(w: ^World, view: ^WorldView, deltaTime: f32) {
 	WorldRendererUpdate(w, &view.renderer)
 	WorldCameraUpdate(w, &view.camera, deltaTime)
+	WorldFocusCameraUpdate(view, deltaTime)
 	WorldMilestoneCameraUpdate(w, view, deltaTime)
 	WorldUIUpdate(w, view, view.camera)
 }
