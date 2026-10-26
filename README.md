@@ -14,7 +14,6 @@
 - We need to stress test defense of towns, I have seen attacking indenpendent towns that they don't defend it completly. The attacking units are in the area of the town and even atacking the townhall and the I don't know if get stuck on the back of the townhall or not even detect him. Because I have seen that they are even idle most of the time.
 
 # Corrections
-- Must buildings that are decorations should be free and not use wood at all. For example, paths and lights candle should not use wood. Because right now it is quite hard to acumulate wood for fund a new town because everything is spend as soon as possible
 
 # Things to check
 - Easy to see what kingdom is from the town defended or attacked in the townhall options and by arrows color when town selected

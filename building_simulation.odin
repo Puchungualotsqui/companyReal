@@ -296,7 +296,7 @@ TownBuilderConstruct :: proc(w: ^World, kingdomSlot, townSlot: int, canGrow: boo
 			}
 		}
 
-		if town.wood >= BuildingWoodCost(.Path) && TownConstructionKindCount(w, kingdomSlot, townSlot, .Path) == 0 {
+		if TownConstructionKindCount(w, kingdomSlot, townSlot, .Path) == 0 {
 			if x, y, found := TownAutoPathSite(w, kingdomSlot, townSlot); found {
 				if TownStartConstruction(w, kingdomSlot, townSlot, .Path, x, y) {
 					startedAny = true

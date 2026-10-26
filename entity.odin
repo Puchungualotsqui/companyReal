@@ -262,16 +262,13 @@ BuildingDistraction :: proc(kind: BuildingKind) -> f32 {
 
 BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
 	switch kind {
-	case .TownHall:
+	case .TownHall, .Wall, .Bridge, .Cannon, .Watchtower, .Path, .DistrictHall:
+		// Halls, combat works and decorative paths are paid for elsewhere or free.
 		return 0
 	case .Home:
 		return 5
 	case .Farmland:
 		return 8
-	case .Wall:
-		return 0
-	case .Bridge, .Cannon, .Watchtower:
-		return 0
 	case .ArcheryRange:
 		return 25
 	case .MagicSchool:
@@ -284,10 +281,6 @@ BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
 		return 30
 	case .ThievesGuild:
 		return 30
-	case .Path:
-		return 1
-	case .DistrictHall:
-		return 0
 	}
 	unreachable()
 }
