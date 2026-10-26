@@ -364,6 +364,7 @@ IndependentTownDefeat :: proc(w: ^World, townSlot, destroyer: int) {
 			continue
 		}
 		if BuildingKindOf(w.buildings[buildingSlot].type) == .TownHall do continue
+		BuildingSpawnDebris(w, buildingSlot, BuildingOnFire(w, buildingSlot))
 		BuildingDespawn(w, buildingSlot, destroyer)
 	}
 

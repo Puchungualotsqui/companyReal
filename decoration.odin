@@ -17,9 +17,11 @@ DecorationKind :: enum {
 	Reed,
 	Stump,
 	Lamp,
+	Rubble,
+	BurntRubble,
 }
 
-ALL_DECORATION_KINDS := [9]DecorationKind {
+ALL_DECORATION_KINDS := [11]DecorationKind {
 	.Tree,
 	.Pine,
 	.Bush,
@@ -29,6 +31,8 @@ ALL_DECORATION_KINDS := [9]DecorationKind {
 	.Reed,
 	.Stump,
 	.Lamp,
+	.Rubble,
+	.BurntRubble,
 }
 
 Decoration :: struct {
@@ -53,13 +57,15 @@ DecorationHealth :: proc(kind: DecorationKind) -> f32 {
 		return 40
 	case .Stump:
 		return 30
+	case .Rubble, .BurntRubble:
+		return 10
 	}
 	return 10
 }
 
 DecorationIsFlammable :: proc(kind: DecorationKind) -> bool {
 	switch kind {
-	case .Rock:
+	case .Rock, .Rubble, .BurntRubble:
 		return false
 	case .Tree, .Pine, .Bush, .Flowers, .Cactus, .Reed, .Stump, .Lamp:
 		return true
@@ -71,7 +77,7 @@ DecorationChoppable :: proc(kind: DecorationKind) -> bool {
 	switch kind {
 	case .Tree, .Pine, .Bush:
 		return true
-	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp:
+	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp, .Rubble, .BurntRubble:
 		return false
 	}
 	return false
@@ -85,7 +91,7 @@ DecorationChopSeconds :: proc(kind: DecorationKind) -> f32 {
 		return 3
 	case .Bush:
 		return 1.2
-	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp:
+	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp, .Rubble, .BurntRubble:
 		return 0
 	}
 	return 0
@@ -111,6 +117,10 @@ DecorationClearSeconds :: proc(kind: DecorationKind) -> f32 {
 		return 0.4
 	case .Lamp:
 		return 0.6
+	case .Rubble:
+		return 2
+	case .BurntRubble:
+		return 2.5
 	}
 	return 0
 }
@@ -123,7 +133,7 @@ DecorationWoodYield :: proc(kind: DecorationKind) -> f32 {
 		return 4
 	case .Bush:
 		return 1
-	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp:
+	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp, .Rubble, .BurntRubble:
 		return 0
 	}
 	return 0
@@ -151,6 +161,43 @@ WorldDecorationSpawn :: proc(w: ^World, x, y: f32, kind: DecorationKind, variant
 	w.decorationCursor = (slot+1)%DECORATION_CAPACITY
 	SpatialDecorationInsert(w, slot)
 	return slot, true
+}
+
+BuildingOnFire :: proc(w: ^World, buildingSlot: int) -> bool {
+	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] {
+		return false
+	}
+	building := &w.buildings[buildingSlot]
+	width, height := BuildingTileSize(building.type)
+	for tileX in building.x ..< building.x+width {
+		for tileY in building.y ..< building.y+height {
+			if WorldFireAt(w, tileX, tileY) do return true
+		}
+	}
+	return false
+}
+
+// Leaves a few rubble piles over the old footprint. Burnt buildings leave
+// charred debris, while ordinary collapses leave timber and stone chunks.
+BuildingSpawnDebris :: proc(w: ^World, buildingSlot: int, burnt: bool) {
+	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] {
+		return
+	}
+	building := &w.buildings[buildingSlot]
+	width, height := BuildingTileSize(building.type)
+	area := width*height
+	count := clamp(area/2, 1, 6)
+	seed := u64(buildingSlot)*0x9E3779B97F4A7C15 ~ u64(int(w.simulationTime*10))
+	kind: DecorationKind = burnt ? .BurntRubble : .Rubble
+	for i in 0..<count {
+		tileIndex := (i*5+buildingSlot)%area
+		tileX := building.x+tileIndex%width
+		tileY := building.y+tileIndex/width
+		x := f32(tileX)+0.15+WorldNoiseHash(buildingSlot, i, seed+0x3)*0.7
+		y := f32(tileY)+0.6+WorldNoiseHash(i, buildingSlot, seed+0x4)*0.35
+		variant := u8(int(WorldNoiseHash(buildingSlot, i, seed+0x5)*4) & 3)
+		if _, spawned := WorldDecorationSpawn(w, x, y, kind, variant); !spawned do break
+	}
 }
 
 // Sparse road lighting; established bends and junctions get more candidates.
@@ -233,7 +280,7 @@ DecorationFell :: proc(w: ^World, slot: int) {
 		w.decorations.health[slot] = DecorationHealth(.Stump)
 		w.decorations.regrowTimer[slot] = 0
 		w.decorationStumps += 1
-	case .Bush, .Flowers, .Cactus, .Reed, .Stump, .Lamp:
+	case .Bush, .Flowers, .Cactus, .Reed, .Stump, .Lamp, .Rubble, .BurntRubble:
 		WorldDecorationDespawn(w, slot)
 	case .Rock:
 	}

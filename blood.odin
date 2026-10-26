@@ -819,6 +819,12 @@ DecorationDebris :: proc(w: ^World, x, y: f32, kind: DecorationKind) {
 		stone = true
 		chips = 3
 		sparks = true
+	case .Rubble:
+		stone = true
+		chips = 4
+	case .BurntRubble:
+		stone = true
+		chips = 3
 	}
 
 	for _ in 0 ..< chips+int(PRandom(w)*3) {

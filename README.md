@@ -1,6 +1,5 @@
 # Things to do
 - Description to enrich the world of the buildings and units
-- Add debris from destroyed buildings, different debris if it was on fire
 - Some attacks destroy decorations around them
 - Boats
 

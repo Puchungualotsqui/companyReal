@@ -689,11 +689,13 @@ WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 		w.buildings[target.slot].health -= damage
 		if w.buildings[target.slot].health <= 0 {
 			kind := BuildingKindOf(w.buildings[target.slot].type)
+			wasBurning := BuildingOnFire(w, target.slot)
 			// Burning rubble can set the surroundings alight after a siege.
 			if !BuildingImmuneToFire(kind) &&
 				WorldNoiseHash(target.slot, int(w.simulationTime*4), 0xF12E) < 0.35 {
 				WorldFireIgnite(w, impactX, impactY, 1)
 			}
+			BuildingSpawnDebris(w, target.slot, wasBurning)
 			BuildingDestroyedBurst(w, target.slot)
 			BuildingDespawn(w, target.slot, unit.kingdome)
 			state.target = TargetNone{}

@@ -176,6 +176,7 @@ FireDamageTile :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 		if !BuildingImmuneToFire(BuildingKindOf(w.buildings[buildingSlot].type)) {
 			w.buildings[buildingSlot].health -= FIRE_BUILDING_DAMAGE*intensity*deltaTime
 			if w.buildings[buildingSlot].health <= 0 {
+				BuildingSpawnDebris(w, buildingSlot, true)
 				BuildingDestroyedBurst(w, buildingSlot)
 				BuildingDespawn(w, buildingSlot, -1)
 			}

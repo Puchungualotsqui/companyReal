@@ -1724,6 +1724,14 @@ DrawDecorationSprite :: proc(kind: DecorationKind) -> Art {
 		art := ArtInit(16, 28)
 		DrawDecorationLamp(&art)
 		return art
+	case .Rubble:
+		art := ArtInit(18, 12)
+		DrawDecorationRubble(&art, false)
+		return art
+	case .BurntRubble:
+		art := ArtInit(18, 12)
+		DrawDecorationRubble(&art, true)
+		return art
 	}
 	return ArtInit(1, 1)
 }
@@ -1886,6 +1894,50 @@ DrawDecorationLamp :: proc(art: ^Art) {
 	ArtRect(art, 5, 3, 7, 1, C_IRON)
 	ArtPixel(art, 8, 0, C_IRON_LIGHT)
 	ArtPixel(art, 8, 1, C_IRON)
+}
+
+DrawDecorationRubble :: proc(art: ^Art, burnt: bool) {
+	DrawShadow(art, 9, 10, 6, 2)
+
+	stoneDark := C_STONE_DARK
+	stone := C_STONE
+	stoneLight := C_STONE_LIGHT
+	woodDark := C_WOOD_DARK
+	woodLight := C_WOOD_LIGHT
+	if burnt {
+		stoneDark = C_STONE_DARKEST
+		stone = C_STONE_DARK
+		stoneLight = C_STONE
+		woodDark = C_WOOD_DARKEST
+		woodLight = C_WOOD_DARK
+	}
+
+	// Broken timber over the stones.
+	ArtLine(art, 2, 8, 10, 3, C_OUTLINE)
+	ArtLine(art, 2, 7, 9, 3, woodDark)
+	ArtPixel(art, 5, 5, woodLight)
+	ArtRect(art, 11, 3, 3, 2, C_OUTLINE)
+	ArtRect(art, 12, 4, 2, 1, woodDark)
+
+	ArtEllipse(art, 5, 8, 4, 3, C_OUTLINE)
+	ArtEllipse(art, 5, 8, 3, 2, stoneDark)
+	ArtPixel(art, 4, 7, stone)
+	ArtPixel(art, 5, 6, stoneLight)
+	ArtEllipse(art, 12, 8, 4, 2, C_OUTLINE)
+	ArtEllipse(art, 12, 8, 3, 1, stoneDark)
+	ArtPixel(art, 11, 8, stone)
+	ArtPixel(art, 13, 8, stoneLight)
+
+	ArtRect(art, 8, 9, 3, 2, C_OUTLINE)
+	ArtRect(art, 9, 9, 2, 1, stone)
+	ArtPixel(art, 15, 9, stoneLight)
+	ArtPixel(art, 2, 9, stone)
+	ArtPixel(art, 8, 6, stoneLight)
+	if burnt {
+		ArtPixel(art, 10, 5, woodDark)
+		ArtPixel(art, 6, 10, stoneDark)
+		ArtPixel(art, 14, 7, stone)
+	}
 }
 
 // Small inspection icons for unit conditions. The red slash is shared so the
