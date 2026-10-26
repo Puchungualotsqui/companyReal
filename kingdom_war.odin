@@ -472,7 +472,7 @@ WarriorFindBreachBuilding :: proc(w: ^World, unitSlot, targetKingdom, targetTown
 						bestHallDistance = distance
 						bestHall = buildingSlot
 					}
-				case .Home, .Farmland, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall, .GiantMortar, .Harbor, .Granary:
+				case .Home, .Farmland, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall, .GiantMortar, .Harbor, .Granary, .AlchemistWorkshop, .FireworksGuild, .StarfallSpire:
 					if distance < bestBuildingDistance {
 						bestBuildingDistance = distance
 						bestBuilding = buildingSlot
@@ -652,6 +652,7 @@ WorldMeleeSeparation :: proc(w: ^World) {
 WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 	unit := &w.units[unitSlot]
 	damage := UnitDefaultDamage(unit.type)*KingdomTechWarriorDamageMultiplier(w, unit.kingdome, UnitKindOf(unit.type))
+	if unit.effects[.Poisoned] do damage *= 0.85
 	areaRadius := UnitDefaultAreaRadius(unit.type)
 	switch target in state.target {
 	case TargetNone:

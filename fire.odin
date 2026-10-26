@@ -1,5 +1,8 @@
 package main
 
+import rl "vendor:raylib"
+import "core:math"
+
 // Fire rules. A fire cell lives on a tile and burns whatever flammable entity
 // sits there, so it can exist on empty ground too. Spread is probabilistic and
 // can be disabled per fire.
@@ -64,9 +67,9 @@ UnitImmuneToFire :: proc(type: UnitType) -> bool {
 
 BuildingImmuneToFire :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .TownHall, .Wall, .Cannon, .Watchtower, .MagicSchool, .TurtlePen, .Path, .GiantMortar, .Harbor:
+	case .TownHall, .Wall, .Cannon, .Watchtower, .MagicSchool, .TurtlePen, .Path, .GiantMortar, .Harbor, .StarfallSpire:
 		return true
-	case .Home, .Farmland, .Bridge, .ArcheryRange, .SiegeWorkshop, .GiantPen, .ThievesGuild, .DistrictHall, .Granary:
+	case .Home, .Farmland, .Bridge, .ArcheryRange, .SiegeWorkshop, .GiantPen, .ThievesGuild, .DistrictHall, .Granary, .AlchemistWorkshop, .FireworksGuild:
 		return false
 	}
 	unreachable()
@@ -107,6 +110,9 @@ WorldFireIgnite :: proc(w: ^World, x, y, intensity: f32, spread: f32 = 1) -> (in
 	tileX := WorldWrapCoordinate(int(x), worldWidth)
 	tileY := WorldWrapCoordinate(int(y), worldHeight)
 	if TileTypeAntiFire(w.ground[tileX][tileY].type) do return 0, false
+	if hazardKind, hasHazard := WorldHazardKindAt(w, tileX, tileY); hasHazard && hazardKind == .Flood {
+		return 0, false
+	}
 	if WorldFireAt(w, tileX, tileY) do return 0, false
 
 	slot := -1
@@ -130,6 +136,17 @@ WorldFireIgnite :: proc(w: ^World, x, y, intensity: f32, spread: f32 = 1) -> (in
 	SpatialFireInsert(w, slot)
 	FireIgniteBurst(w, f32(tileX)+0.5, f32(tileY)+0.5, w.fires.intensity[slot])
 	return slot, true
+}
+
+WorldFireExtinguishAt :: proc(w: ^World, x, y: int) {
+	chunk := SpatialChunkIndex(w, x, y)
+	if chunk < 0 do return
+	for slot := w.spatial.fireHead[chunk]; slot >= 0; slot = w.spatial.fireNext[slot] {
+		if int(w.fires.x[slot]) == x && int(w.fires.y[slot]) == y {
+			WorldFireDespawn(w, slot)
+			return
+		}
+	}
 }
 
 WorldFireDespawn :: proc(w: ^World, slot: int) -> bool {
@@ -319,5 +336,100 @@ FireDamageBurningUnits :: proc(w: ^World, deltaTime: f32) {
 			continue
 		}
 		if w.units.burning[unitSlot] <= 0 do w.unitsBurning -= 1
+	}
+}
+
+// --- poison clouds --------------------------------------------------------
+
+GAS_CLOUD_CAPACITY :: 256
+POISON_CLOUD_REFRESH :: 3.0
+POISON_DAMAGE_RATIO_PER_SECOND :: 0.025
+
+GasCloud :: struct {
+	x, y:      f32,
+	radius:    f32,
+	remaining: f32,
+	duration:  f32,
+	seed:      u64,
+}
+
+WorldGasCloudSpawn :: proc(w: ^World, x, y, radius, duration: f32) {
+	slot := -1
+	for step in 0..<GAS_CLOUD_CAPACITY {
+		candidate := (w.gasCloudCursor+step)%GAS_CLOUD_CAPACITY
+		if !w.gasCloudUsed[candidate] {
+			slot = candidate
+			break
+		}
+	}
+	if slot < 0 do return
+	w.gasClouds.x[slot] = x
+	w.gasClouds.y[slot] = y
+	w.gasClouds.radius[slot] = radius
+	w.gasClouds.remaining[slot] = duration
+	w.gasClouds.duration[slot] = duration
+	w.gasClouds.seed[slot] = u64(slot)*0x9E3779B97F4A7C15
+	w.gasCloudUsed[slot] = true
+	w.gasCloudCursor = (slot+1)%GAS_CLOUD_CAPACITY
+}
+
+WorldGasCloudUpdate :: proc(w: ^World, deltaTime: f32) {
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+
+	for cloud in 0..<GAS_CLOUD_CAPACITY {
+		if !w.gasCloudUsed[cloud] do continue
+		w.gasClouds.remaining[cloud] -= deltaTime
+		if w.gasClouds.remaining[cloud] <= 0 {
+			w.gasCloudUsed[cloud] = false
+			continue
+		}
+		cloudX := w.gasClouds.x[cloud]
+		cloudY := w.gasClouds.y[cloud]
+		radius := w.gasClouds.radius[cloud]
+		radiusSquared := radius*radius
+
+		for unitSlot in 0..<UNIT_CAPACITY {
+			if !w.unitUsed[unitSlot] || w.units.type[unitSlot] == nil do continue
+			if UnitHiddenInside(w, unitSlot) do continue
+			deltaX := WorldShortestWrappedDelta(w.units.x[unitSlot]-cloudX, worldWidth)
+			deltaY := WorldShortestWrappedDelta(w.units.y[unitSlot]-cloudY, worldHeight)
+			if deltaX*deltaX+deltaY*deltaY > radiusSquared do continue
+			w.units.poisonRemaining[unitSlot] = max(
+				w.units.poisonRemaining[unitSlot],
+				POISON_CLOUD_REFRESH,
+			)
+		}
+
+		for _ in 0..<2 {
+			angle := PRandom(w)*6.2831853
+			distance := radius*math.sqrt(PRandom(w))
+			ParticleSpawn(w, Particle{
+				x = WorldWrapPosition(cloudX+math.cos(angle)*distance, worldWidth),
+				y = WorldWrapPosition(cloudY+math.sin(angle)*distance, worldHeight),
+				z = PRandomRange(w, 0.2, 0.9),
+				vx = (PRandom(w)-0.5)*0.4,
+				vy = (PRandom(w)-0.5)*0.4,
+				vz = PRandomRange(w, 0.1, 0.5),
+				life = PRandomRange(w, 1.2, 2.4),
+				size = PRandomRange(w, 0.28, 0.55),
+				drag = 1.2,
+				gravity = -0.4,
+				kind = .Dust,
+				tint = rl.Color{104, 180, 88, 205},
+			})
+		}
+	}
+
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] || w.units.type[unitSlot] == nil do continue
+		if w.units.poisonRemaining[unitSlot] <= 0 {
+			w.units.effects[unitSlot][.Poisoned] = false
+			continue
+		}
+		w.units.poisonRemaining[unitSlot] = max(w.units.poisonRemaining[unitSlot]-deltaTime, 0)
+		w.units.effects[unitSlot][.Poisoned] = true
+		damage := UnitMaxHealth(w, unitSlot)*POISON_DAMAGE_RATIO_PER_SECOND*deltaTime
+		UnitApplyDamage(w, unitSlot, damage, w.units.x[unitSlot], w.units.y[unitSlot], .Poison)
 	}
 }

@@ -36,6 +36,8 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 		BloodUpdate(w, TOWN_SIMULATION_STEP)
 		WorldControllersUpdate(w, TOWN_SIMULATION_STEP)
 		WorldKingdomUpdate(w, TOWN_SIMULATION_STEP)
+		WorldHazardUpdate(w, TOWN_SIMULATION_STEP)
+		WorldGasCloudUpdate(w, TOWN_SIMULATION_STEP)
 		FogUpdate(w)
 		w.simulationAccumulator -= TOWN_SIMULATION_STEP
 	}

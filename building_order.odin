@@ -14,12 +14,55 @@ ORDER_MORTAR_TICK :: 0.6
 ORDER_MORTAR_UNIT_DAMAGE :: 7.0
 ORDER_MORTAR_BUILDING_DAMAGE :: 20.0
 
+ORDER_GLACIER_RADIUS :: 4.0
+ORDER_GLACIER_COOLDOWN :: 150.0
+
+ORDER_TREMOR_RADIUS :: 4.5
+ORDER_TREMOR_DURATION :: 4.0
+ORDER_TREMOR_TICK :: 0.7
+ORDER_TREMOR_UNIT_DAMAGE :: 6.0
+ORDER_TREMOR_BUILDING_DAMAGE :: 55.0
+ORDER_TREMOR_COOLDOWN :: 120.0
+
+ORDER_STARFALL_RADIUS :: 5.5
+ORDER_STARFALL_WARNING :: 2.0
+ORDER_STARFALL_UNIT_DAMAGE :: 120.0
+ORDER_STARFALL_BUILDING_DAMAGE :: 350.0
+ORDER_STARFALL_COOLDOWN :: 240.0
+
+ORDER_FLOOD_RADIUS :: 4.0
+ORDER_FLOOD_COOLDOWN :: 150.0
+
+ORDER_MIASMA_RADIUS :: 3.5
+ORDER_MIASMA_DURATION :: 18.0
+ORDER_MIASMA_COOLDOWN :: 180.0
+
+ORDER_NAPALM_RADIUS :: 5.0
+ORDER_NAPALM_DURATION :: 5.0
+ORDER_NAPALM_TICK :: 0.6
+ORDER_NAPALM_COOLDOWN :: 180.0
+
 OrderKind :: enum {
 	GiantMortar,
 	Blockade,
+	GlacierShell,
+	SiegeTremor,
+	Starfall,
+	WaterBomber,
+	MiasmaBarrage,
+	NapalmBarrage,
 }
 
-ALL_ORDER_KINDS := [2]OrderKind{.GiantMortar, .Blockade}
+ALL_ORDER_KINDS := [8]OrderKind{
+	.GiantMortar,
+	.Blockade,
+	.GlacierShell,
+	.SiegeTremor,
+	.Starfall,
+	.WaterBomber,
+	.MiasmaBarrage,
+	.NapalmBarrage,
+}
 
 OrderName :: proc(kind: OrderKind) -> cstring {
 	switch kind {
@@ -27,6 +70,18 @@ OrderName :: proc(kind: OrderKind) -> cstring {
 		return "Giant Mortar"
 	case .Blockade:
 		return "Blockade"
+	case .GlacierShell:
+		return "Glacier Shell"
+	case .SiegeTremor:
+		return "Siege Tremor"
+	case .Starfall:
+		return "Starfall"
+	case .WaterBomber:
+		return "Water Bomber"
+	case .MiasmaBarrage:
+		return "Miasma Barrage"
+	case .NapalmBarrage:
+		return "Napalm Barrage"
 	}
 	unreachable()
 }
@@ -37,6 +92,18 @@ OrderDescription :: proc(kind: OrderKind) -> cstring {
 		return "Bombards a chosen area for 10 seconds."
 	case .Blockade:
 		return "Cuts an enemy coastal town's food, water and growth."
+	case .GlacierShell:
+		return "Freezes a wide area into ice that melts unevenly."
+	case .SiegeTremor:
+		return "Shakes the ground, shattering walls and towers."
+	case .Starfall:
+		return "Calls a meteor down on a chosen spot."
+	case .WaterBomber:
+		return "Floods an area. Land-bound units drown."
+	case .MiasmaBarrage:
+		return "Leaves a lingering cloud that poisons units."
+	case .NapalmBarrage:
+		return "Rains burning shells across a wide area."
 	}
 	unreachable()
 }
@@ -47,6 +114,18 @@ OrderRadius :: proc(kind: OrderKind) -> f32 {
 		return ORDER_MORTAR_RADIUS
 	case .Blockade:
 		return 0
+	case .GlacierShell:
+		return ORDER_GLACIER_RADIUS
+	case .SiegeTremor:
+		return ORDER_TREMOR_RADIUS
+	case .Starfall:
+		return ORDER_STARFALL_RADIUS
+	case .WaterBomber:
+		return ORDER_FLOOD_RADIUS
+	case .MiasmaBarrage:
+		return ORDER_MIASMA_RADIUS
+	case .NapalmBarrage:
+		return ORDER_NAPALM_RADIUS
 	}
 	unreachable()
 }
@@ -55,8 +134,14 @@ OrderDuration :: proc(kind: OrderKind) -> f32 {
 	switch kind {
 	case .GiantMortar:
 		return ORDER_MORTAR_DURATION
-	case .Blockade:
+	case .Blockade, .GlacierShell, .WaterBomber, .MiasmaBarrage:
 		return 0
+	case .SiegeTremor:
+		return ORDER_TREMOR_DURATION
+	case .Starfall:
+		return ORDER_STARFALL_WARNING
+	case .NapalmBarrage:
+		return ORDER_NAPALM_DURATION
 	}
 	unreachable()
 }
@@ -67,6 +152,18 @@ OrderCooldownSeconds :: proc(kind: OrderKind) -> f32 {
 		return ORDER_MORTAR_COOLDOWN
 	case .Blockade:
 		return 180
+	case .GlacierShell:
+		return ORDER_GLACIER_COOLDOWN
+	case .SiegeTremor:
+		return ORDER_TREMOR_COOLDOWN
+	case .Starfall:
+		return ORDER_STARFALL_COOLDOWN
+	case .WaterBomber:
+		return ORDER_FLOOD_COOLDOWN
+	case .MiasmaBarrage:
+		return ORDER_MIASMA_COOLDOWN
+	case .NapalmBarrage:
+		return ORDER_NAPALM_COOLDOWN
 	}
 	unreachable()
 }
@@ -75,8 +172,18 @@ OrderSourceKind :: proc(kind: OrderKind) -> (BuildingKind, bool) {
 	switch kind {
 	case .GiantMortar:
 		return .GiantMortar, true
-	case .Blockade:
+	case .Blockade, .WaterBomber:
 		return .Harbor, true
+	case .GlacierShell:
+		return .MagicSchool, true
+	case .SiegeTremor:
+		return .SiegeWorkshop, true
+	case .Starfall:
+		return .StarfallSpire, true
+	case .MiasmaBarrage:
+		return .AlchemistWorkshop, true
+	case .NapalmBarrage:
+		return .FireworksGuild, true
 	}
 	return .Wall, false
 }
@@ -87,15 +194,45 @@ BuildingOrderKind :: proc(kind: BuildingKind) -> (OrderKind, bool) {
 		return .GiantMortar, true
 	case .Harbor:
 		return .Blockade, true
-	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall, .Granary:
+	case .MagicSchool:
+		return .GlacierShell, true
+	case .SiegeWorkshop:
+		return .SiegeTremor, true
+	case .AlchemistWorkshop:
+		return .MiasmaBarrage, true
+	case .FireworksGuild:
+		return .NapalmBarrage, true
+	case .StarfallSpire:
+		return .Starfall, true
+	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .GiantPen, .TurtlePen, .ThievesGuild, .Path, .DistrictHall, .Granary:
 		return .GiantMortar, false
 	}
 	return .GiantMortar, false
 }
 
+BuildingOrderSupports :: proc(kind: BuildingKind, orderKind: OrderKind) -> bool {
+	switch orderKind {
+	case .GiantMortar:
+		return kind == .GiantMortar
+	case .Blockade, .WaterBomber:
+		return kind == .Harbor
+	case .GlacierShell:
+		return kind == .MagicSchool
+	case .SiegeTremor:
+		return kind == .SiegeWorkshop
+	case .Starfall:
+		return kind == .StarfallSpire
+	case .MiasmaBarrage:
+		return kind == .AlchemistWorkshop
+	case .NapalmBarrage:
+		return kind == .FireworksGuild
+	}
+	return false
+}
+
 OrderUnlocked :: proc(w: ^World, kingdom: int, kind: OrderKind) -> bool {
 	switch kind {
-	case .GiantMortar:
+	case .GiantMortar, .GlacierShell, .SiegeTremor, .Starfall, .WaterBomber, .MiasmaBarrage, .NapalmBarrage:
 		return true
 	case .Blockade:
 		return KingdomHasTech(w, kingdom, .Blockade)
@@ -123,8 +260,7 @@ OrderSourceNearestReady :: proc(w: ^World, kingdom: int, kind: OrderKind, target
 	bestDistance: f32 = 0
 	for slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdom do continue
-		buildingOrder, ok := BuildingOrderKind(BuildingKindOf(w.buildings.type[slot]))
-		if !ok || buildingOrder != kind do continue
+		if !BuildingOrderSupports(BuildingKindOf(w.buildings.type[slot]), kind) do continue
 		order, isOrder := BuildingOrderState(w, slot)
 		if !isOrder do continue
 		if order.orderCooldown > 0 || order.orderActive > 0 do continue
@@ -146,8 +282,7 @@ OrderSourceCount :: proc(w: ^World, kingdom: int, kind: OrderKind) -> int {
 	count := 0
 	for slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdom do continue
-		if buildingOrder, ok := BuildingOrderKind(BuildingKindOf(w.buildings.type[slot])); ok &&
-			buildingOrder == kind {
+		if BuildingOrderSupports(BuildingKindOf(w.buildings.type[slot]), kind) {
 			count += 1
 		}
 	}
@@ -159,10 +294,7 @@ OrderSourceReadyCount :: proc(w: ^World, kingdom: int, kind: OrderKind) -> int {
 	count := 0
 	for slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdom do continue
-		if buildingOrder, ok := BuildingOrderKind(BuildingKindOf(w.buildings.type[slot])); !ok ||
-			buildingOrder != kind {
-			continue
-		}
+		if !BuildingOrderSupports(BuildingKindOf(w.buildings.type[slot]), kind) do continue
 		order, isOrder := BuildingOrderState(w, slot)
 		if isOrder && order.orderCooldown <= 0 && order.orderActive <= 0 {
 			count += 1
@@ -176,10 +308,7 @@ OrderSourceActiveCount :: proc(w: ^World, kingdom: int, kind: OrderKind) -> int 
 	count := 0
 	for slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdom do continue
-		if buildingOrder, ok := BuildingOrderKind(BuildingKindOf(w.buildings.type[slot])); !ok ||
-			buildingOrder != kind {
-			continue
-		}
+		if !BuildingOrderSupports(BuildingKindOf(w.buildings.type[slot]), kind) do continue
 		order, isOrder := BuildingOrderState(w, slot)
 		if isOrder && order.orderActive > 0 do count += 1
 	}
@@ -191,10 +320,7 @@ OrderActiveRemaining :: proc(w: ^World, kingdom: int, kind: OrderKind) -> f32 {
 	remaining: f32 = 0
 	for slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdom do continue
-		if buildingOrder, ok := BuildingOrderKind(BuildingKindOf(w.buildings.type[slot])); !ok ||
-			buildingOrder != kind {
-			continue
-		}
+		if !BuildingOrderSupports(BuildingKindOf(w.buildings.type[slot]), kind) do continue
 		order, isOrder := BuildingOrderState(w, slot)
 		if isOrder do remaining = max(remaining, order.orderActive)
 	}
@@ -206,10 +332,7 @@ OrderNextCooldown :: proc(w: ^World, kingdom: int, kind: OrderKind) -> f32 {
 	next: f32 = -1
 	for slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdom do continue
-		if buildingOrder, ok := BuildingOrderKind(BuildingKindOf(w.buildings.type[slot])); !ok ||
-			buildingOrder != kind {
-			continue
-		}
+		if !BuildingOrderSupports(BuildingKindOf(w.buildings.type[slot]), kind) do continue
 		order, isOrder := BuildingOrderState(w, slot)
 		if !isOrder do continue
 		remaining := max(order.orderCooldown, order.orderActive)
@@ -239,7 +362,7 @@ TownAtPoint :: proc(w: ^World, x, y: f32) -> (kingdom, town: int, found: bool) {
 OrderTargetValid :: proc(w: ^World, kingdom: int, kind: OrderKind, x, y: f32) -> bool {
 	if !OrderUnlocked(w, kingdom, kind) do return false
 	switch kind {
-	case .GiantMortar:
+	case .GiantMortar, .GlacierShell, .SiegeTremor, .Starfall, .WaterBomber, .MiasmaBarrage, .NapalmBarrage:
 		if kingdom == w.observerKingdom {
 			tileX := int(WorldWrapPosition(x, f32(w.maxX)))
 			tileY := int(WorldWrapPosition(y, f32(w.maxY)))
@@ -271,8 +394,70 @@ OrderStart :: proc(w: ^World, kingdom: int, kind: OrderKind, x, y: f32) -> bool 
 	order, isOrder := BuildingOrderState(w, slot)
 	if !isOrder do return false
 
+	order.orderKind = kind
 	switch kind {
 	case .GiantMortar:
+		order.orderActive = OrderDuration(kind)
+		order.orderCooldown = OrderDuration(kind)+OrderCooldownSeconds(kind)
+		order.orderTargetX = WorldWrapPosition(x, f32(w.maxX))
+		order.orderTargetY = WorldWrapPosition(y, f32(w.maxY))
+		order.orderTick = 0
+		return true
+	case .GlacierShell:
+		WorldHazardSpawnCircle(w, x, y, ORDER_GLACIER_RADIUS, .Ice, 14, 24, 0x1CE)
+		order.orderActive = 0
+		order.orderCooldown = OrderCooldownSeconds(kind)
+		order.orderTargetX = WorldWrapPosition(x, f32(w.maxX))
+		order.orderTargetY = WorldWrapPosition(y, f32(w.maxY))
+		order.orderTick = 0
+		return true
+	case .SiegeTremor:
+		order.orderActive = OrderDuration(kind)
+		order.orderCooldown = OrderDuration(kind)+OrderCooldownSeconds(kind)
+		order.orderTargetX = WorldWrapPosition(x, f32(w.maxX))
+		order.orderTargetY = WorldWrapPosition(y, f32(w.maxY))
+		order.orderTick = 0
+		return true
+	case .Starfall:
+		order.orderActive = OrderDuration(kind)
+		order.orderCooldown = OrderDuration(kind)+OrderCooldownSeconds(kind)
+		order.orderTargetX = WorldWrapPosition(x, f32(w.maxX))
+		order.orderTargetY = WorldWrapPosition(y, f32(w.maxY))
+		order.orderTick = OrderDuration(kind)
+		ParticleSpawn(w, Particle{
+			x = order.orderTargetX,
+			y = order.orderTargetY,
+			z = 18,
+			vx = 0,
+			vy = 0,
+			vz = -9.5,
+			life = ORDER_STARFALL_WARNING,
+			size = 2.2,
+			drag = 0,
+			gravity = 0,
+			rotation = 0.4,
+			spin = 180,
+			kind = .Boulder,
+			tint = rl.Color{255, 176, 108, 255},
+		})
+		return true
+	case .WaterBomber:
+		WorldHazardSpawnCircle(w, x, y, ORDER_FLOOD_RADIUS, .Flood, 9, 17, 0xF100)
+		order.orderActive = 0
+		order.orderCooldown = OrderCooldownSeconds(kind)
+		order.orderTargetX = WorldWrapPosition(x, f32(w.maxX))
+		order.orderTargetY = WorldWrapPosition(y, f32(w.maxY))
+		order.orderTick = 0
+		return true
+	case .MiasmaBarrage:
+		WorldGasCloudSpawn(w, x, y, ORDER_MIASMA_RADIUS, ORDER_MIASMA_DURATION)
+		order.orderActive = 0
+		order.orderCooldown = OrderCooldownSeconds(kind)
+		order.orderTargetX = WorldWrapPosition(x, f32(w.maxX))
+		order.orderTargetY = WorldWrapPosition(y, f32(w.maxY))
+		order.orderTick = 0
+		return true
+	case .NapalmBarrage:
 		order.orderActive = OrderDuration(kind)
 		order.orderCooldown = OrderDuration(kind)+OrderCooldownSeconds(kind)
 		order.orderTargetX = WorldWrapPosition(x, f32(w.maxX))
@@ -299,10 +484,16 @@ BuildingUpdateOrder :: proc(w: ^World, slot: int, deltaTime: f32) {
 	order, isOrder := BuildingOrderState(w, slot)
 	if !isOrder do return
 	if order.orderCooldown > 0 do order.orderCooldown = max(order.orderCooldown-deltaTime, 0)
-	switch _ in order.type {
-	case GiantMortar:
+	switch order.orderKind {
+	case .GiantMortar:
 		BuildingUpdateGiantMortar(w, slot, deltaTime)
-	case Harbor:
+	case .SiegeTremor:
+		BuildingUpdateSiegeTremor(w, slot, deltaTime)
+	case .Starfall:
+		BuildingUpdateStarfall(w, slot, deltaTime)
+	case .NapalmBarrage:
+		BuildingUpdateNapalm(w, slot, deltaTime)
+	case .Blockade, .GlacierShell, .WaterBomber, .MiasmaBarrage:
 	}
 }
 
@@ -321,6 +512,137 @@ BuildingUpdateGiantMortar :: proc(w: ^World, slot: int, deltaTime: f32) {
 	if order.orderActive <= 0 {
 		order.orderActive = 0
 		order.orderTick = 0
+	}
+}
+
+BuildingUpdateSiegeTremor :: proc(w: ^World, slot: int, deltaTime: f32) {
+	order, isOrder := BuildingOrderState(w, slot)
+	if !isOrder do return
+	if order.orderActive <= 0 do return
+
+	order.orderActive = max(order.orderActive-deltaTime, 0)
+	order.orderTick -= deltaTime
+	for order.orderTick <= 0 {
+		OrderTremorPulse(w, slot)
+		order.orderTick += ORDER_TREMOR_TICK
+		if _, stillUsed := BuildingOrderState(w, slot); !stillUsed do return
+	}
+	if order.orderActive <= 0 {
+		order.orderActive = 0
+		order.orderTick = 0
+	}
+}
+
+BuildingUpdateNapalm :: proc(w: ^World, slot: int, deltaTime: f32) {
+	order, isOrder := BuildingOrderState(w, slot)
+	if !isOrder do return
+	if order.orderActive <= 0 do return
+
+	order.orderActive = max(order.orderActive-deltaTime, 0)
+	order.orderTick -= deltaTime
+	for order.orderTick <= 0 {
+		OrderNapalmFireShell(w, slot)
+		order.orderTick += ORDER_NAPALM_TICK
+		if _, stillUsed := BuildingOrderState(w, slot); !stillUsed do return
+	}
+	if order.orderActive <= 0 {
+		order.orderActive = 0
+		order.orderTick = 0
+	}
+}
+
+BuildingUpdateStarfall :: proc(w: ^World, slot: int, deltaTime: f32) {
+	order, isOrder := BuildingOrderState(w, slot)
+	if !isOrder do return
+	if order.orderActive <= 0 do return
+
+	order.orderActive = max(order.orderActive-deltaTime, 0)
+	order.orderTick -= deltaTime
+	if order.orderTick > 0 do return
+
+	OrderStarfallImpact(w, slot)
+	order.orderActive = 0
+	order.orderTick = 0
+}
+
+@(private = "file")
+OrderTremorPulse :: proc(w: ^World, slot: int) {
+	order, isOrder := BuildingOrderState(w, slot)
+	if !isOrder do return
+	kingdom := w.buildings.kingdom[slot]
+	x := order.orderTargetX
+	y := order.orderTargetY
+	OrderAreaDamage(
+		w,
+		kingdom,
+		x,
+		y,
+		ORDER_TREMOR_RADIUS,
+		ORDER_TREMOR_UNIT_DAMAGE,
+		ORDER_TREMOR_BUILDING_DAMAGE,
+	)
+	OrderImpactBurst(w, x, y)
+	for _ in 0..<3 {
+		angle := PRandom(w)*6.2831853
+		distance := ORDER_TREMOR_RADIUS*math.sqrt(PRandom(w))*0.8
+		OrderImpactBurst(
+			w,
+			WorldWrapPosition(x+math.cos(angle)*distance, f32(w.maxX)),
+			WorldWrapPosition(y+math.sin(angle)*distance, f32(w.maxY)),
+		)
+	}
+}
+
+@(private = "file")
+OrderNapalmFireShell :: proc(w: ^World, slot: int) {
+	order, isOrder := BuildingOrderState(w, slot)
+	if !isOrder do return
+	centerX, centerY := OrderBuildingCenter(w, slot)
+	angle := PRandom(w)*6.2831853
+	distance := math.sqrt(PRandom(w))*ORDER_NAPALM_RADIUS
+	impactX := WorldWrapPosition(order.orderTargetX+math.cos(angle)*distance, f32(w.maxX))
+	impactY := WorldWrapPosition(order.orderTargetY+math.sin(angle)*distance, f32(w.maxY))
+
+	WorldProjectileBurst(w, centerX, centerY, impactX, impactY, 60, 1.6, 0.5, 1.2, 0, 0, .Boulder)
+	OrderImpactBurst(w, impactX, impactY)
+	WorldFireIgnite(w, impactX, impactY, 1.5, 1.15)
+	for _ in 0..<2 {
+		jitterX := impactX+(PRandom(w)-0.5)*1.4
+		jitterY := impactY+(PRandom(w)-0.5)*1.4
+		WorldFireIgnite(w, jitterX, jitterY, 1.2, 1.0)
+	}
+}
+
+@(private = "file")
+OrderStarfallImpact :: proc(w: ^World, slot: int) {
+	order, isOrder := BuildingOrderState(w, slot)
+	if !isOrder do return
+	kingdom := w.buildings.kingdom[slot]
+	x := order.orderTargetX
+	y := order.orderTargetY
+	OrderAreaDamage(
+		w,
+		kingdom,
+		x,
+		y,
+		ORDER_STARFALL_RADIUS,
+		ORDER_STARFALL_UNIT_DAMAGE,
+		ORDER_STARFALL_BUILDING_DAMAGE,
+	)
+	for _ in 0..<6 {
+		OrderImpactBurst(w, x, y)
+	}
+	DecorationBlastBurst(w, x, y, ORDER_STARFALL_RADIUS*0.7)
+	for _ in 0..<10 {
+		angle := PRandom(w)*6.2831853
+		distance := ORDER_STARFALL_RADIUS*math.sqrt(PRandom(w))*0.75
+		WorldFireIgnite(
+			w,
+			WorldWrapPosition(x+math.cos(angle)*distance, f32(w.maxX)),
+			WorldWrapPosition(y+math.sin(angle)*distance, f32(w.maxY)),
+			1.6,
+			1.2,
+		)
 	}
 }
 

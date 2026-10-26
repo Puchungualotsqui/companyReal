@@ -833,6 +833,7 @@ UnitApplyTownEffects :: proc(w: ^World, unitSlot: int, housed: bool, shortageEpo
 	w.units[unitSlot].effects[.NoHome] = !housed
 	w.units[unitSlot].effects[.NoFood] = false
 	w.units[unitSlot].effects[.NoWater] = false
+	w.units[unitSlot].effects[.Poisoned] = false
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	seed := u64(kingdomSlot*TOWN_CAPACITY+townSlot)
 	foodRoll := WorldNoiseHash(unitSlot, shortageEpoch, seed+301)
@@ -842,6 +843,7 @@ UnitApplyTownEffects :: proc(w: ^World, unitSlot: int, housed: bool, shortageEpo
 
 	regen: f32 = 0.25
 	if !w.units[unitSlot].effects[.NoHome] do regen = 1
+	if w.units[unitSlot].poisonRemaining > 0 do regen = 0
 	w.units[unitSlot].health = min(UnitMaxHealth(w, unitSlot), w.units[unitSlot].health+regen*deltaTime)
 }
 
@@ -849,6 +851,7 @@ UnitClearTownEffects :: proc(w: ^World, unitSlot: int) {
 	w.units[unitSlot].effects[.NoHome] = true
 	w.units[unitSlot].effects[.NoWater] = false
 	w.units[unitSlot].effects[.NoFood] = false
+	w.units[unitSlot].effects[.Poisoned] = false
 }
 
 UnitFindRoamingTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int, bool) {

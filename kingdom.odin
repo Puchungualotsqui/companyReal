@@ -137,7 +137,7 @@ TOWN_ERA_REWARDS := [TOWN_MILESTONE_TIER_COUNT][2]MilestoneOption{
 		{
 			path = .Mystics,
 			units = {.Mage, .CombatBuilder},
-			unlocks = {.MagicSchool, .Cannon, .Wall},
+			unlocks = {.MagicSchool, .Cannon, .Wall, .AlchemistWorkshop},
 		},
 	},
 	{
@@ -149,7 +149,7 @@ TOWN_ERA_REWARDS := [TOWN_MILESTONE_TIER_COUNT][2]MilestoneOption{
 		{
 			path = .Siege,
 			units = {.Catapult},
-			unlocks = {.SiegeWorkshop, .Cannon, .GiantMortar},
+			unlocks = {.SiegeWorkshop, .Cannon, .GiantMortar, .FireworksGuild},
 		},
 	},
 	{
@@ -185,7 +185,7 @@ TOWN_ERA_REWARDS := [TOWN_MILESTONE_TIER_COUNT][2]MilestoneOption{
 		{
 			path = .Dominion,
 			units = {.Mage, .Giant},
-			unlocks = {.MagicSchool, .Watchtower},
+			unlocks = {.MagicSchool, .Watchtower, .StarfallSpire},
 		},
 	},
 }

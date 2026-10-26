@@ -386,7 +386,7 @@ AIChooseMilestoneOption :: proc(
 
 AICombatBuildingChoice :: proc(w: ^World, kingdom, townSlot: int) -> (BuildingKind, bool) {
 	town := &w.kingdoms[kingdom].towns[townSlot]
-	kinds := [3]BuildingKind{.Watchtower, .Cannon, .GiantMortar}
+	kinds := [5]BuildingKind{.Watchtower, .Cannon, .GiantMortar, .FireworksGuild, .StarfallSpire}
 	for kind in kinds {
 		if !(kind in town.unlockedBuildings) do continue
 		if town.buildingCounts[kind] > 0 do continue

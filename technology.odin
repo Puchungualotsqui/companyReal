@@ -374,13 +374,21 @@ UnitOnWaterTile :: proc(w: ^World, unitSlot: int) -> bool {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return false
 	tileX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
 	tileY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
-	tile := w.ground[tileX][tileY].type
-	if tile != .Water && tile != .FreshWater do return false
 	index := tileX*int(w.maxY)+tileY
 	if slot := w.tileBuilding[index]; slot >= 0 && w.buildingUsed[slot] {
 		if BuildingKindOf(w.buildings.type[slot]) == .Bridge do return false
 	}
-	return true
+	if hazardKind, hasHazard := WorldHazardKindAt(w, tileX, tileY); hasHazard {
+		switch hazardKind {
+		case .Ice:
+			return false
+		case .Flood:
+			return true
+		case .None:
+		}
+	}
+	tile := w.ground[tileX][tileY].type
+	return tile == .Water || tile == .FreshWater
 }
 
 UnitSeaSpeedMultiplier :: proc(w: ^World, unitSlot: int) -> f32 {

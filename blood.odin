@@ -99,6 +99,8 @@ DamageKind :: enum {
 	Projectile,
 	Area,
 	Fire,
+	Drowning,
+	Poison,
 }
 
 BloodInit :: proc(w: ^World) -> bool {
@@ -649,6 +651,40 @@ UnitApplyDamage :: proc(
 	case .Melee, .Projectile, .Area:
 		BloodHit(w, x, y, dirX, dirY, damage, type)
 		if dead do BloodDeath(w, x, y, dirX, dirY, damage, type, faction)
+	case .Drowning:
+		if PRandom(w) < 0.35 {
+			ParticleSpawn(w, Particle{
+				x = x+(PRandom(w)-0.5)*0.35,
+				y = y+(PRandom(w)-0.5)*0.35,
+				z = PRandomRange(w, 0.05, 0.35),
+				vx = (PRandom(w)-0.5)*1.4,
+				vy = (PRandom(w)-0.5)*1.4,
+				vz = PRandomRange(w, 0.8, 2.4),
+				life = PRandomRange(w, 0.25, 0.7),
+				size = PRandomRange(w, 0.10, 0.22),
+				drag = 1.5,
+				gravity = 6,
+				kind = .Splash,
+				tint = rl.Color{206, 232, 242, 255},
+			})
+		}
+	case .Poison:
+		if PRandom(w) < 0.30 {
+			ParticleSpawn(w, Particle{
+				x = x+(PRandom(w)-0.5)*0.4,
+				y = y+(PRandom(w)-0.5)*0.4,
+				z = PRandomRange(w, 0.3, 0.9),
+				vx = (PRandom(w)-0.5)*0.6,
+				vy = (PRandom(w)-0.5)*0.6,
+				vz = PRandomRange(w, 0.5, 1.4),
+				life = PRandomRange(w, 0.6, 1.4),
+				size = PRandomRange(w, 0.10, 0.22),
+				drag = 1.2,
+				gravity = -1,
+				kind = .Smoke,
+				tint = rl.Color{122, 194, 106, 220},
+			})
+		}
 	}
 
 	if dead {
@@ -686,9 +722,9 @@ BloodBleedTick :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 
 BuildingStoneMaterial :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .TownHall, .Wall, .Watchtower, .Cannon, .Bridge, .Path, .DistrictHall, .GiantMortar, .Harbor:
+	case .TownHall, .Wall, .Watchtower, .Cannon, .Bridge, .Path, .DistrictHall, .GiantMortar, .Harbor, .StarfallSpire:
 		return true
-	case .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Granary:
+	case .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Granary, .AlchemistWorkshop, .FireworksGuild:
 		return false
 	}
 	unreachable()

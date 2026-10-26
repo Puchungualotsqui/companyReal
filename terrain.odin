@@ -2,6 +2,7 @@ package main
 
 import rl "vendor:raylib"
 import "core:mem"
+import "core:math"
 
 TERRAIN_TILE_VARIANTS :: 8
 TERRAIN_CHUNK_TILES :: 16
@@ -404,5 +405,347 @@ TerrainSpeckles :: proc(art: ^Art, variant: int, seed: u64, light, dark: rl.Colo
 		color := light
 		if WorldNoiseHash(x, y, seed+2) < 0.55 do color = dark
 		ArtPixel(art, x, y, color)
+	}
+}
+
+// --- temporary terrain ----------------------------------------------------
+
+// Ice and flood live outside the ground grid so the original biome is restored
+// when the effect ends. hazardTile maps a tile to its cell for O(1) lookups.
+HAZARD_CAPACITY :: 4096
+FLOOD_DROWN_DAMAGE_PER_SECOND :: 8.0
+
+IceStage :: enum {
+	Solid,
+	Cracked,
+	Patchy,
+	Slush,
+}
+
+HazardKind :: enum {
+	None,
+	Ice,
+	Flood,
+}
+
+HazardCell :: struct {
+	x, y:      int,
+	kind:      HazardKind,
+	remaining: f32,
+	duration:  f32,
+	seed:      u64,
+	stage:     IceStage,
+}
+
+HazardIceStage :: proc(x, y: int, remaining, duration: f32) -> IceStage {
+	ratio: f32 = 1
+	if duration > 0 do ratio = remaining/duration
+	adjusted := ratio+(WorldNoiseHash(x, y, 0x1CE5)-0.5)*0.18
+	stage := IceStage.Solid
+	if adjusted < 0.65 do stage = .Cracked
+	if adjusted < 0.4 do stage = .Patchy
+	if adjusted < 0.18 do stage = .Slush
+	return stage
+}
+
+WorldHazardSlotAt :: proc(w: ^World, x, y: int) -> int {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || len(w.hazardTile) == 0 do return -1
+	wrappedX := WorldWrapCoordinate(x, worldWidth)
+	wrappedY := WorldWrapCoordinate(y, worldHeight)
+	return int(w.hazardTile[wrappedX*worldHeight+wrappedY])
+}
+
+WorldHazardKindAt :: proc(w: ^World, x, y: int) -> (HazardKind, bool) {
+	slot := WorldHazardSlotAt(w, x, y)
+	if slot < 0 || slot >= HAZARD_CAPACITY || !w.hazardUsed[slot] do return .None, false
+	return w.hazardCells.kind[slot], true
+}
+
+@(private = "file")
+WorldHazardSpawnCell :: proc(
+	w: ^World,
+	tileX, tileY: int,
+	kind: HazardKind,
+	duration: f32,
+	seed: u64,
+) -> int {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || len(w.hazardTile) == 0 do return -1
+	wrappedX := WorldWrapCoordinate(tileX, worldWidth)
+	wrappedY := WorldWrapCoordinate(tileY, worldHeight)
+	index := wrappedX*worldHeight+wrappedY
+	if w.hazardTile[index] >= 0 do return -1
+
+	slot := -1
+	for step in 0..<HAZARD_CAPACITY {
+		candidate := (w.hazardCursor+step)%HAZARD_CAPACITY
+		if !w.hazardUsed[candidate] {
+			slot = candidate
+			break
+		}
+	}
+	if slot < 0 do return -1
+
+	w.hazardCells.x[slot] = wrappedX
+	w.hazardCells.y[slot] = wrappedY
+	w.hazardCells.kind[slot] = kind
+	w.hazardCells.remaining[slot] = duration
+	w.hazardCells.duration[slot] = duration
+	w.hazardCells.seed[slot] = seed
+	w.hazardCells.stage[slot] = .Solid
+	w.hazardUsed[slot] = true
+	w.hazardCursor = (slot+1)%HAZARD_CAPACITY
+	w.hazardTile[index] = i32(slot)
+	return slot
+}
+
+@(private = "file")
+WorldHazardDespawn :: proc(w: ^World, slot: int) {
+	if slot < 0 || slot >= HAZARD_CAPACITY || !w.hazardUsed[slot] do return
+	x := w.hazardCells.x[slot]
+	y := w.hazardCells.y[slot]
+	worldHeight := int(w.maxY)
+	index := x*worldHeight+y
+	if index >= 0 && index < len(w.hazardTile) && int(w.hazardTile[index]) == slot {
+		w.hazardTile[index] = -1
+	}
+
+	if w.hazardCells.kind[slot] == .Ice {
+		for _ in 0..<2 {
+			ParticleSpawn(w, Particle{
+				x = f32(x)+PRandom(w),
+				y = f32(y)+PRandom(w),
+				z = 0.1,
+				vx = (PRandom(w)-0.5)*0.5,
+				vy = (PRandom(w)-0.5)*0.5,
+				vz = PRandomRange(w, 0.4, 1.1),
+				life = PRandomRange(w, 0.3, 0.7),
+				size = PRandomRange(w, 0.08, 0.16),
+				drag = 2,
+				gravity = 3,
+				kind = .Spark,
+				tint = rl.Color{208, 242, 255, 255},
+			})
+		}
+	} else if w.hazardCells.kind[slot] == .Flood {
+		ParticleSpawn(w, Particle{
+			x = f32(x)+PRandom(w),
+			y = f32(y)+PRandom(w),
+			z = 0.1,
+			vx = (PRandom(w)-0.5)*0.6,
+			vy = (PRandom(w)-0.5)*0.6,
+			vz = PRandomRange(w, 0.4, 1.4),
+			life = PRandomRange(w, 0.3, 0.8),
+			size = PRandomRange(w, 0.10, 0.22),
+			drag = 1.5,
+			gravity = 5,
+			kind = .Splash,
+			tint = rl.Color{196, 226, 240, 255},
+		})
+	}
+	w.hazardUsed[slot] = false
+}
+
+WorldHazardSpawnCircle :: proc(
+	w: ^World,
+	centerX, centerY, radius: f32,
+	kind: HazardKind,
+	minDuration, maxDuration: f32,
+	salt: u64,
+) {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
+	tileCenterX := int(WorldWrapPosition(centerX, f32(worldWidth)))
+	tileCenterY := int(WorldWrapPosition(centerY, f32(worldHeight)))
+	reach := int(math.ceil(radius))
+	spawned := 0
+	for offsetX in -reach..=reach {
+		for offsetY in -reach..=reach {
+			if f32(offsetX*offsetX+offsetY*offsetY) > radius*radius do continue
+			tileX := WorldWrapCoordinate(tileCenterX+offsetX, worldWidth)
+			tileY := WorldWrapCoordinate(tileCenterY+offsetY, worldHeight)
+			index := tileX*worldHeight+tileY
+
+			if slot := w.tileBuilding[index]; slot >= 0 && slot < BUILDING_CAPACITY && w.buildingUsed[slot] {
+				continue
+			}
+			if kind == .Flood {
+				switch w.ground[tileX][tileY].type {
+				case .Water, .FreshWater, .River:
+					continue
+				case .Ground, .FertileGround, .Sand, .Forest, .Hill, .Desert:
+				}
+				WorldFireExtinguishAt(w, tileX, tileY)
+			}
+
+			roll := WorldNoiseHash(tileX, tileY, salt)
+			duration := minDuration+roll*(maxDuration-minDuration)
+			if WorldHazardSpawnCell(w, tileX, tileY, kind, duration, salt+u64(tileX*31+tileY)) >= 0 {
+				spawned += 1
+			}
+		}
+	}
+	if spawned == 0 do return
+
+	w.navigationRevision += 1
+	for _ in 0..<10 {
+		angle := PRandom(w)*6.2831853
+		distance := radius*math.sqrt(PRandom(w))*0.8
+		x := centerX+math.cos(angle)*distance
+		y := centerY+math.sin(angle)*distance
+		if kind == .Flood {
+			ParticleSpawn(w, Particle{
+				x = x,
+				y = y,
+				z = 0.15,
+				vx = math.cos(angle)*PRandomRange(w, 0.4, 1.4),
+				vy = math.sin(angle)*PRandomRange(w, 0.4, 1.4),
+				vz = PRandomRange(w, 0.6, 2.0),
+				life = PRandomRange(w, 0.4, 0.9),
+				size = PRandomRange(w, 0.10, 0.24),
+				drag = 1.6,
+				gravity = 6,
+				kind = .Splash,
+				tint = rl.Color{196, 226, 240, 255},
+			})
+		} else {
+			ParticleSpawn(w, Particle{
+				x = x,
+				y = y,
+				z = PRandomRange(w, 0.2, 0.8),
+				vx = math.cos(angle)*PRandomRange(w, 0.2, 1.0),
+				vy = math.sin(angle)*PRandomRange(w, 0.2, 1.0),
+				vz = PRandomRange(w, 0.3, 1.3),
+				life = PRandomRange(w, 0.4, 1.1),
+				size = PRandomRange(w, 0.08, 0.18),
+				drag = 1.5,
+				gravity = 1.5,
+				kind = .Spark,
+				tint = rl.Color{208, 242, 255, 255},
+			})
+			if WorldNoiseHash(int(x), int(y), salt+9) < 0.5 {
+				ParticleSpawn(w, Particle{
+					x = x,
+					y = y,
+					z = PRandomRange(w, 0.2, 0.8),
+					vx = (PRandom(w)-0.5)*0.3,
+					vy = (PRandom(w)-0.5)*0.3,
+					vz = PRandomRange(w, 0.2, 0.7),
+					life = PRandomRange(w, 0.7, 1.4),
+					size = PRandomRange(w, 0.28, 0.5),
+					drag = 1.4,
+					gravity = -0.2,
+					kind = .Dust,
+					tint = rl.Color{188, 230, 248, 175},
+				})
+			}
+		}
+	}
+}
+
+WorldHazardUpdate :: proc(w: ^World, deltaTime: f32) {
+	changed := false
+	for slot in 0..<HAZARD_CAPACITY {
+		if !w.hazardUsed[slot] do continue
+		w.hazardCells.remaining[slot] -= deltaTime
+		if w.hazardCells.remaining[slot] <= 0 {
+			WorldHazardDespawn(w, slot)
+			changed = true
+			continue
+		}
+
+		tileX := w.hazardCells.x[slot]
+		tileY := w.hazardCells.y[slot]
+		if w.hazardCells.kind[slot] == .Ice {
+			stage := HazardIceStage(
+				tileX,
+				tileY,
+				w.hazardCells.remaining[slot],
+				w.hazardCells.duration[slot],
+			)
+			if stage != w.hazardCells.stage[slot] {
+				w.hazardCells.stage[slot] = stage
+				ParticleSpawn(w, Particle{
+					x = f32(tileX)+PRandom(w),
+					y = f32(tileY)+PRandom(w),
+					z = 0.2,
+					vx = (PRandom(w)-0.5)*0.8,
+					vy = (PRandom(w)-0.5)*0.8,
+					vz = PRandomRange(w, 0.6, 1.6),
+					life = PRandomRange(w, 0.4, 0.9),
+					size = PRandomRange(w, 0.07, 0.13),
+					drag = 0.8,
+					gravity = 18,
+					bounce = 0.2,
+					kind = .StoneChip,
+					tint = rl.Color{214, 244, 255, 255},
+				})
+				for _ in 0..<2 {
+					ParticleSpawn(w, Particle{
+						x = f32(tileX)+PRandom(w),
+						y = f32(tileY)+PRandom(w),
+						z = 0.15,
+						vx = (PRandom(w)-0.5)*0.7,
+						vy = (PRandom(w)-0.5)*0.7,
+						vz = PRandomRange(w, 0.4, 1.2),
+						life = PRandomRange(w, 0.3, 0.7),
+						size = PRandomRange(w, 0.07, 0.15),
+						drag = 2,
+						gravity = 4,
+						kind = .Spark,
+						tint = rl.Color{202, 238, 255, 255},
+					})
+				}
+			}
+		} else if WorldNoiseHash(slot, int(w.simulationTime*6), 0xA31D) < 0.05 {
+			ParticleSpawn(w, Particle{
+				x = f32(tileX)+PRandom(w),
+				y = f32(tileY)+PRandom(w),
+				z = 0.05,
+				vx = 0,
+				vy = 0,
+				vz = PRandomRange(w, 0.2, 0.5),
+				life = PRandomRange(w, 0.25, 0.5),
+				size = PRandomRange(w, 0.08, 0.16),
+				drag = 1,
+				gravity = 3,
+				kind = .Splash,
+				tint = rl.Color{196, 226, 240, 255},
+			})
+		}
+	}
+	if changed do w.navigationRevision += 1
+
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] || w.units.type[unitSlot] == nil do continue
+		if UnitHiddenInside(w, unitSlot) do continue
+		unitType := w.units.type[unitSlot]
+		kingdom := w.units.kingdome[unitSlot]
+		if UnitCanCrossWater(w, unitType, kingdom) do continue
+		tileX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
+		tileY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+		tileIndex := tileX*int(w.maxY)+tileY
+		if slot := w.tileBuilding[tileIndex]; slot >= 0 && w.buildingUsed[slot] do continue
+		hazardKind, hasHazard := WorldHazardKindAt(w, tileX, tileY)
+		if hasHazard && hazardKind == .Ice do continue
+		drowning := hasHazard && hazardKind == .Flood
+		if !hasHazard {
+			tile := w.ground[tileX][tileY].type
+			drowning = tile == .Water || tile == .FreshWater
+		}
+		if drowning {
+			UnitApplyDamage(
+				w,
+				unitSlot,
+				FLOOD_DROWN_DAMAGE_PER_SECOND*deltaTime,
+				w.units.x[unitSlot],
+				w.units.y[unitSlot],
+				.Drowning,
+			)
+		}
 	}
 }

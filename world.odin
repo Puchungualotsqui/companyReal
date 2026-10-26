@@ -25,6 +25,13 @@ World :: struct {
 	fireCursor: int,
 	fireCount: int,
 	unitsBurning: int,
+	hazardCells: #soa [HAZARD_CAPACITY]HazardCell,
+	hazardUsed: [HAZARD_CAPACITY]bool,
+	hazardCursor: int,
+	hazardTile: []i32,
+	gasClouds: #soa [GAS_CLOUD_CAPACITY]GasCloud,
+	gasCloudUsed: [GAS_CLOUD_CAPACITY]bool,
+	gasCloudCursor: int,
 	blood: BloodField,
 	particles: #soa [PARTICLE_CAPACITY]Particle,
 	particleUsed: [PARTICLE_CAPACITY]bool,
@@ -90,6 +97,10 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	for i in 0..<nodeCount {
 		w.tileBuilding[i] = -1
 	}
+	w.hazardTile = make([]i32, nodeCount)
+	for i in 0..<nodeCount {
+		w.hazardTile[i] = -1
+	}
 	for i in 0..<FLOW_FIELD_CAPACITY {
 		w.flowFields[i].targetKingdom = -1
 		w.flowFields[i].targetTown = -1
@@ -118,6 +129,7 @@ WorldDeinit :: proc(w: ^World) {
 	}
 	SpatialIndexDeinit(w)
 	delete(w.tileBuilding)
+	delete(w.hazardTile)
 	WorldNavigationDeinit(w)
 	for &x in w.ground {
 		delete(x)
@@ -192,6 +204,7 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 		.NoHome = false,
 		.NoWater = false,
 		.NoFood = false,
+		.Poisoned = false,
 	}
 
 	w.units[i].path = make([dynamic]int, 0, 250)

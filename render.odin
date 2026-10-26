@@ -242,6 +242,7 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 		firstCopyY,
 		lastCopyY,
 	)
+	WorldRenderHazards(w, renderer, camera)
 	WorldRenderSprites(
 		w,
 		renderer,
@@ -988,7 +989,7 @@ WorldRenderTechOverlays :: proc(
 					rl.Color{176, 68, 64, 230},
 				)
 			}
-		case .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .DistrictHall, .GiantMortar, .Harbor, .Granary:
+		case .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .DistrictHall, .GiantMortar, .Harbor, .Granary, .AlchemistWorkshop, .FireworksGuild, .StarfallSpire:
 		}
 	}
 
@@ -1052,4 +1053,80 @@ WorldFloor :: proc(value: f32) -> int {
 	result := int(value)
 	if f32(result) > value do result -= 1
 	return result
+}
+
+// Temporary terrain and poison clouds are drawn over the ground but under
+// sprites so units stand in the water and beneath the gas.
+WorldRenderHazards :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
+	if renderer.sprites.iceTile[.Solid].id == 0 || renderer.sprites.floodTile[.Calm].id == 0 {
+		return
+	}
+	halfWidth := f32(rl.GetScreenWidth())/(2*camera.zoom)
+	halfHeight := f32(rl.GetScreenHeight())/(2*camera.zoom)
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+
+	for slot in 0..<HAZARD_CAPACITY {
+		if !w.hazardUsed[slot] do continue
+		x := w.hazardCells.x[slot]
+		y := w.hazardCells.y[slot]
+		if !FogTileExplored(w, x, y) do continue
+		tileX := f32(x)+0.5
+		tileY := f32(y)+0.5
+		if abs(WorldShortestWrappedDelta(tileX-camera.target.x, worldWidth)) > halfWidth+1 ||
+			abs(WorldShortestWrappedDelta(tileY-camera.target.y, worldHeight)) > halfHeight+1 {
+			continue
+		}
+
+		texture: rl.Texture2D
+		switch w.hazardCells.kind[slot] {
+		case .Ice:
+			stage := HazardIceStage(
+				x,
+				y,
+				w.hazardCells.remaining[slot],
+				w.hazardCells.duration[slot],
+			)
+			texture = renderer.sprites.iceTile[stage]
+		case .Flood:
+			frame := FloodFrame(int(w.simulationTime*2+f32(w.hazardCells.seed[slot]%3))%3)
+			texture = renderer.sprites.floodTile[frame]
+		case .None:
+			continue
+		}
+		if texture.id == 0 do continue
+		source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+		rl.DrawTexturePro(
+			texture,
+			source,
+			rl.Rectangle{f32(x), f32(y), 1, 1},
+			rl.Vector2{0, 0},
+			0,
+			rl.WHITE,
+		)
+	}
+
+	for cloud in 0..<GAS_CLOUD_CAPACITY {
+		if !w.gasCloudUsed[cloud] do continue
+		x := w.gasClouds.x[cloud]
+		y := w.gasClouds.y[cloud]
+		radius := w.gasClouds.radius[cloud]
+		if abs(WorldShortestWrappedDelta(x-camera.target.x, worldWidth)) > halfWidth+radius ||
+			abs(WorldShortestWrappedDelta(y-camera.target.y, worldHeight)) > halfHeight+radius {
+			continue
+		}
+		if !FogTileExplored(w, int(x), int(y)) do continue
+		lifeRatio: f32 = 1
+		if w.gasClouds.duration[cloud] > 0 {
+			lifeRatio = clamp(w.gasClouds.remaining[cloud]/w.gasClouds.duration[cloud], 0, 1)
+		}
+		pulse := 0.75+0.25*math.sin(w.simulationTime*2.5+f32(cloud))
+		rl.DrawCircleV(rl.Vector2{x, y}, radius, rl.Color{82, 166, 74, u8(10+16*lifeRatio)})
+		rl.DrawCircleLines(
+			i32(x),
+			i32(y),
+			radius,
+			rl.Color{110, 194, 92, u8((24+36*lifeRatio)*pulse)},
+		)
+	}
 }

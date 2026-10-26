@@ -127,12 +127,14 @@ UI_CONVERSION_KINDS := [len(UnitKind)-1]UnitKind{
 	.Rogue,
 }
 
-UI_COMBAT_BUILD_KINDS := [5]BuildingKind{
+UI_COMBAT_BUILD_KINDS := [7]BuildingKind{
 	.Wall,
 	.Bridge,
 	.Watchtower,
 	.Cannon,
 	.GiantMortar,
+	.FireworksGuild,
+	.StarfallSpire,
 }
 
 UIStat :: struct {
@@ -329,6 +331,12 @@ UIBuildingName :: proc(kind: BuildingKind) -> cstring {
 		return "Harbor"
 	case .Granary:
 		return "Granary"
+	case .AlchemistWorkshop:
+		return "Alchemist's Workshop"
+	case .FireworksGuild:
+		return "Fireworks Guild"
+	case .StarfallSpire:
+		return "Starfall Spire"
 	}
 	unreachable()
 }
@@ -384,11 +392,11 @@ UIBuildingDescription :: proc(kind: BuildingKind) -> cstring {
 	case .ArcheryRange:
 		return "Trains archers."
 	case .MagicSchool:
-		return "Trains mages."
+		return "Trains mages. Can call a Glacier Shell."
 	case .GiantPen:
 		return "Trains giants."
 	case .SiegeWorkshop:
-		return "Trains catapults."
+		return "Trains catapults. Can trigger a Siege Tremor."
 	case .TurtlePen:
 		return "Trains turtles."
 	case .ThievesGuild:
@@ -403,6 +411,12 @@ UIBuildingDescription :: proc(kind: BuildingKind) -> cstring {
 		return "Coastal trade, vision and naval orders."
 	case .Granary:
 		return "Improves food and town growth."
+	case .AlchemistWorkshop:
+		return "Brews the miasma used for poison barrages."
+	case .FireworksGuild:
+		return "Launches napalm barrages across the field."
+	case .StarfallSpire:
+		return "Calls a meteor down on a chosen area."
 	}
 	unreachable()
 }
@@ -515,7 +529,7 @@ UIUnitFromTraining :: proc(kind: BuildingKind) -> UnitKind {
 		return .Turtle
 	case .ThievesGuild:
 		return .Rogue
-	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Watchtower, .Path, .DistrictHall, .GiantMortar, .Harbor, .Granary:
+	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Watchtower, .Path, .DistrictHall, .GiantMortar, .Harbor, .Granary, .AlchemistWorkshop, .FireworksGuild, .StarfallSpire:
 		return .Villager
 	}
 	unreachable()
@@ -848,7 +862,9 @@ UIStatCount :: proc(w: ^World, selection: Selection) -> int {
 		}
 		kind := BuildingKindOf(w.buildings[selection.slot].type)
 		if kind == .DistrictHall do return 3
-		if kind == .GiantMortar do return 3
+		if kind == .GiantMortar || kind == .AlchemistWorkshop || kind == .FireworksGuild || kind == .StarfallSpire {
+			return 3
+		}
 		if kind == .Harbor || kind == .Granary do return 2
 		if BuildingIsTraining(kind) do return 2
 		return 1
@@ -2115,8 +2131,9 @@ UIFillStats :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, stats: ^[
 			stats[1] = {"Growth", "+10%", UI_COLOR_GOOD, {}}
 			return 2
 		}
-		if kind == .GiantMortar {
-			order, isOrder := building.type.(BuildingOrder)
+		if kind == .GiantMortar || kind == .AlchemistWorkshop ||
+			kind == .FireworksGuild || kind == .StarfallSpire {
+			order, isOrder := BuildingOrderState(w, ui.selection.slot)
 			if isOrder && order.orderActive > 0 {
 				stats[1] = {"Order", fmt.ctprintf("Firing  %ds", int(math.ceil(order.orderActive))), UI_COLOR_ATTACK, {}}
 			} else if isOrder && order.orderCooldown > 0 {
@@ -2124,7 +2141,7 @@ UIFillStats :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, stats: ^[
 			} else {
 				stats[1] = {"Order", "Ready", UI_COLOR_GOOD, {}}
 			}
-			stats[2] = {"Bombard", "10s fire / 30s cooldown", UI_COLOR_TEXT, {}}
+			stats[2] = {"Ability", isOrder ? OrderName(order.orderKind) : "None", UI_COLOR_TEXT, {}}
 			return 3
 		}
 		if kind == .DistrictHall {
@@ -2165,6 +2182,8 @@ UIUnitEffectName :: proc(effect: UnitEffects) -> cstring {
 		return "Water shortage"
 	case .NoFood:
 		return "Food shortage"
+	case .Poisoned:
+		return "Poisoned"
 	}
 	unreachable()
 }
@@ -2177,6 +2196,8 @@ UIUnitEffectText :: proc(effect: UnitEffects) -> cstring {
 		return "Water shortage: movement speed -30%."
 	case .NoFood:
 		return "Food shortage: the town cannot feed everyone."
+	case .Poisoned:
+		return "Poison: losing health and dealing less damage."
 	}
 	unreachable()
 }
@@ -3620,7 +3641,7 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 	title := OrderName(kind)
 	status: cstring
 	if active > 0 {
-		status = fmt.ctprintf("Bombarding  -  %ds remaining", int(math.ceil(active)))
+		status = fmt.ctprintf("Active  -  %ds remaining", int(math.ceil(active)))
 	} else if ready > 0 {
 		status = fmt.ctprintf("Ready  -  %d of %d built", ready, total)
 	} else {
@@ -3643,9 +3664,16 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 	UIText(status, box.x+UI_PAD, box.y+58, active > 0 ? UI_COLOR_ATTACK : UI_COLOR_DIM)
 	if kind == .Blockade {
 		UIText("Blockades for 90s, then a 180s cooldown.", box.x+UI_PAD, box.y+80, UI_COLOR_DIM)
+	} else if OrderDuration(kind) > 0 {
+		UIText(
+			fmt.ctprintf("Active for %ds, then %ds cooldown.", int(OrderDuration(kind)), int(OrderCooldownSeconds(kind))),
+			box.x+UI_PAD,
+			box.y+80,
+			UI_COLOR_DIM,
+		)
 	} else {
 		UIText(
-			fmt.ctprintf("Fires for %ds, then %ds cooldown.", int(OrderDuration(kind)), int(OrderCooldownSeconds(kind))),
+			fmt.ctprintf("Cooldown %ds.", int(OrderCooldownSeconds(kind))),
 			box.x+UI_PAD,
 			box.y+80,
 			UI_COLOR_DIM,
@@ -3706,8 +3734,7 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 	// red firing. The source the strike will use is highlighted.
 	for slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != local do continue
-		orderKind, isOrder := BuildingOrderKind(BuildingKindOf(w.buildings[slot].type))
-		if !isOrder || orderKind != ui.orderKind do continue
+		if !BuildingOrderSupports(BuildingKindOf(w.buildings[slot].type), ui.orderKind) do continue
 		order, hasOrder := BuildingOrderState(w, slot)
 		if !hasOrder do continue
 
@@ -3755,8 +3782,7 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 	// Cooldown seconds above recharging sources.
 	for slot in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != local do continue
-		orderKind, isOrder := BuildingOrderKind(BuildingKindOf(w.buildings[slot].type))
-		if !isOrder || orderKind != ui.orderKind do continue
+		if !BuildingOrderSupports(BuildingKindOf(w.buildings[slot].type), ui.orderKind) do continue
 		order, hasOrder := BuildingOrderState(w, slot)
 		if !hasOrder || order.orderActive > 0 || order.orderCooldown <= 0 do continue
 
@@ -3801,8 +3827,7 @@ UIDrawOrderActiveAreas :: proc(w: ^World, camera: rl.Camera2D) {
 		deltaY := WorldShortestWrappedDelta(centerY-sourceY, f32(w.maxY))
 		pulse := 0.55+0.45*math.sin(w.simulationTime*5)
 		color := rl.Color{226, 96, 76, u8(90+80*pulse)}
-		kind, _ := BuildingOrderKind(BuildingKindOf(w.buildings[slot].type))
-		radius := OrderRadius(kind)
+		radius := OrderRadius(order.orderKind)
 
 		rl.BeginMode2D(camera)
 		rl.DrawCircleV(rl.Vector2{centerX, centerY}, radius, rl.Color{color.r, color.g, color.b, 28})

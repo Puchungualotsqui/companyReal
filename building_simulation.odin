@@ -345,6 +345,15 @@ TownBuilderConstruct :: proc(w: ^World, kingdomSlot, townSlot: int, canGrow: boo
 		}
 		if startedTraining do continue
 
+		if town.buildingCounts[.MagicSchool] > 0 &&
+			town.buildingCounts[.AlchemistWorkshop] == 0 &&
+			TownConstructionKindCount(w, kingdomSlot, townSlot, .AlchemistWorkshop) == 0 {
+			if TownBuilderStartBuilding(w, kingdomSlot, townSlot, BuildingTypeFromKind(.AlchemistWorkshop)) {
+				startedAny = true
+				continue
+			}
+		}
+
 		break
 	}
 	return startedAny
@@ -451,6 +460,8 @@ TownConstructionResetBuilders :: proc(w: ^World, kingdomSlot, townSlot, siteInde
 }
 
 BuildingBuildSeconds :: proc(kind: BuildingKind) -> f32 {
+	// Order infrastructure is deliberately slow to raise.
+	if kind == .AlchemistWorkshop do return 90
 	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
 	seconds := 4+f32(width*height)*1.5+BuildingWoodCost(kind)*0.25
 	// Town halls are ordered by the player/AI; every other town building is

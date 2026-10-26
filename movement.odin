@@ -799,6 +799,15 @@ WorldTileWalkableBase :: proc(w: ^World, x, y: int, unitType: UnitType, unitKing
 		}
 		return BuildingWalkable(w.buildings[buildingSlot].type)
 	}
+	if hazardKind, hasHazard := WorldHazardKindAt(w, wrappedX, wrappedY); hasHazard {
+		switch hazardKind {
+		case .Ice:
+			return true
+		case .Flood:
+			return UnitCanCrossWater(w, unitType, unitKingdom)
+		case .None:
+		}
+	}
 	tile := w.ground[wrappedX][wrappedY].type
 	if UnitValidTileType(unitType, tile) do return true
 	if (tile == .Water || tile == .FreshWater) && UnitCanCrossWater(w, unitType, unitKingdom) {

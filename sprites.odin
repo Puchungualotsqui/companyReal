@@ -70,7 +70,7 @@ C_ARCANE_GLOW := rl.Color{128, 226, 255, 255}
 C_WHITE := rl.Color{238, 238, 244, 255}
 C_EFFECT_BAD := rl.Color{214, 62, 52, 255}
 
-ALL_BUILDING_KINDS := [18]BuildingKind{
+ALL_BUILDING_KINDS := [21]BuildingKind{
 	.TownHall,
 	.Home,
 	.Farmland,
@@ -89,6 +89,9 @@ ALL_BUILDING_KINDS := [18]BuildingKind{
 	.GiantMortar,
 	.Harbor,
 	.Granary,
+	.AlchemistWorkshop,
+	.FireworksGuild,
+	.StarfallSpire,
 }
 
 ALL_UNIT_KINDS := [13]UnitKind{
@@ -412,7 +415,7 @@ CreateGlowTexture :: proc() -> rl.Texture2D {
 // Buildings with lit interiors and windows cast a warm pool of light at night.
 BuildingHasNightLight :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .TownHall, .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .ThievesGuild, .Watchtower, .DistrictHall:
+	case .TownHall, .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .ThievesGuild, .Watchtower, .DistrictHall, .AlchemistWorkshop, .FireworksGuild, .StarfallSpire:
 		return true
 	case .Farmland, .Wall, .Bridge, .Cannon, .TurtlePen, .Path, .GiantMortar, .Harbor:
 		return false
@@ -506,6 +509,12 @@ DrawBuildingSprite :: proc(kind: BuildingKind, accent: rl.Color) -> Art {
 		DrawHarbor(&art, accent)
 	case .Granary:
 		DrawGranary(&art, accent)
+	case .AlchemistWorkshop:
+		DrawAlchemistWorkshop(&art, accent)
+	case .FireworksGuild:
+		DrawFireworksGuild(&art, accent)
+	case .StarfallSpire:
+		DrawStarfallSpire(&art, accent)
 	}
 	return art
 }
@@ -1028,6 +1037,112 @@ DrawGranary :: proc(art: ^Art, accent: rl.Color) {
 	ArtRect(art, 20, 9, 2, 3, C_GOLD)
 	ArtRect(art, 10, 12, 2, 1, accent)
 	ArtRect(art, 20, 12, 2, 1, accent)
+}
+
+DrawAlchemistWorkshop :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 16, 44, 14, 3)
+
+	ArtRect(art, 4, 34, 24, 10, C_OUTLINE)
+	ArtRect(art, 5, 35, 22, 8, C_STONE_DARK)
+	DrawStoneSeams(art, 5, 35, 22, 8, 6, C_STONE_DARKEST)
+
+	ArtRect(art, 6, 18, 20, 16, C_OUTLINE)
+	ArtRect(art, 7, 19, 18, 14, C_WOOD_DARK)
+	ArtRect(art, 7, 19, 18, 1, C_WOOD_LIGHT)
+	ArtLine(art, 7, 26, 24, 26, C_WOOD_DARKEST)
+	ArtLine(art, 16, 19, 16, 32, C_WOOD_DARKEST)
+
+	ArtTriangle(art, 3, 19, 16, 5, 29, 19, C_OUTLINE)
+	ArtTriangle(art, 5, 18, 16, 7, 27, 18, C_ROOF_DARK)
+	ArtTriangle(art, 7, 17, 16, 9, 25, 17, C_ROOF)
+
+	ArtRect(art, 22, 3, 4, 9, C_OUTLINE)
+	ArtRect(art, 23, 4, 2, 8, C_STONE_DARK)
+	ArtRect(art, 23, 4, 2, 1, C_STONE_LIGHT)
+
+	ArtRect(art, 9, 22, 5, 5, C_OUTLINE)
+	ArtRect(art, 10, 23, 3, 3, C_ARCANE_GLOW)
+	ArtRect(art, 19, 22, 4, 5, C_OUTLINE)
+	ArtRect(art, 20, 23, 2, 3, C_ARCANE_GLOW)
+
+	ArtRect(art, 13, 27, 6, 8, C_OUTLINE)
+	ArtRect(art, 14, 28, 4, 7, C_WOOD)
+
+	ArtCircle(art, 26, 29, 3, C_OUTLINE)
+	ArtCircle(art, 26, 29, 2, C_LEAF_LIGHT)
+	ArtPixel(art, 26, 27, C_WHITE)
+	ArtRect(art, 24, 31, 5, 2, accent)
+}
+
+DrawFireworksGuild :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 24, 44, 20, 4)
+
+	ArtRect(art, 4, 28, 40, 16, C_OUTLINE)
+	ArtRect(art, 5, 29, 38, 14, C_WOOD_DARK)
+	ArtRect(art, 5, 29, 38, 2, C_WOOD_LIGHT)
+	for x := 9; x < 42; x += 7 {
+		ArtLine(art, x, 31, x, 42, C_WOOD_DARKEST)
+	}
+
+	ArtRect(art, 4, 24, 40, 5, C_OUTLINE)
+	ArtRect(art, 5, 25, 38, 3, C_ROOF)
+	ArtRect(art, 5, 25, 38, 1, C_ROOF_LIGHT)
+
+	ArtRect(art, 19, 10, 10, 24, C_OUTLINE)
+	ArtRect(art, 20, 11, 8, 22, C_STONE_DARK)
+	ArtRect(art, 21, 12, 6, 3, C_STONE)
+
+	ArtRect(art, 22, 2, 4, 9, C_OUTLINE)
+	ArtRect(art, 23, 3, 2, 7, C_GOLD)
+	ArtTriangle(art, 23, 1, 24, 0, 25, 1, C_GOLD_LIGHT)
+	ArtTriangle(art, 19, 9, 22, 4, 22, 10, C_EFFECT_BAD)
+	ArtTriangle(art, 29, 9, 26, 4, 26, 10, C_EFFECT_BAD)
+
+	ArtRect(art, 9, 33, 7, 8, C_OUTLINE)
+	ArtRect(art, 10, 34, 5, 6, C_ARCANE_GLOW)
+	ArtRect(art, 32, 33, 7, 8, C_OUTLINE)
+	ArtRect(art, 33, 34, 5, 6, C_ARCANE_GLOW)
+	ArtRect(art, 21, 34, 6, 8, C_OUTLINE)
+	ArtRect(art, 22, 35, 4, 7, C_WOOD)
+
+	ArtPixel(art, 10, 22, C_GOLD_LIGHT)
+	ArtPixel(art, 38, 20, C_GOLD_LIGHT)
+	ArtPixel(art, 36, 12, accent)
+}
+
+DrawStarfallSpire :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 24, 58, 22, 4)
+
+	ArtRect(art, 10, 50, 28, 12, C_OUTLINE)
+	ArtRect(art, 11, 51, 26, 10, C_STONE_DARK)
+	DrawStoneSeams(art, 11, 51, 26, 10, 7, C_STONE_DARKEST)
+
+	ArtRect(art, 14, 18, 20, 34, C_OUTLINE)
+	ArtRect(art, 15, 19, 18, 32, C_STONE_DARK)
+	DrawStoneSeams(art, 15, 19, 18, 32, 7, C_STONE_DARKEST)
+
+	ArtRect(art, 13, 15, 22, 5, C_OUTLINE)
+	ArtRect(art, 14, 16, 20, 3, C_STONE)
+	for x := 14; x < 34; x += 5 {
+		ArtRect(art, x, 13, 3, 3, C_STONE)
+	}
+
+	ArtPolygon(art, []Point{{24, 1}, {29, 10}, {24, 18}, {19, 10}}, C_OUTLINE)
+	ArtPolygon(art, []Point{{24, 3}, {27, 10}, {24, 15}, {21, 10}}, C_ARCANE)
+	ArtPixel(art, 24, 6, C_ARCANE_GLOW)
+	ArtPixel(art, 24, 9, C_ARCANE_LIGHT)
+
+	ArtRect(art, 21, 27, 6, 10, C_OUTLINE)
+	ArtRect(art, 22, 28, 4, 8, C_ARCANE_DARK)
+	ArtRect(art, 23, 29, 2, 4, C_ARCANE_GLOW)
+
+	ArtRect(art, 21, 54, 6, 8, C_OUTLINE)
+	ArtRect(art, 22, 55, 4, 7, C_WOOD_DARK)
+
+	ArtPixel(art, 9, 24, C_GOLD_LIGHT)
+	ArtPixel(art, 38, 30, C_GOLD_LIGHT)
+	ArtPixel(art, 36, 12, accent)
+	ArtPixel(art, 11, 12, accent)
 }
 
 DrawGiantMortar :: proc(art: ^Art, accent: rl.Color) {
@@ -2081,6 +2196,18 @@ DrawEffectIcon :: proc(effect: UnitEffects) -> Art {
 		ArtLine(&art, 3, 17, 17, 3, C_OUTLINE)
 		ArtLine(&art, 4, 17, 18, 3, C_EFFECT_BAD)
 		ArtLine(&art, 3, 16, 17, 2, C_EFFECT_BAD)
+	case .Poisoned:
+		ArtCircle(&art, 10, 9, 6, C_OUTLINE)
+		ArtCircle(&art, 10, 9, 5, C_LEAF_DARK)
+		ArtCircle(&art, 8, 7, 2, C_LEAF_LIGHT)
+		ArtPixel(&art, 7, 6, C_WHITE)
+		ArtCircle(&art, 6, 15, 2, C_OUTLINE)
+		ArtCircle(&art, 6, 15, 1, C_LEAF)
+		ArtCircle(&art, 15, 4, 2, C_OUTLINE)
+		ArtCircle(&art, 15, 4, 1, C_LEAF_LIGHT)
+		ArtLine(&art, 3, 17, 17, 3, C_OUTLINE)
+		ArtLine(&art, 4, 17, 18, 3, C_EFFECT_BAD)
+		ArtLine(&art, 3, 16, 17, 2, C_EFFECT_BAD)
 	}
 	return art
 }
@@ -2090,6 +2217,75 @@ DrawWoodIcon :: proc() -> Art {
 	art := ArtInit(16, 16)
 	DrawWoodLogIcon(&art, 1, 2)
 	DrawWoodLogIcon(&art, 2, 9)
+	return art
+}
+
+// Four melt stages. Later stages are sparse and translucent so the ground
+// shows through unevenly.
+DrawIceTile :: proc(stage: IceStage) -> Art {
+	art := ArtInit(16, 16)
+	ice := rl.Color{196, 232, 246, 170}
+	iceLight := rl.Color{236, 250, 255, 210}
+	iceDark := rl.Color{110, 172, 206, 150}
+	crack := rl.Color{70, 130, 170, 190}
+	switch stage {
+	case .Solid:
+		ArtRect(&art, 0, 0, 16, 16, ice)
+		ArtLine(&art, 0, 0, 15, 0, iceLight)
+		ArtLine(&art, 0, 0, 0, 15, iceLight)
+		ArtLine(&art, 15, 0, 15, 15, iceDark)
+		ArtLine(&art, 0, 15, 15, 15, iceDark)
+		ArtPixel(&art, 4, 4, iceLight)
+		ArtPixel(&art, 11, 7, iceLight)
+	case .Cracked:
+		ArtRect(&art, 0, 0, 16, 16, rl.Color{196, 232, 246, 145})
+		ArtLine(&art, 2, 3, 7, 7, crack)
+		ArtLine(&art, 7, 7, 5, 12, crack)
+		ArtLine(&art, 7, 7, 13, 9, crack)
+		ArtLine(&art, 10, 2, 11, 6, crack)
+		ArtPixel(&art, 3, 4, iceLight)
+	case .Patchy:
+		ArtEllipse(&art, 4, 4, 3, 2, ice)
+		ArtEllipse(&art, 11, 5, 3, 3, ice)
+		ArtEllipse(&art, 7, 12, 4, 2, ice)
+		ArtLine(&art, 2, 4, 6, 4, crack)
+		ArtLine(&art, 9, 5, 13, 7, crack)
+		ArtLine(&art, 5, 12, 9, 12, crack)
+	case .Slush:
+		ArtEllipse(&art, 4, 5, 2, 1, rl.Color{140, 190, 220, 90})
+		ArtEllipse(&art, 11, 9, 2, 1, rl.Color{140, 190, 220, 90})
+		ArtPixel(&art, 7, 3, rl.Color{220, 244, 252, 110})
+		ArtPixel(&art, 12, 13, rl.Color{220, 244, 252, 110})
+	}
+	return art
+}
+
+FloodFrame :: enum {
+	Calm,
+	Ripple,
+	Crest,
+}
+
+// Three animation frames for temporary flood water.
+DrawFloodTile :: proc(frame: FloodFrame) -> Art {
+	art := ArtInit(16, 16)
+	water := rl.Color{58, 128, 184, 170}
+	waterLight := rl.Color{126, 198, 226, 190}
+	waterDark := rl.Color{36, 88, 132, 150}
+	ArtRect(&art, 0, 0, 16, 16, water)
+	for row in 0..<3 {
+		y := 3+row*5
+		shift := (int(frame)*2+row*3)%6
+		for x in 0..<16 {
+			yy := y
+			if (x+shift)%6 >= 3 do yy += 1
+			ArtPixel(&art, x, yy, waterLight)
+		}
+	}
+	ArtPixel(&art, 2, 1, waterDark)
+	ArtPixel(&art, 13, 2, waterDark)
+	ArtPixel(&art, 7, 14, waterDark)
+	ArtPixel(&art, 15, 15, waterLight)
 	return art
 }
 
@@ -2584,6 +2780,8 @@ SpriteSet :: struct {
 	crownIcon:       rl.Texture2D,
 	techIcon:        [CrownTech]rl.Texture2D,
 	pathIcon:        [TownPath]rl.Texture2D,
+	iceTile:         [IceStage]rl.Texture2D,
+	floodTile:       [FloodFrame]rl.Texture2D,
 	boat:            rl.Texture2D,
 }
 
@@ -2698,6 +2896,12 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 	for path in TownPath {
 		set.pathIcon[path] = ArtTakeTexture(DrawTownPathIcon(path))
 	}
+	for stage in IceStage {
+		set.iceTile[stage] = ArtTakeTexture(DrawIceTile(stage))
+	}
+	for frame in FloodFrame {
+		set.floodTile[frame] = ArtTakeTexture(DrawFloodTile(frame))
+	}
 	return set
 }
 
@@ -2780,6 +2984,12 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 	}
 	for path in TownPath {
 		if set.pathIcon[path].id != 0 do rl.UnloadTexture(set.pathIcon[path])
+	}
+	for stage in IceStage {
+		if set.iceTile[stage].id != 0 do rl.UnloadTexture(set.iceTile[stage])
+	}
+	for frame in FloodFrame {
+		if set.floodTile[frame].id != 0 do rl.UnloadTexture(set.floodTile[frame])
 	}
 	if set.boat.id != 0 do rl.UnloadTexture(set.boat)
 }
