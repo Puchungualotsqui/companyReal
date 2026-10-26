@@ -26,6 +26,9 @@ BuildingKind :: enum {
 	ThievesGuild,
 	Path,
 	DistrictHall,
+	GiantMortar,
+	Harbor,
+	Granary,
 }
 
 BuildingType :: union {
@@ -44,6 +47,8 @@ BuildingType :: union {
 	ThievesGuild,
 	Path,
 	DistrictHall,
+	BuildingOrder,
+	Granary,
 }
 
 TownHall :: struct {}
@@ -58,12 +63,28 @@ MagicSchool :: struct {}
 GiantPen :: struct {}
 SiegeWorkshop :: struct {}
 TurtlePen :: struct {}
-	ThievesGuild :: struct {}
-	Path :: struct {}
-	DistrictHall :: struct {}
+ThievesGuild :: struct {}
+Path :: struct {}
+DistrictHall :: struct {}
+BuildingOrder :: struct {
+	orderCooldown: f32,
+	orderActive: f32,
+	orderTargetX, orderTargetY: f32,
+	orderTick: f32,
+	type: BuildingOrderType
+}
+
+BuildingOrderType :: union {
+	GiantMortar,
+	Harbor,
+}
+
+GiantMortar :: struct {}
+Harbor :: struct {}
+Granary :: struct {}
 
 BuildingKindOf :: proc(type: BuildingType) -> BuildingKind {
-	switch _ in type {
+	switch v in type {
 	case TownHall:
 		return .TownHall
 	case Home:
@@ -94,6 +115,15 @@ BuildingKindOf :: proc(type: BuildingType) -> BuildingKind {
 		return .Path
 	case DistrictHall:
 		return .DistrictHall
+	case Granary:
+		return .Granary
+	case BuildingOrder:
+		switch _ in v.type {
+		case GiantMortar:
+			return .GiantMortar
+		case Harbor:
+			return .Harbor
+		}
 	}
 	unreachable()
 }
@@ -130,13 +160,19 @@ BuildingTypeFromKind :: proc(kind: BuildingKind) -> BuildingType {
 		return Path{}
 	case .DistrictHall:
 		return DistrictHall{}
+	case .GiantMortar:
+		return BuildingOrder{type = GiantMortar{}}
+	case .Harbor:
+		return BuildingOrder{type = Harbor{}}
+	case .Granary:
+		return Granary{}
 	}
 	unreachable()
 }
 
 // width, height
 BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
-	switch _ in type {
+	switch v in type {
 	case TownHall:
 		return 4, 4
 	case Home:
@@ -163,12 +199,21 @@ BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
 		return 1, 1
 	case DistrictHall:
 		return 4, 4
+	case Granary:
+		return 2, 2
+	case BuildingOrder:
+		switch _ in v.type {
+		case GiantMortar:
+			return 3, 3
+		case Harbor:
+			return 2, 2
+		}
 	}
 	unreachable()
 }
 
 BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
-	switch _ in type {
+	switch v in type {
 	case TownHall:
 		return 1000
 	case Home, Farmland:
@@ -193,6 +238,15 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 		return 80
 	case DistrictHall:
 		return 600
+	case Granary:
+		return 250
+	case BuildingOrder:
+		switch _ in v.type {
+		case GiantMortar:
+			return 350
+		case Harbor:
+			return 300
+		}
 	}
 	unreachable()
 }
@@ -201,7 +255,7 @@ BuildingDamageStage :: proc(w: ^World, buildingSlot: int) -> int {
 	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] {
 		return 0
 	}
-	maximum := BuildingDefaultHealth(w.buildings.type[buildingSlot])
+	maximum := BuildingMaxHealth(w, buildingSlot)
 	if maximum <= 0 do return 0
 	ratio := clamp(w.buildings.health[buildingSlot]/maximum, 0, 1)
 	if ratio <= 0.33 do return 2
@@ -232,6 +286,12 @@ BuildingVision :: proc(kind: BuildingKind) -> f32 {
 		return 2
 	case .DistrictHall:
 		return 10
+	case .GiantMortar:
+		return 10
+	case .Harbor:
+		return 8
+	case .Granary:
+		return 4
 	}
 	unreachable()
 }
@@ -256,15 +316,25 @@ BuildingDistraction :: proc(kind: BuildingKind) -> f32 {
 		return 4
 	case .DistrictHall:
 		return 12
+	case .GiantMortar:
+		return 24
+	case .Harbor:
+		return 12
+	case .Granary:
+		return 6
 	}
 	unreachable()
 }
 
 BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
 	switch kind {
-	case .TownHall, .Wall, .Bridge, .Cannon, .Watchtower, .Path, .DistrictHall:
+	case .TownHall, .Wall, .Bridge, .Cannon, .Watchtower, .Path, .DistrictHall, .GiantMortar:
 		// Halls, combat works and decorative paths are paid for elsewhere or free.
 		return 0
+	case .Harbor:
+		return 25
+	case .Granary:
+		return 20
 	case .Home:
 		return 5
 	case .Farmland:
@@ -286,7 +356,7 @@ BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
 }
 
 BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
-	switch _ in bType {
+	switch v in bType {
 	case Bridge:
 		switch tType {
 		case .Water, .FreshWater, .River:
@@ -303,12 +373,25 @@ BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 			return false
 		}
 
-	case TownHall, Home, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path, DistrictHall:
+	case TownHall, Home, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path, DistrictHall, Granary:
 		switch tType {
 		case .Ground, .FertileGround, .Forest, .Hill, .Desert, .Sand:
 			return true
 		case .Water, .FreshWater, .River:
 			return false
+		}
+
+	case BuildingOrder:
+		switch _ in v.type {
+		case GiantMortar:
+			switch tType {
+			case .Ground, .FertileGround, .Forest, .Hill, .Desert, .Sand:
+				return true
+			case .Water, .FreshWater, .River:
+				return false
+			}
+		case Harbor:
+			return tType == .Sand
 		}
 	}
 	unreachable()
@@ -318,7 +401,9 @@ BuildingWalkable :: proc(type: BuildingType) -> bool {
 	switch _ in type {
 	case Bridge, Path:
 		return true
-	case TownHall, Home, Farmland, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, DistrictHall:
+	case TownHall, Home, Farmland, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, DistrictHall, Granary:
+		return false
+	case BuildingOrder:
 		return false
 	}
 	unreachable()
@@ -328,9 +413,9 @@ BuildingWalkable :: proc(type: BuildingType) -> bool {
 // combat builders without wood. Everything else is built by the town itself.
 BuildingIsCombat :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .Wall, .Bridge, .Cannon, .Watchtower:
+	case .Wall, .Bridge, .Cannon, .Watchtower, .GiantMortar:
 		return true
-	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall:
+	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall, .Harbor, .Granary:
 		return false
 	}
 	unreachable()
@@ -340,7 +425,7 @@ BuildingIsTraining :: proc(kind: BuildingKind) -> bool {
 	switch kind {
 	case .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
 		return true
-	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Watchtower, .Path, .DistrictHall:
+	case .TownHall, .Home, .Farmland, .Wall, .Bridge, .Cannon, .Watchtower, .Path, .DistrictHall, .GiantMortar, .Harbor, .Granary:
 		return false
 	}
 	unreachable()
@@ -687,7 +772,7 @@ UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 UnitDamageStage :: proc(w: ^World, unitSlot: int) -> int {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return 0
 	if w.units.type[unitSlot] == nil do return 0
-	maximum := UnitDefaultHealth(w.units.type[unitSlot])
+	maximum := UnitMaxHealth(w, unitSlot)
 	if maximum <= 0 do return 0
 	ratio := clamp(w.units.health[unitSlot]/maximum, 0, 1)
 	if ratio <= 0.33 do return 2
@@ -938,7 +1023,7 @@ UnitTypeInit :: proc(w: ^World, unitSlot: int, type: UnitType) {
 		w.unitsBurning -= 1
 	}
 	unit.type = type
-	unit.health = UnitDefaultHealth(type)
+	unit.health = UnitMaxHealthFor(w, unit.kingdome, type)
 	unit.cooldown = UnitDefaultCooldown(type)
 	switch _ in type {
 	case Villager:

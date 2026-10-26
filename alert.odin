@@ -16,6 +16,7 @@ AlertKind :: enum {
 	PeaceMade,
 	TownGrowth,
 	TownFused,
+	InsightGained,
 }
 
 Alert :: struct {
@@ -82,6 +83,21 @@ WorldAlertAdd :: proc(w: ^World, kind: AlertKind, kingdom, town, other: int, x, 
 			x = x,
 			y = y,
 			time = w.simulationTime,
+		},
+	)
+}
+
+WorldAlertAddInsight :: proc(w: ^World, kingdom, amount: int) {
+	if w.observerKingdom < 0 || kingdom != w.observerKingdom do return
+	WorldAlertPush(
+		w,
+		Alert{
+			kind = .InsightGained,
+			kingdom = kingdom,
+			town = -1,
+			other = -1,
+			time = w.simulationTime,
+			amount = amount,
 		},
 	)
 }

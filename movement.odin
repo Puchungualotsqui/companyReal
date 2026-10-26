@@ -443,7 +443,7 @@ FlowFieldGet :: proc(w: ^World, kingdom, town: int, unitType: UnitType, unitKing
 	if TownHallSlot(w, kingdom, town) < 0 do return nil, false
 	hallX := w.kingdoms[kingdom].towns[town].x
 	hallY := w.kingdoms[kingdom].towns[town].y
-	walkWater := UnitValidTileType(unitType, .Water)
+	walkWater := UnitValidTileType(unitType, .Water) || UnitCanCrossWater(w, unitType, unitKingdom)
 
 	slot := -1
 	for i in 0..<FLOW_FIELD_CAPACITY {
@@ -799,7 +799,12 @@ WorldTileWalkableBase :: proc(w: ^World, x, y: int, unitType: UnitType, unitKing
 		}
 		return BuildingWalkable(w.buildings[buildingSlot].type)
 	}
-	return UnitValidTileType(unitType, w.ground[wrappedX][wrappedY].type)
+	tile := w.ground[wrappedX][wrappedY].type
+	if UnitValidTileType(unitType, tile) do return true
+	if (tile == .Water || tile == .FreshWater) && UnitCanCrossWater(w, unitType, unitKingdom) {
+		return true
+	}
+	return false
 }
 
 WorldTileFriendlyWall :: proc(w: ^World, x, y: int, kingdom: int) -> bool {
@@ -836,7 +841,10 @@ UnitMoveSpeed :: proc(w: ^World, unitSlot: int, baseSpeed: f32) -> f32 {
 	if w.units[unitSlot].effects[.NoWater] do speed *= 0.7
 	tileX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
 	tileY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
-	if WorldTileHasPath(w, tileX, tileY) do speed *= PATH_SPEED_MULTIPLIER
+	if WorldTileHasPath(w, tileX, tileY) {
+		speed *= PATH_SPEED_MULTIPLIER*KingdomTechPathSpeedMultiplier(w, w.units[unitSlot].kingdome)
+	}
+	speed *= UnitSeaSpeedMultiplier(w, unitSlot)
 	return speed
 }
 

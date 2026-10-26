@@ -4,9 +4,7 @@
 - Boats
 
 # Ideas
-- Ataques aereos de pociones, like in company of heroes
 - Weather and enviroment events
-- One reward could be move units through water, to be able to fund towns in other continents and islands, but you won't be able to build bridges and other things
 
 # Bugs
 - Shadow of home/house is a bit lower. I think we should recheck all building shadows. Also shadows of units jumping is not excellent.

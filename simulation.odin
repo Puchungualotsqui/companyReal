@@ -157,7 +157,13 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
 			UnitUpdateWarrior(w, unitSlot, deltaTime)
 		}
-		if w.unitUsed[unitSlot] do BloodBleedTick(w, unitSlot, deltaTime)
+		if w.unitUsed[unitSlot] {
+			BloodBleedTick(w, unitSlot, deltaTime)
+			if w.units.previousX[unitSlot] != w.units.x[unitSlot] ||
+				w.units.previousY[unitSlot] != w.units.y[unitSlot] {
+				UnitWaterWake(w, unitSlot)
+			}
+		}
 	}
 	WorldMeleeSeparation(w)
 }
@@ -165,8 +171,12 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 WorldKingdomUpdate :: proc(w: ^World, deltaTime: f32) {
 	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdomSlot] do continue
+		w.kingdoms[kingdomSlot].coastalTownCount = 0
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			if TownIsCoastal(w, kingdomSlot, townSlot) {
+				w.kingdoms[kingdomSlot].coastalTownCount += 1
+			}
 			KingdomTownUpdate(w, kingdomSlot, townSlot, deltaTime)
 		}
 	}
@@ -348,13 +358,24 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 
 	workingFarmlands := min(town.farmlands, town.farmers)
+
+	// Blockade is a visible town-level condition with a fixed multiplier.
+	blockadeFactor: f32 = 1
+	if town.blockadeUntil > w.simulationTime do blockadeFactor = 0.5
+
 	town.foodPotential = 0
 	if town.farmlands > 0 {
 		town.foodPotential = town.farmlandOutput*f32(workingFarmlands)/f32(town.farmlands)
 	}
+	town.foodPotential *= KingdomTechFoodMultiplier(w, kingdomSlot, townSlot)*blockadeFactor
 	town.waterPotential =
 		TownWaterCollectorOutput(TownWaterAccess(w, kingdomSlot, townSlot))*
-		f32(town.waterCollectors)
+		f32(town.waterCollectors)*KingdomTechWaterMultiplier(w, kingdomSlot, townSlot)*blockadeFactor
+
+	if TownFindBuilding(w, kingdomSlot, townSlot, .Harbor) >= 0 {
+		town.wood += 0.05*deltaTime
+	}
+	FishingFlotillaFx(w, kingdomSlot, townSlot)
 	town.foodShortage = TownResourceShortage(town.foodPotential, town.citizens)
 	town.waterShortage = TownResourceShortage(town.waterPotential, town.citizens)
 
@@ -374,6 +395,7 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 	// water at all, so a bad start cannot permanently strand it.
 	speed := clamp(coverage, GROWTH_MIN_SPEED, GROWTH_MAX_SPEED)
 	speed *= 1+min(GROWTH_VILLAGER_SPEED_CAP, f32(town.villagers)*GROWTH_VILLAGER_SPEED_BONUS)
+	if town.blockadeUntil > w.simulationTime do speed *= 0.75
 	isNight := WorldIsNight(w)
 	if isNight do speed = 0
 	town.growthSpeed = speed

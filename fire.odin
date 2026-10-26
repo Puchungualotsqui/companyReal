@@ -64,9 +64,9 @@ UnitImmuneToFire :: proc(type: UnitType) -> bool {
 
 BuildingImmuneToFire :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .TownHall, .Wall, .Cannon, .Watchtower, .MagicSchool, .TurtlePen, .Path:
+	case .TownHall, .Wall, .Cannon, .Watchtower, .MagicSchool, .TurtlePen, .Path, .GiantMortar, .Harbor:
 		return true
-	case .Home, .Farmland, .Bridge, .ArcheryRange, .SiegeWorkshop, .GiantPen, .ThievesGuild, .DistrictHall:
+	case .Home, .Farmland, .Bridge, .ArcheryRange, .SiegeWorkshop, .GiantPen, .ThievesGuild, .DistrictHall, .Granary:
 		return false
 	}
 	unreachable()

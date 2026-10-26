@@ -264,7 +264,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		}
 	case .Returning:
 		if UnitMoveToTarget(w, unitSlot, deltaTime) {
-			town.wood += builder.carriedResource
+			town.wood += builder.carriedResource*KingdomTechWoodMultiplier(w, kingdomSlot)
 			builder.carriedResource = 0
 			builder.targetDecoration = -1
 			builder.taskSequence += 1
@@ -510,7 +510,7 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	if UnitMoveToTarget(w, unitSlot, deltaTime) {
 		state.inside = true
 		SpatialUnitRemove(w, unitSlot)
-		state.timer = UnitDefaultTrainingTime(state.to)
+		state.timer = UnitDefaultTrainingTime(state.to) / KingdomTechConversionSpeedMultiplier(w, unit.kingdome, state.to)
 		unit.pathReady = false
 	} else if !unit.pathFound {
 		unit.pathReady = false
@@ -842,7 +842,7 @@ UnitApplyTownEffects :: proc(w: ^World, unitSlot: int, housed: bool, shortageEpo
 
 	regen: f32 = 0.25
 	if !w.units[unitSlot].effects[.NoHome] do regen = 1
-	w.units[unitSlot].health = min(UnitDefaultHealth(unitType), w.units[unitSlot].health+regen*deltaTime)
+	w.units[unitSlot].health = min(UnitMaxHealth(w, unitSlot), w.units[unitSlot].health+regen*deltaTime)
 }
 
 UnitClearTownEffects :: proc(w: ^World, unitSlot: int) {

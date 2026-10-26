@@ -70,7 +70,7 @@ C_ARCANE_GLOW := rl.Color{128, 226, 255, 255}
 C_WHITE := rl.Color{238, 238, 244, 255}
 C_EFFECT_BAD := rl.Color{214, 62, 52, 255}
 
-ALL_BUILDING_KINDS := [15]BuildingKind{
+ALL_BUILDING_KINDS := [18]BuildingKind{
 	.TownHall,
 	.Home,
 	.Farmland,
@@ -86,6 +86,9 @@ ALL_BUILDING_KINDS := [15]BuildingKind{
 	.ThievesGuild,
 	.Path,
 	.DistrictHall,
+	.GiantMortar,
+	.Harbor,
+	.Granary,
 }
 
 ALL_UNIT_KINDS := [13]UnitKind{
@@ -345,6 +348,21 @@ ArtGrain :: proc(art: ^Art, seed: u64) {
 	}
 }
 
+CreateBoatTexture :: proc() -> rl.Texture2D {
+	art := ArtInit(24, 12)
+	ArtRect(&art, 1, 6, 22, 4, C_OUTLINE)
+	ArtRect(&art, 2, 7, 20, 2, C_WOOD)
+	ArtRect(&art, 4, 3, 2, 4, C_OUTLINE)
+	ArtRect(&art, 5, 3, 1, 3, C_WOOD_LIGHT)
+	ArtRect(&art, 6, 4, 9, 2, C_WOOD_LIGHT)
+	ArtRect(&art, 7, 5, 7, 1, C_WOOD)
+	ArtRect(&art, 2, 5, 20, 1, C_WOOD_DARK)
+	ArtPixel(&art, 11, 2, C_WHITE)
+	texture := ArtToTexture(art)
+	rl.UnloadImage(art.image)
+	return texture
+}
+
 CreateShadowTexture :: proc() -> rl.Texture2D {
 	width := 64
 	height := 64
@@ -396,8 +414,10 @@ BuildingHasNightLight :: proc(kind: BuildingKind) -> bool {
 	switch kind {
 	case .TownHall, .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .ThievesGuild, .Watchtower, .DistrictHall:
 		return true
-	case .Farmland, .Wall, .Bridge, .Cannon, .TurtlePen, .Path:
+	case .Farmland, .Wall, .Bridge, .Cannon, .TurtlePen, .Path, .GiantMortar, .Harbor:
 		return false
+	case .Granary:
+		return true
 	}
 	unreachable()
 }
@@ -480,6 +500,12 @@ DrawBuildingSprite :: proc(kind: BuildingKind, accent: rl.Color) -> Art {
 		DrawPath(&art, accent)
 	case .DistrictHall:
 		DrawDistrictHall(&art, accent)
+	case .GiantMortar:
+		DrawGiantMortar(&art, accent)
+	case .Harbor:
+		DrawHarbor(&art, accent)
+	case .Granary:
+		DrawGranary(&art, accent)
 	}
 	return art
 }
@@ -963,6 +989,89 @@ DrawCannon :: proc(art: ^Art, accent: rl.Color) {
 	ArtLine(art, 20, 11, 20, 14, C_IRON_LIGHT)
 	ArtRect(art, 11, 12, 6, 2, accent)
 	DrawFlag(art, 26, 5, accent)
+}
+
+DrawHarbor :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 16, 28, 14, 3)
+	ArtRect(art, 2, 22, 28, 7, C_OUTLINE)
+	ArtRect(art, 3, 23, 26, 5, C_WOOD_DARK)
+	ArtRect(art, 4, 24, 24, 1, C_WOOD_LIGHT)
+	for x in 5..<27 {
+		ArtPixel(art, x, 26, accent)
+	}
+	ArtRect(art, 6, 12, 12, 11, C_OUTLINE)
+	ArtRect(art, 7, 13, 10, 9, C_STONE_DARK)
+	ArtRect(art, 8, 14, 8, 2, C_STONE)
+	ArtRect(art, 20, 8, 3, 15, C_OUTLINE)
+	ArtRect(art, 21, 9, 1, 13, C_WOOD_LIGHT)
+	ArtRect(art, 24, 10, 4, 5, accent)
+	ArtRect(art, 23, 15, 6, 2, C_OUTLINE)
+	ArtPixel(art, 25, 12, C_WHITE)
+}
+
+DrawGranary :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 16, 28, 14, 3)
+	ArtRect(art, 3, 16, 26, 12, C_OUTLINE)
+	ArtRect(art, 4, 17, 24, 10, C_WOOD_DARK)
+	ArtRect(art, 5, 18, 22, 2, C_WOOD_LIGHT)
+	for y in 20..<27 {
+		for x in 5..<27 {
+			if (x+y)%4 == 0 do ArtPixel(art, x, y, C_WOOD_DARKEST)
+		}
+	}
+	ArtRect(art, 4, 12, 24, 5, C_OUTLINE)
+	ArtRect(art, 5, 13, 22, 3, C_ROOF)
+	ArtRect(art, 6, 13, 20, 1, C_ROOF_LIGHT)
+	ArtRect(art, 13, 21, 6, 7, C_OUTLINE)
+	ArtRect(art, 14, 22, 4, 6, C_WOOD)
+	ArtRect(art, 10, 9, 2, 3, C_GOLD)
+	ArtRect(art, 20, 9, 2, 3, C_GOLD)
+	ArtRect(art, 10, 12, 2, 1, accent)
+	ArtRect(art, 20, 12, 2, 1, accent)
+}
+
+DrawGiantMortar :: proc(art: ^Art, accent: rl.Color) {
+	DrawShadow(art, 24, 42, 20, 4)
+
+	// Stone platform.
+	ArtRect(art, 4, 32, 40, 11, C_OUTLINE)
+	ArtRect(art, 5, 33, 38, 9, C_STONE_DARK)
+	DrawStoneSeams(art, 5, 33, 38, 9, 7, C_STONE_DARKEST)
+
+	// Wheels and iron carriage.
+	ArtCircle(art, 13, 40, 6, C_OUTLINE)
+	ArtCircle(art, 13, 40, 4, C_WOOD_DARKEST)
+	ArtCircle(art, 13, 40, 1, C_WOOD)
+	ArtCircle(art, 35, 40, 6, C_OUTLINE)
+	ArtCircle(art, 35, 40, 4, C_WOOD_DARKEST)
+	ArtCircle(art, 35, 40, 1, C_WOOD)
+	ArtRect(art, 10, 26, 28, 9, C_OUTLINE)
+	ArtRect(art, 11, 27, 26, 7, C_IRON_DARK)
+	ArtRect(art, 12, 27, 24, 2, C_IRON)
+
+	// Barrel aimed up and to the right.
+	ArtLine(art, 20, 29, 35, 10, C_OUTLINE)
+	ArtLine(art, 21, 29, 36, 10, C_OUTLINE)
+	ArtLine(art, 22, 29, 37, 10, C_OUTLINE)
+	ArtLine(art, 23, 29, 38, 10, C_OUTLINE)
+	ArtLine(art, 21, 28, 36, 9, C_IRON_DARK)
+	ArtLine(art, 22, 28, 37, 9, C_IRON)
+	ArtLine(art, 23, 28, 38, 9, C_IRON_LIGHT)
+	ArtLine(art, 24, 28, 39, 9, C_IRON_DARK)
+
+	// Muzzle and faction band.
+	ArtCircle(art, 39, 9, 4, C_OUTLINE)
+	ArtCircle(art, 39, 9, 3, C_IRON_DARK)
+	ArtCircle(art, 39, 9, 1, C_OUTLINE)
+	ArtRect(art, 27, 19, 7, 3, accent)
+	ArtPixel(art, 24, 13, C_IRON_LIGHT)
+	ArtPixel(art, 31, 20, C_IRON_LIGHT)
+
+	// Rivets and sight.
+	ArtPixel(art, 17, 30, C_IRON_LIGHT)
+	ArtPixel(art, 31, 30, C_IRON_LIGHT)
+	ArtLine(art, 19, 24, 22, 20, C_IRON_LIGHT)
+	ArtRect(art, 20, 18, 3, 2, accent)
 }
 
 DrawWatchtower :: proc(art: ^Art, accent: rl.Color) {
@@ -1984,6 +2093,334 @@ DrawWoodIcon :: proc() -> Art {
 	return art
 }
 
+DrawCrownIcon :: proc() -> Art {
+	art := ArtInit(16, 16)
+	ArtRect(&art, 2, 10, 12, 4, C_OUTLINE)
+	ArtRect(&art, 3, 11, 10, 2, C_GOLD_DARK)
+	ArtRect(&art, 3, 11, 10, 1, C_GOLD)
+	ArtTriangle(&art, 2, 11, 1, 4, 6, 11, C_OUTLINE)
+	ArtTriangle(&art, 3, 11, 2, 6, 5, 11, C_GOLD_DARK)
+	ArtTriangle(&art, 3, 10, 2, 6, 4, 10, C_GOLD)
+	ArtTriangle(&art, 5, 11, 8, 1, 11, 11, C_OUTLINE)
+	ArtTriangle(&art, 6, 11, 8, 3, 10, 11, C_GOLD)
+	ArtPixel(&art, 8, 2, C_GOLD_LIGHT)
+	ArtTriangle(&art, 10, 11, 15, 4, 14, 11, C_OUTLINE)
+	ArtTriangle(&art, 11, 11, 14, 6, 13, 11, C_GOLD_DARK)
+	ArtTriangle(&art, 11, 10, 14, 6, 13, 10, C_GOLD)
+	ArtPixel(&art, 5, 12, C_WATER_LIGHT)
+	ArtPixel(&art, 8, 12, C_EFFECT_BAD)
+	ArtPixel(&art, 11, 12, C_LEAF_LIGHT)
+	return art
+}
+
+// One 16x16 symbol per technology. The art is scaled up in the Crown panel so
+// every node reads at a glance without a status sentence.
+DrawCrownTechIcon :: proc(tech: CrownTech) -> Art {
+	art := ArtInit(16, 16)
+	switch tech {
+	case .CoastalBoats:
+		ArtRect(&art, 1, 14, 14, 1, C_WATER_DARK)
+		ArtPixel(&art, 3, 13, C_WATER)
+		ArtPixel(&art, 12, 13, C_WATER)
+		ArtPolygon(&art, []Point{{2, 9}, {14, 9}, {12, 12}, {4, 12}}, C_OUTLINE)
+		ArtPolygon(&art, []Point{{3, 10}, {13, 10}, {11, 11}, {5, 11}}, C_WOOD)
+		ArtRect(&art, 7, 2, 2, 8, C_OUTLINE)
+		ArtRect(&art, 8, 3, 1, 6, C_WOOD_LIGHT)
+		ArtTriangle(&art, 9, 3, 13, 8, 9, 8, C_OUTLINE)
+		ArtTriangle(&art, 10, 4, 12, 8, 10, 8, C_CLOTH_LIGHT)
+	case .FishingFlotillas:
+		ArtRect(&art, 1, 11, 7, 1, C_OUTLINE)
+		ArtRect(&art, 2, 10, 5, 1, C_WOOD)
+		ArtEllipse(&art, 9, 7, 4, 2, C_OUTLINE)
+		ArtEllipse(&art, 9, 7, 3, 1, C_WATER_LIGHT)
+		ArtTriangle(&art, 4, 7, 2, 4, 2, 10, C_OUTLINE)
+		ArtTriangle(&art, 4, 7, 3, 5, 3, 9, C_WATER)
+		ArtPixel(&art, 11, 6, C_OUTLINE)
+		ArtEllipse(&art, 11, 13, 2, 1, C_OUTLINE)
+		ArtPixel(&art, 13, 12, C_WATER)
+	case .Harbor:
+		ArtCircle(&art, 8, 3, 2, C_OUTLINE)
+		ArtCircle(&art, 8, 3, 1, C_GOLD)
+		ArtRect(&art, 7, 4, 2, 9, C_OUTLINE)
+		ArtRect(&art, 8, 5, 1, 7, C_GOLD)
+		ArtRect(&art, 4, 7, 8, 1, C_OUTLINE)
+		ArtLine(&art, 4, 10, 6, 13, C_OUTLINE)
+		ArtLine(&art, 6, 13, 8, 11, C_OUTLINE)
+		ArtLine(&art, 12, 10, 10, 13, C_OUTLINE)
+		ArtLine(&art, 10, 13, 8, 11, C_OUTLINE)
+		ArtLine(&art, 4, 9, 6, 12, C_GOLD)
+		ArtLine(&art, 6, 12, 8, 10, C_GOLD)
+		ArtLine(&art, 12, 9, 10, 12, C_GOLD)
+		ArtLine(&art, 10, 12, 8, 10, C_GOLD)
+	case .SeaPower:
+		ArtRect(&art, 7, 4, 2, 10, C_OUTLINE)
+		ArtRect(&art, 8, 5, 1, 8, C_STONE_LIGHT)
+		ArtRect(&art, 2, 7, 12, 2, C_OUTLINE)
+		ArtRect(&art, 3, 8, 10, 1, C_STONE)
+		ArtRect(&art, 3, 4, 2, 4, C_OUTLINE)
+		ArtRect(&art, 4, 5, 1, 2, C_STONE_LIGHT)
+		ArtRect(&art, 11, 4, 2, 4, C_OUTLINE)
+		ArtRect(&art, 12, 5, 1, 2, C_STONE_LIGHT)
+		ArtTriangle(&art, 2, 4, 4, 2, 5, 5, C_OUTLINE)
+		ArtTriangle(&art, 3, 4, 4, 3, 4, 5, C_WHITE)
+		ArtTriangle(&art, 10, 5, 12, 2, 13, 4, C_OUTLINE)
+		ArtTriangle(&art, 11, 4, 12, 3, 12, 5, C_WHITE)
+		ArtTriangle(&art, 7, 4, 8, 1, 9, 4, C_OUTLINE)
+		ArtPixel(&art, 8, 2, C_WHITE)
+		ArtRect(&art, 1, 14, 14, 1, C_WATER_DARK)
+		ArtPixel(&art, 4, 13, C_WATER_LIGHT)
+		ArtPixel(&art, 11, 13, C_WATER_LIGHT)
+	case .Blockade:
+		ArtCircle(&art, 5, 6, 3, C_OUTLINE)
+		ArtCircle(&art, 5, 6, 2, C_IRON_LIGHT)
+		ArtCircle(&art, 5, 6, 1, C_CLEAR)
+		ArtCircle(&art, 10, 10, 3, C_OUTLINE)
+		ArtCircle(&art, 10, 10, 2, C_IRON)
+		ArtCircle(&art, 10, 10, 1, C_CLEAR)
+		ArtLine(&art, 2, 13, 14, 3, C_OUTLINE)
+		ArtLine(&art, 3, 13, 14, 4, C_EFFECT_BAD)
+	case .CropRotation:
+		ArtRect(&art, 7, 3, 2, 11, C_OUTLINE)
+		ArtRect(&art, 8, 4, 1, 9, C_GOLD)
+		for row in 0..<3 {
+			y := 4+row*3
+			ArtRect(&art, 4, y, 3, 2, C_OUTLINE)
+			ArtRect(&art, 4, y, 2, 1, C_GOLD_LIGHT)
+			ArtRect(&art, 9, y, 3, 2, C_OUTLINE)
+			ArtRect(&art, 10, y, 2, 1, C_GOLD_LIGHT)
+		}
+		ArtLine(&art, 3, 8, 3, 11, C_LEAF)
+		ArtLine(&art, 3, 11, 5, 11, C_LEAF)
+		ArtTriangle(&art, 6, 11, 4, 9, 4, 13, C_LEAF_LIGHT)
+		ArtLine(&art, 13, 8, 13, 5, C_LEAF)
+		ArtLine(&art, 13, 5, 11, 5, C_LEAF)
+		ArtTriangle(&art, 10, 5, 12, 3, 12, 7, C_LEAF_LIGHT)
+	case .Irrigation:
+		ArtTriangle(&art, 8, 1, 3, 8, 13, 8, C_OUTLINE)
+		ArtCircle(&art, 8, 9, 5, C_OUTLINE)
+		ArtTriangle(&art, 8, 2, 4, 8, 12, 8, C_WATER)
+		ArtCircle(&art, 8, 9, 4, C_WATER)
+		ArtEllipse(&art, 6, 8, 1, 2, C_WATER_LIGHT)
+		ArtLine(&art, 1, 13, 5, 13, C_LEAF_DARK)
+		ArtLine(&art, 11, 13, 15, 13, C_LEAF_DARK)
+		ArtLine(&art, 2, 15, 6, 15, C_LEAF)
+		ArtLine(&art, 10, 15, 14, 15, C_LEAF)
+	case .Granary:
+		ArtEllipse(&art, 8, 10, 5, 4, C_OUTLINE)
+		ArtEllipse(&art, 8, 10, 4, 3, C_WOOD_LIGHT)
+		ArtRect(&art, 6, 3, 4, 3, C_OUTLINE)
+		ArtRect(&art, 7, 4, 2, 1, C_WOOD_DARK)
+		ArtRect(&art, 6, 6, 4, 1, C_GOLD_DARK)
+		ArtRect(&art, 8, 8, 1, 4, C_GOLD)
+		ArtPixel(&art, 7, 9, C_GOLD)
+		ArtPixel(&art, 9, 9, C_GOLD)
+		ArtPixel(&art, 7, 11, C_GOLD)
+		ArtPixel(&art, 9, 11, C_GOLD)
+	case .LandReclamation:
+		ArtRect(&art, 1, 13, 14, 2, C_DIRT_DARK)
+		ArtRect(&art, 1, 13, 14, 1, C_LEAF_DARK)
+		ArtLine(&art, 3, 12, 10, 4, C_OUTLINE)
+		ArtLine(&art, 4, 12, 11, 4, C_OUTLINE)
+		ArtLine(&art, 4, 12, 11, 4, C_WOOD_LIGHT)
+		ArtPolygon(&art, []Point{{10, 1}, {15, 1}, {15, 6}, {10, 5}}, C_OUTLINE)
+		ArtPolygon(&art, []Point{{11, 2}, {14, 2}, {14, 5}, {11, 4}}, C_STONE_LIGHT)
+		ArtRect(&art, 1, 10, 3, 3, C_OUTLINE)
+		ArtRect(&art, 2, 11, 1, 1, C_WOOD)
+	case .Metropolis:
+		ArtRect(&art, 1, 13, 14, 2, C_OUTLINE)
+		ArtRect(&art, 2, 13, 12, 1, C_STONE_DARK)
+		ArtRect(&art, 2, 8, 3, 5, C_OUTLINE)
+		ArtRect(&art, 3, 9, 1, 4, C_STONE)
+		ArtRect(&art, 11, 7, 3, 6, C_OUTLINE)
+		ArtRect(&art, 12, 8, 1, 5, C_STONE)
+		ArtRect(&art, 6, 4, 4, 9, C_OUTLINE)
+		ArtRect(&art, 7, 5, 2, 8, C_STONE_LIGHT)
+		ArtTriangle(&art, 2, 8, 3, 5, 5, 8, C_OUTLINE)
+		ArtTriangle(&art, 3, 8, 4, 6, 4, 8, C_ROOF)
+		ArtTriangle(&art, 6, 4, 8, 1, 10, 4, C_OUTLINE)
+		ArtTriangle(&art, 7, 4, 8, 2, 9, 4, C_ROOF)
+		ArtTriangle(&art, 11, 7, 12, 4, 14, 7, C_OUTLINE)
+		ArtTriangle(&art, 12, 7, 13, 5, 13, 7, C_ROOF)
+		ArtPixel(&art, 8, 6, C_GOLD)
+		ArtPixel(&art, 8, 9, C_GOLD)
+		ArtPixel(&art, 3, 10, C_GOLD)
+		ArtPixel(&art, 12, 9, C_GOLD)
+	case .Carpentry:
+		ArtRect(&art, 1, 11, 14, 3, C_OUTLINE)
+		ArtRect(&art, 2, 12, 12, 1, C_WOOD)
+		ArtLine(&art, 4, 10, 9, 4, C_OUTLINE)
+		ArtLine(&art, 5, 10, 10, 4, C_OUTLINE)
+		ArtLine(&art, 5, 10, 10, 4, C_WOOD_LIGHT)
+		ArtRect(&art, 8, 1, 5, 4, C_OUTLINE)
+		ArtRect(&art, 9, 2, 3, 2, C_IRON_LIGHT)
+		ArtPixel(&art, 10, 2, C_STONE_LIGHT)
+	case .Masonry:
+		ArtRect(&art, 1, 3, 14, 11, C_OUTLINE)
+		for row in 0..<3 {
+			y := 4+row*3
+			ArtRect(&art, 2, y, 12, 2, C_STONE)
+			ArtRect(&art, 2, y, 12, 1, C_STONE_LIGHT)
+			offset := row%2 == 0 ? 0 : 2
+			for gap in 0..<3 {
+				x := 3+offset+gap*4
+				ArtRect(&art, x, y, 1, 2, C_STONE_DARK)
+			}
+			ArtRect(&art, 2, y+2, 12, 1, C_OUTLINE)
+		}
+	case .Roadworks:
+		ArtPolygon(&art, []Point{{3, 14}, {13, 14}, {9, 3}, {7, 3}}, C_OUTLINE)
+		ArtPolygon(&art, []Point{{4, 14}, {12, 14}, {9, 4}, {8, 4}}, C_DIRT)
+		ArtRect(&art, 8, 11, 1, 2, C_GOLD)
+		ArtRect(&art, 8, 8, 1, 2, C_GOLD)
+		ArtRect(&art, 8, 5, 1, 1, C_GOLD)
+		ArtPixel(&art, 6, 12, C_DIRT_DARK)
+		ArtPixel(&art, 10, 11, C_DIRT_DARK)
+		ArtPixel(&art, 9, 7, C_DIRT_DARK)
+	case .Bridgeworks:
+		ArtRect(&art, 1, 14, 14, 1, C_WATER_DARK)
+		ArtRect(&art, 1, 6, 14, 2, C_OUTLINE)
+		ArtRect(&art, 2, 6, 12, 1, C_STONE_LIGHT)
+		ArtRect(&art, 2, 8, 2, 6, C_OUTLINE)
+		ArtRect(&art, 3, 9, 1, 5, C_STONE)
+		ArtRect(&art, 12, 8, 2, 6, C_OUTLINE)
+		ArtRect(&art, 12, 9, 1, 5, C_STONE)
+		ArtLine(&art, 4, 13, 5, 9, C_OUTLINE)
+		ArtLine(&art, 5, 9, 11, 9, C_OUTLINE)
+		ArtLine(&art, 11, 9, 12, 13, C_OUTLINE)
+		ArtLine(&art, 5, 12, 6, 10, C_STONE)
+		ArtLine(&art, 6, 10, 10, 10, C_STONE)
+		ArtLine(&art, 10, 10, 11, 12, C_STONE)
+		ArtPixel(&art, 8, 9, C_GOLD)
+	case .BridgeProject:
+		ArtRect(&art, 1, 14, 14, 1, C_WATER_DARK)
+		ArtRect(&art, 0, 6, 16, 2, C_OUTLINE)
+		ArtRect(&art, 1, 6, 14, 1, C_STONE_LIGHT)
+		ArtRect(&art, 1, 8, 2, 6, C_OUTLINE)
+		ArtRect(&art, 13, 8, 2, 6, C_OUTLINE)
+		ArtRect(&art, 7, 8, 2, 6, C_OUTLINE)
+		ArtRect(&art, 2, 9, 1, 5, C_STONE)
+		ArtRect(&art, 8, 9, 1, 5, C_STONE)
+		ArtRect(&art, 13, 9, 1, 5, C_STONE)
+		ArtLine(&art, 3, 13, 4, 9, C_OUTLINE)
+		ArtLine(&art, 4, 9, 6, 9, C_OUTLINE)
+		ArtLine(&art, 6, 9, 7, 13, C_OUTLINE)
+		ArtLine(&art, 9, 13, 10, 9, C_OUTLINE)
+		ArtLine(&art, 10, 9, 12, 9, C_OUTLINE)
+		ArtLine(&art, 12, 9, 13, 13, C_OUTLINE)
+		ArtRect(&art, 8, 1, 1, 5, C_OUTLINE)
+		ArtPolygon(&art, []Point{{9, 1}, {14, 2}, {9, 5}}, C_ROOF)
+		ArtPixel(&art, 10, 2, C_GOLD)
+	case .Charters:
+		ArtRect(&art, 3, 2, 10, 12, C_OUTLINE)
+		ArtRect(&art, 4, 3, 8, 10, C_STONE_LIGHT)
+		ArtRect(&art, 2, 2, 2, 12, C_OUTLINE)
+		ArtRect(&art, 12, 2, 2, 12, C_OUTLINE)
+		ArtRect(&art, 3, 3, 1, 10, C_WOOD_LIGHT)
+		ArtRect(&art, 12, 3, 1, 10, C_WOOD_LIGHT)
+		ArtRect(&art, 5, 5, 5, 1, C_STONE_DARK)
+		ArtRect(&art, 5, 7, 5, 1, C_STONE_DARK)
+		ArtCircle(&art, 8, 11, 2, C_OUTLINE)
+		ArtCircle(&art, 8, 11, 1, C_EFFECT_BAD)
+	case .Census:
+		ArtRect(&art, 1, 3, 10, 11, C_OUTLINE)
+		ArtRect(&art, 2, 4, 8, 9, C_STONE_LIGHT)
+		ArtRect(&art, 5, 4, 1, 9, C_STONE_DARK)
+		for row in 0..<3 {
+			y := 6+row*2
+			ArtRect(&art, 3, y, 2, 1, C_STONE_DARK)
+			ArtRect(&art, 6, y, 3, 1, C_STONE_DARK)
+		}
+		ArtLine(&art, 9, 13, 14, 2, C_OUTLINE)
+		ArtLine(&art, 10, 13, 15, 3, C_WHITE)
+		ArtLine(&art, 11, 9, 13, 5, C_STONE_LIGHT)
+	case .Bureaucracy:
+		ArtRect(&art, 6, 1, 4, 3, C_OUTLINE)
+		ArtRect(&art, 7, 2, 2, 1, C_WOOD)
+		ArtRect(&art, 6, 4, 4, 4, C_OUTLINE)
+		ArtRect(&art, 7, 5, 2, 2, C_STONE_LIGHT)
+		ArtRect(&art, 3, 8, 10, 4, C_OUTLINE)
+		ArtRect(&art, 4, 9, 8, 2, C_IRON_LIGHT)
+		ArtRect(&art, 4, 12, 8, 2, C_EFFECT_BAD)
+		ArtPixel(&art, 6, 13, C_OUTLINE)
+		ArtPixel(&art, 10, 13, C_OUTLINE)
+	case .Surveyors:
+		ArtCircle(&art, 8, 8, 6, C_OUTLINE)
+		ArtCircle(&art, 8, 8, 5, C_STONE_LIGHT)
+		ArtTriangle(&art, 8, 8, 5, 4, 9, 9, C_EFFECT_BAD)
+		ArtTriangle(&art, 8, 8, 11, 12, 7, 7, C_WHITE)
+		ArtPixel(&art, 8, 8, C_GOLD)
+		ArtPixel(&art, 8, 2, C_STONE_DARK)
+		ArtPixel(&art, 8, 14, C_STONE_DARK)
+		ArtPixel(&art, 2, 8, C_STONE_DARK)
+		ArtPixel(&art, 14, 8, C_STONE_DARK)
+	case .HighCouncil:
+		ArtEllipse(&art, 8, 12, 7, 3, C_OUTLINE)
+		ArtEllipse(&art, 8, 12, 6, 2, C_WOOD_LIGHT)
+		ArtCircle(&art, 3, 6, 2, C_OUTLINE)
+		ArtCircle(&art, 3, 6, 1, C_CLOTH_LIGHT)
+		ArtCircle(&art, 13, 6, 2, C_OUTLINE)
+		ArtCircle(&art, 13, 6, 1, C_CLOTH_LIGHT)
+		ArtCircle(&art, 8, 5, 2, C_OUTLINE)
+		ArtCircle(&art, 8, 5, 1, C_GOLD)
+		ArtRect(&art, 6, 2, 5, 1, C_OUTLINE)
+		ArtPixel(&art, 6, 2, C_GOLD_LIGHT)
+		ArtPixel(&art, 8, 1, C_GOLD_LIGHT)
+		ArtPixel(&art, 10, 2, C_GOLD_LIGHT)
+	case .Drill:
+		ArtLine(&art, 2, 13, 12, 4, C_OUTLINE)
+		ArtLine(&art, 3, 13, 13, 4, C_STONE_LIGHT)
+		ArtLine(&art, 13, 13, 4, 4, C_OUTLINE)
+		ArtLine(&art, 12, 13, 3, 4, C_STONE_LIGHT)
+		ArtRect(&art, 1, 11, 3, 2, C_OUTLINE)
+		ArtRect(&art, 1, 11, 2, 1, C_GOLD)
+		ArtRect(&art, 12, 11, 3, 2, C_OUTLINE)
+		ArtRect(&art, 13, 11, 2, 1, C_GOLD)
+		ArtPixel(&art, 1, 13, C_GOLD_LIGHT)
+		ArtPixel(&art, 14, 13, C_GOLD_LIGHT)
+	case .Armory:
+		ArtPolygon(&art, []Point{{8, 1}, {14, 3}, {13, 10}, {8, 14}, {3, 10}, {2, 3}}, C_OUTLINE)
+		ArtPolygon(&art, []Point{{8, 2}, {13, 4}, {12, 9}, {8, 12}, {4, 9}, {3, 4}}, C_IRON)
+		ArtRect(&art, 7, 4, 2, 7, C_STONE_LIGHT)
+		ArtRect(&art, 5, 6, 6, 1, C_GOLD)
+		ArtPixel(&art, 8, 2, C_WHITE)
+		ArtPixel(&art, 8, 12, C_GOLD_DARK)
+	case .Fortification:
+		ArtRect(&art, 1, 6, 14, 8, C_OUTLINE)
+		ArtRect(&art, 2, 7, 12, 6, C_STONE)
+		ArtRect(&art, 2, 7, 12, 1, C_STONE_LIGHT)
+		ArtRect(&art, 2, 3, 3, 3, C_OUTLINE)
+		ArtRect(&art, 3, 3, 1, 2, C_STONE_LIGHT)
+		ArtRect(&art, 7, 3, 2, 3, C_OUTLINE)
+		ArtRect(&art, 8, 3, 1, 2, C_STONE_LIGHT)
+		ArtRect(&art, 11, 3, 3, 3, C_OUTLINE)
+		ArtRect(&art, 12, 3, 1, 2, C_STONE_LIGHT)
+		ArtRect(&art, 6, 9, 4, 4, C_OUTLINE)
+		ArtRect(&art, 7, 10, 2, 3, C_WOOD_DARK)
+	case .Siegecraft:
+		ArtRect(&art, 1, 10, 14, 3, C_OUTLINE)
+		ArtRect(&art, 2, 11, 12, 1, C_WOOD)
+		ArtCircle(&art, 4, 13, 2, C_OUTLINE)
+		ArtCircle(&art, 4, 13, 1, C_STONE_DARK)
+		ArtCircle(&art, 12, 13, 2, C_OUTLINE)
+		ArtCircle(&art, 12, 13, 1, C_STONE_DARK)
+		ArtLine(&art, 5, 10, 11, 3, C_OUTLINE)
+		ArtLine(&art, 6, 10, 12, 3, C_WOOD_LIGHT)
+		ArtRect(&art, 10, 1, 4, 3, C_OUTLINE)
+		ArtRect(&art, 11, 2, 2, 1, C_STONE_LIGHT)
+		ArtRect(&art, 2, 7, 3, 3, C_OUTLINE)
+		ArtRect(&art, 3, 8, 1, 1, C_IRON)
+	case .Muster:
+		ArtRect(&art, 3, 1, 2, 14, C_OUTLINE)
+		ArtRect(&art, 4, 2, 1, 12, C_WOOD_LIGHT)
+		ArtPolygon(&art, []Point{{4, 2}, {4, 9}, {15, 4}}, C_OUTLINE)
+		ArtPolygon(&art, []Point{{5, 3}, {5, 8}, {13, 5}}, C_ROOF)
+		ArtLine(&art, 7, 4, 10, 7, C_GOLD)
+		ArtLine(&art, 10, 4, 7, 7, C_GOLD)
+		ArtRect(&art, 1, 14, 6, 1, C_STONE_DARK)
+	}
+	return art
+}
+
 @(private = "file")
 DrawWoodLogIcon :: proc(art: ^Art, x, y: int) {
 	ArtRect(art, x, y, 13, 5, C_OUTLINE)
@@ -2013,12 +2450,16 @@ SpriteSet :: struct {
 	shadow:          rl.Texture2D,
 	glow:            rl.Texture2D,
 	woodIcon:        rl.Texture2D,
+	crownIcon:       rl.Texture2D,
+	techIcon:        [CrownTech]rl.Texture2D,
+	boat:            rl.Texture2D,
 }
 
 SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 	set: SpriteSet
 	set.shadow = CreateShadowTexture()
 	set.glow = CreateGlowTexture()
+	set.boat = CreateBoatTexture()
 	for faction in 0 ..< SPRITE_FACTION_COUNT {
 		accent := FactionColor(w, faction)
 		for kind in ALL_BUILDING_KINDS {
@@ -2118,6 +2559,10 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 	}
 	set.fire = ArtToTexture(DrawFireSprite())
 	set.woodIcon = ArtTakeTexture(DrawWoodIcon())
+	set.crownIcon = ArtTakeTexture(DrawCrownIcon())
+	for tech in CrownTech {
+		set.techIcon[tech] = ArtTakeTexture(DrawCrownTechIcon(tech))
+	}
 	return set
 }
 
@@ -2194,4 +2639,9 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 	}
 	if set.fire.id != 0 do rl.UnloadTexture(set.fire)
 	if set.woodIcon.id != 0 do rl.UnloadTexture(set.woodIcon)
+	if set.crownIcon.id != 0 do rl.UnloadTexture(set.crownIcon)
+	for tech in CrownTech {
+		if set.techIcon[tech].id != 0 do rl.UnloadTexture(set.techIcon[tech])
+	}
+	if set.boat.id != 0 do rl.UnloadTexture(set.boat)
 }

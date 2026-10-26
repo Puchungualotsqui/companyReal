@@ -81,6 +81,56 @@ PRandomRange :: proc(w: ^World, low, high: f32) -> f32 {
 	return low+(high-low)*PRandom(w)
 }
 
+FishingFlotillaFx :: proc(w: ^World, kingdom, townSlot: int) {
+	if !KingdomHasTech(w, kingdom, .FishingFlotillas) do return
+	if !TownIsCoastal(w, kingdom, townSlot) do return
+	if PRandom(w) > 0.025 do return
+	town := &w.kingdoms[kingdom].towns[townSlot]
+	for _ in 0..<8 {
+		x := WorldWrapCoordinate(town.x+int((PRandom(w)-0.5)*28), int(w.maxX))
+		y := WorldWrapCoordinate(town.y+int((PRandom(w)-0.5)*28), int(w.maxY))
+		tile := w.ground[x][y].type
+		if tile != .Water && tile != .FreshWater do continue
+		ParticleSpawn(w, Particle{
+			x = f32(x)+PRandom(w),
+			y = f32(y)+PRandom(w),
+			z = 0.05,
+			vx = (PRandom(w)-0.5)*0.5,
+			vy = (PRandom(w)-0.5)*0.5,
+			vz = PRandomRange(w, 0.8, 1.8),
+			life = PRandomRange(w, 0.4, 0.8),
+			size = PRandomRange(w, 0.12, 0.28),
+			drag = 1,
+			gravity = 4,
+			kind = .Splash,
+			tint = rl.Color{206, 232, 242, 255},
+		})
+		return
+	}
+}
+
+UnitWaterWake :: proc(w: ^World, unitSlot: int) {
+	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return
+	if UnitKindOf(w.units.type[unitSlot]) == .Turtle do return
+	if !UnitOnWaterTile(w, unitSlot) do return
+	if !UnitCanCrossWater(w, w.units.type[unitSlot], w.units.kingdome[unitSlot]) do return
+	if PRandom(w) > 0.18 do return
+	ParticleSpawn(w, Particle{
+		x = w.units.previousX[unitSlot]+(PRandom(w)-0.5)*0.35,
+		y = w.units.previousY[unitSlot]+(PRandom(w)-0.5)*0.35,
+		z = 0.05,
+		vx = (PRandom(w)-0.5)*0.9,
+		vy = (PRandom(w)-0.5)*0.9,
+		vz = PRandomRange(w, 0.4, 1.1),
+		life = PRandomRange(w, 0.25, 0.5),
+		size = PRandomRange(w, 0.12, 0.24),
+		drag = 1.5,
+		gravity = 4,
+		kind = .Splash,
+		tint = rl.Color{196, 226, 240, 255},
+	})
+}
+
 ParticleSpawn :: proc(w: ^World, p: Particle) -> int {
 	slot := -1
 	for step in 0 ..< PARTICLE_CAPACITY {

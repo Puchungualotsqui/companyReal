@@ -205,7 +205,7 @@ TownUnitOrder :: proc(w: ^World, unitSlot: int) -> WarriorOrder {
 	revision := int(town.orderRevision%1_000_000)
 	rotation := int(WorldNoiseHash(revision, int(kind), seed+1301)*f32(total))
 	rank = (rank+rotation)%total
-	garrison := int(f32(total)*TOWN_GARRISON_RATIO)
+	garrison := int(f32(total)*KingdomTechGarrisonRatio(w, unit.kingdome))
 	if rank < garrison do return WarriorGarrison{}
 
 	offset := int(WorldNoiseHash(revision, int(kind), seed+1703)*f32(town.orderCount))
@@ -472,7 +472,7 @@ WarriorFindBreachBuilding :: proc(w: ^World, unitSlot, targetKingdom, targetTown
 						bestHallDistance = distance
 						bestHall = buildingSlot
 					}
-				case .Home, .Farmland, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall:
+				case .Home, .Farmland, .Bridge, .Cannon, .Watchtower, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall, .GiantMortar, .Harbor, .Granary:
 					if distance < bestBuildingDistance {
 						bestBuildingDistance = distance
 						bestBuilding = buildingSlot
@@ -651,7 +651,7 @@ WorldMeleeSeparation :: proc(w: ^World) {
 
 WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 	unit := &w.units[unitSlot]
-	damage := UnitDefaultDamage(unit.type)
+	damage := UnitDefaultDamage(unit.type)*KingdomTechWarriorDamageMultiplier(w, unit.kingdome, UnitKindOf(unit.type))
 	areaRadius := UnitDefaultAreaRadius(unit.type)
 	switch target in state.target {
 	case TargetNone:
@@ -686,7 +686,8 @@ WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 		impactX, impactY, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
 		UnitAttackBurst(w, unitSlot, impactX, impactY)
 		BuildingHitBurst(w, target.slot, impactX, impactY)
-		w.buildings[target.slot].health -= damage
+		buildingDamage := damage*KingdomTechSiegeDamageMultiplier(w, unit.kingdome, UnitKindOf(unit.type))
+		w.buildings[target.slot].health -= buildingDamage
 		if w.buildings[target.slot].health <= 0 {
 			kind := BuildingKindOf(w.buildings[target.slot].type)
 			wasBurning := BuildingOnFire(w, target.slot)

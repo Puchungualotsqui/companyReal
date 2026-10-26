@@ -792,6 +792,20 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				}
 				width := scale*pose.stretchX
 				height := scale*pose.stretchY
+				if kind != .Turtle && UnitOnWaterTile(w, unitSlot) &&
+					UnitCanCrossWater(w, w.units[unitSlot].type, w.units[unitSlot].kingdome) {
+					append(&renderer.items, RenderItem{
+						baseY = unitY+0.42,
+						dest = rl.Rectangle{
+							offsetX+unitX-0.85,
+							offsetY+unitY-0.48,
+							1.7,
+							0.9,
+						},
+						texture = renderer.sprites.boat,
+						tint = UnitIsWarrior(w.units[unitSlot].type) ? FactionColor(w, w.units[unitSlot].kingdome) : rl.WHITE,
+					})
+				}
 				append(&renderer.items, RenderItem{
 					baseY = unitY+pose.swayY+0.5,
 					dest = rl.Rectangle{
@@ -825,6 +839,18 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				color := item.tint
 				if color.a == 0 do color = rl.WHITE
 				rl.DrawTexturePro(item.texture, source, item.dest, rl.Vector2{0, 0}, 0, color)
+			}
+			if camera.zoom >= 4 {
+				WorldRenderTechOverlays(
+					w,
+					offsetX,
+					offsetY,
+					minX,
+					maxX,
+					minY,
+					maxY,
+					camera.zoom,
+				)
 			}
 
 			if renderer.sprites.fire.id != 0 {
@@ -880,6 +906,144 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 			if camera.zoom >= PARTICLE_MIN_ZOOM {
 				ParticleDraw(w, renderer, offsetX, offsetY, minX, maxX, minY, maxY, false)
 			}
+		}
+	}
+}
+
+WorldRenderTechOverlays :: proc(
+	w: ^World,
+	offsetX, offsetY, minX, maxX, minY, maxY, zoom: f32,
+) {
+	lineWidth := 1/zoom
+	for slot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[slot] || !FogBuildingVisible(w, slot) do continue
+		kind := BuildingKindOf(w.buildings.type[slot])
+		kingdom := w.buildings.kingdom[slot]
+		x := offsetX+f32(w.buildings.x[slot])
+		y := offsetY+f32(w.buildings.y[slot])
+		width, height := BuildingTileSize(w.buildings.type[slot])
+		if x+f32(width) < minX || x > maxX || y+f32(height) < minY || y > maxY {
+			continue
+		}
+
+		if KingdomHasTech(w, kingdom, .Masonry) && kind != .Path && kind != .Bridge {
+			rl.DrawRectangleRec(
+				rl.Rectangle{x+f32(width)-0.32, y+0.1, 0.22, 0.2},
+				rl.Color{154, 160, 172, 190},
+			)
+		}
+
+		switch kind {
+		case .Farmland:
+			if KingdomHasTech(w, kingdom, .CropRotation) {
+				for index in 0..<4 {
+					px := x+0.35+f32(index%2)*0.75
+					py := y+0.45+f32(index/2)*0.7
+					rl.DrawRectangleRec(rl.Rectangle{px, py, 0.18, 0.32}, rl.Color{214, 178, 76, 220})
+				}
+			}
+			if KingdomHasTech(w, kingdom, .Irrigation) {
+				rl.DrawRectangleRec(
+					rl.Rectangle{x+0.2, y+f32(height)*0.5, f32(width)-0.4, lineWidth*2},
+					rl.Color{96, 178, 214, 200},
+				)
+			}
+		case .Path:
+			if KingdomHasTech(w, kingdom, .Roadworks) || KingdomHasTech(w, kingdom, .BridgeProject) {
+				rl.DrawRectangleRec(
+					rl.Rectangle{x+0.18, y+0.42, 0.64, lineWidth*1.5},
+					rl.Color{198, 168, 112, 150},
+				)
+			}
+		case .Bridge:
+			if KingdomHasTech(w, kingdom, .Bridgeworks) || KingdomHasTech(w, kingdom, .BridgeProject) {
+				for rail in 0..<2 {
+					rl.DrawRectangleRec(
+						rl.Rectangle{x+0.12, y+0.25+f32(rail)*0.45, 0.76, lineWidth},
+						rl.Color{132, 138, 150, 210},
+					)
+				}
+			}
+		case .Wall, .Watchtower, .Cannon:
+			if KingdomHasTech(w, kingdom, .Fortification) {
+				rl.DrawRectangleRec(
+					rl.Rectangle{x+0.2, y+0.08, 0.18, 0.22},
+					rl.Color{214, 178, 92, 220},
+				)
+				rl.DrawRectangleRec(
+					rl.Rectangle{x+0.62, y+0.08, 0.18, 0.22},
+					rl.Color{214, 178, 92, 220},
+				)
+			}
+		case .TownHall:
+			if KingdomHasTech(w, kingdom, .Metropolis) {
+				rl.DrawLineEx(
+					rl.Vector2{x+0.5, y-0.2},
+					rl.Vector2{x+0.5, y-0.9},
+					lineWidth*2,
+					rl.Color{224, 176, 70, 220},
+				)
+				rl.DrawRectangleRec(
+					rl.Rectangle{x+0.52, y-0.9, 0.55, 0.3},
+					rl.Color{176, 68, 64, 230},
+				)
+			}
+		case .Home, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .DistrictHall, .GiantMortar, .Harbor, .Granary:
+		}
+	}
+
+	for slot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[slot] || w.units.type[slot] == nil || UnitHiddenInside(w, slot) do continue
+		x, y := UnitRenderPosition(w, slot)
+		if x < minX || x > maxX || y < minY || y > maxY do continue
+		if !FogTileVisible(w, int(x), int(y)) do continue
+		kind := UnitKindOf(w.units.type[slot])
+		kingdom := w.units.kingdome[slot]
+		switch kind {
+		case .Builder:
+			if KingdomHasTech(w, kingdom, .Carpentry) {
+				rl.DrawRectangleRec(
+					rl.Rectangle{offsetX+x-0.55, offsetY+y-0.45, 0.45, 0.18},
+					rl.Color{132, 86, 52, 240},
+				)
+			}
+		case .WaterCollector:
+			if KingdomHasTech(w, kingdom, .Irrigation) {
+				rl.DrawRectangleRec(
+					rl.Rectangle{offsetX+x-0.08, offsetY+y-0.95, 0.16, 0.24},
+					rl.Color{96, 178, 214, 220},
+				)
+			}
+		case .CombatBuilder:
+			if KingdomHasTech(w, kingdom, .Muster) {
+				rl.DrawRectangleRec(
+					rl.Rectangle{offsetX+x-0.05, offsetY+y-1.12, 0.1, 0.25},
+					rl.Color{226, 96, 76, 230},
+				)
+			}
+		case .Knight, .Archer, .Rogue:
+			if KingdomHasTech(w, kingdom, .Armory) {
+				rl.DrawRectangleRec(
+					rl.Rectangle{offsetX+x-0.2, offsetY+y-0.9, 0.4, 0.28},
+					rl.Color{154, 160, 172, 230},
+				)
+			}
+			if KingdomHasTech(w, kingdom, .Drill) {
+				rl.DrawRectangleRec(
+					rl.Rectangle{offsetX+x-0.04, offsetY+y-1.12, 0.08, 0.24},
+					rl.Color{224, 176, 70, 230},
+				)
+			}
+		case .Catapult, .Giant, .Mage:
+			if KingdomHasTech(w, kingdom, .Siegecraft) {
+				rl.DrawCircleLines(
+					i32(offsetX+x),
+					i32(offsetY+y-1.0),
+					0.26,
+					rl.Color{226, 96, 76, 220},
+				)
+			}
+		case .Villager, .Farmer, .Turtle, .Explorer:
 		}
 	}
 }

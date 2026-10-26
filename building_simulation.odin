@@ -75,7 +75,7 @@ WorldBuildingUpdate :: proc(w: ^World, deltaTime: f32) {
 		}
 
 		switch _ in w.buildings[buildingSlot].type {
-		case TownHall, Wall, Bridge, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path, DistrictHall:
+		case TownHall, Wall, Bridge, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path, DistrictHall, Granary:
 		case Home:
 			BuildingUpdateHome(w, buildingSlot, deltaTime)
 		case Farmland:
@@ -84,6 +84,8 @@ WorldBuildingUpdate :: proc(w: ^World, deltaTime: f32) {
 			BuildingUpdateCannon(w, buildingSlot, deltaTime)
 		case Watchtower:
 			BuildingUpdateWatchtower(w, buildingSlot, deltaTime)
+		case BuildingOrder:
+			BuildingUpdateOrder(w, buildingSlot, deltaTime)
 		}
 	}
 }
@@ -314,6 +316,22 @@ TownBuilderConstruct :: proc(w: ^World, kingdomSlot, townSlot: int, canGrow: boo
 			}
 		}
 
+		if KingdomHasTech(w, kingdomSlot, .Harbor) && TownIsCoastal(w, kingdomSlot, townSlot) &&
+			town.buildingCounts[.Harbor] == 0 &&
+			TownConstructionKindCount(w, kingdomSlot, townSlot, .Harbor) == 0 {
+			if TownBuilderStartBuilding(w, kingdomSlot, townSlot, BuildingTypeFromKind(.Harbor)) {
+				startedAny = true
+				continue
+			}
+		}
+		if KingdomHasTech(w, kingdomSlot, .Granary) && town.buildingCounts[.Granary] == 0 &&
+			TownConstructionKindCount(w, kingdomSlot, townSlot, .Granary) == 0 {
+			if TownBuilderStartBuilding(w, kingdomSlot, townSlot, BuildingTypeFromKind(.Granary)) {
+				startedAny = true
+				continue
+			}
+		}
+
 		startedTraining := false
 		for kind in AUTO_TRAINING_BUILDINGS {
 			if !(kind in town.unlockedBuildings) do continue
@@ -336,7 +354,8 @@ TownBuilderStartBuilding :: proc(w: ^World, kingdomSlot, townSlot: int, building
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	kind := BuildingKindOf(buildingType)
 	if !(kind in town.unlockedBuildings) do return false
-	if town.wood < BuildingWoodCost(kind) do return false
+	cost := BuildingWoodCost(kind)*KingdomTechBuildingKindCostMultiplier(w, kingdomSlot, kind)
+	if town.wood < cost do return false
 	x, y, found := TownFindBuildingSite(w, kingdomSlot, townSlot, buildingType)
 	if !found do return false
 	return TownStartConstruction(w, kingdomSlot, townSlot, kind, x, y)
@@ -355,8 +374,8 @@ TownStartConstruction :: proc(w: ^World, kingdomSlot, townSlot: int, kind: Build
 	if TownConstructionSiteOverlaps(w, x, y, kind) do return false
 
 	buildingType := BuildingTypeFromKind(kind)
-	if !WorldBuildingValid(w, x, y, buildingType) do return false
-	cost := BuildingWoodCost(kind)
+	if !TownBuildingValid(w, kingdomSlot, x, y, buildingType) do return false
+	cost := BuildingWoodCost(kind)*KingdomTechBuildingKindCostMultiplier(w, kingdomSlot, kind)
 	if town.wood < cost do return false
 	if !BuildingClearUnits(w, x, y, buildingType, false) do return false
 	BuildingClearUnits(w, x, y, buildingType, true)
@@ -560,7 +579,9 @@ TownConstructionWork :: proc(
 		return .Working
 	}
 
-	site.buildWork += deltaTime
+	buildSpeed := KingdomTechBuildSpeedMultiplier(w, kingdomSlot)
+	if site.kind == .Path && KingdomHasTech(w, kingdomSlot, .Roadworks) do buildSpeed *= 1.30
+	site.buildWork += deltaTime*buildSpeed
 	if site.buildWork < BuildingBuildSeconds(site.kind) do return .Working
 	if !BuildingClearUnits(w, site.x, site.y, BuildingTypeFromKind(site.kind), false) do return .Working
 
@@ -770,6 +791,37 @@ TownConstructionSiteOverlaps :: proc(w: ^World, x, y: int, kind: BuildingKind) -
 	return false
 }
 
+BuildingValidTileTypeForKingdom :: proc(w: ^World, kingdom: int, bType: BuildingType, tType: TileType) -> bool {
+	if KingdomHasTech(w, kingdom, .LandReclamation) {
+		switch _ in bType {
+		case Farmland:
+			if tType == .Hill || tType == .Desert do return true
+		case TownHall, Home, Wall, Bridge, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path, DistrictHall, BuildingOrder, Granary:
+		}
+	}
+	return BuildingValidTileType(bType, tType)
+}
+
+TownBuildingOverTile :: proc(w: ^World, kingdom, x, y: int, bType: BuildingType) -> bool {
+	width, height := BuildingTileSize(bType)
+	if x < 0 || y < 0 || width <= 0 || height <= 0 ||
+		x+width > int(w.maxX) || y+height > int(w.maxY) {
+		return false
+	}
+	for tileX in x..<x+width {
+		for tileY in y..<y+height {
+			if !BuildingValidTileTypeForKingdom(w, kingdom, bType, w.ground[tileX][tileY].type) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+TownBuildingValid :: proc(w: ^World, kingdom, x, y: int, bType: BuildingType) -> bool {
+	return !WorldBuildingCollides(w, x, y, bType) && TownBuildingOverTile(w, kingdom, x, y, bType)
+}
+
 TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType: BuildingType) -> (int, int, bool) {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
 	worldWidth := int(w.maxX)
@@ -800,7 +852,7 @@ TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType
 			if !TownBuildingInArea(w, kingdomSlot, townSlot, x, y, buildingType) do continue
 			if CombatSiteOverlaps(w, x, y, kind) do continue
 			if TownConstructionSiteOverlaps(w, x, y, kind) do continue
-			if !WorldBuildingValid(w, x, y, buildingType) do continue
+			if !TownBuildingValid(w, kingdomSlot, x, y, buildingType) do continue
 			access, accessible := TownPlacementAccess(w, field, kingdomSlot, x, y, buildingWidth, buildingHeight)
 			if !accessible do continue
 			score := TownPlacementScore(w, kingdomSlot, townSlot, x, y, buildingWidth, buildingHeight, kind, seed)

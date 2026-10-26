@@ -668,7 +668,7 @@ BloodBleedTick :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	tint := BloodTintForUnitType(type)
 	if tint == BLOOD_TINT_NONE do return
 
-	maxHealth := UnitDefaultHealth(type)
+	maxHealth := UnitMaxHealth(w, unitSlot)
 	if maxHealth <= 0 do return
 	ratio := w.units.health[unitSlot]/maxHealth
 	if ratio > 0.55 do return
@@ -686,9 +686,9 @@ BloodBleedTick :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 
 BuildingStoneMaterial :: proc(kind: BuildingKind) -> bool {
 	switch kind {
-	case .TownHall, .Wall, .Watchtower, .Cannon, .Bridge, .Path, .DistrictHall:
+	case .TownHall, .Wall, .Watchtower, .Cannon, .Bridge, .Path, .DistrictHall, .GiantMortar, .Harbor:
 		return true
-	case .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
+	case .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Granary:
 		return false
 	}
 	unreachable()

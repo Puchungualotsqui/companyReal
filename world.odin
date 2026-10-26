@@ -260,7 +260,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 
 	w.buildings.x[i] = x
 	w.buildings.y[i] = y
-	w.buildings.health[i] = BuildingDefaultHealth(type)
+	w.buildings.health[i] = BuildingMaxHealthFor(w, kingdomSlot, type)
 	w.buildings.cooldown[i] = 0
 	w.buildings.type[i] = type
 	w.buildings.kingdom[i] = kingdomSlot
@@ -358,7 +358,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 				}
 			}
 		}
-	case Bridge, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Wall, Home, Farmland, Path, DistrictHall:
+	case Bridge, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Wall, Home, Farmland, Path, DistrictHall, Granary, BuildingOrder:
 	}
 
 	resident := w.buildings.homeResident[slot]-1

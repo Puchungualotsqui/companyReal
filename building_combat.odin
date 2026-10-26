@@ -28,7 +28,9 @@ CombatBuildingSeconds :: proc(kind: BuildingKind) -> f32 {
 		return 8
 	case .Cannon:
 		return 12
-	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall:
+	case .GiantMortar:
+		return 14
+	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall, .Harbor, .Granary:
 		return 6
 	}
 	unreachable()
@@ -179,7 +181,9 @@ CombatSiteAdvance :: proc(w: ^World, siteSlot: int, deltaTime: f32) -> bool {
 	}
 
 	site := &w.combatSites[siteSlot]
-	site.work += deltaTime
+	speed := KingdomTechBuildSpeedMultiplier(w, site.kingdom)
+	if site.kind == .Bridge do speed *= KingdomTechBridgeBuildMultiplier(w, site.kingdom)
+	site.work += deltaTime*speed
 	if site.work < CombatBuildingSeconds(site.kind) do return false
 
 	if _, ok := BuildingSpawn(

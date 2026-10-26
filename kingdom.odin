@@ -84,6 +84,9 @@ Kingdom :: struct {
 	towns: #soa [TOWN_CAPACITY]Town,
 	townUsed: [TOWN_CAPACITY]bool,
 	kingdomWar: [KINGDOM_SLOTS]bool,
+	techs: bit_set[CrownTech],
+	insight: int,
+	coastalTownCount: int,
 }
 
 TownOrder :: union {
@@ -146,7 +149,7 @@ TOWN_ERA_REWARDS := [TOWN_MILESTONE_TIER_COUNT][2]MilestoneOption{
 		{
 			path = .Siege,
 			units = {.Catapult},
-			unlocks = {.SiegeWorkshop, .Cannon},
+			unlocks = {.SiegeWorkshop, .Cannon, .GiantMortar},
 		},
 	},
 	{
@@ -231,6 +234,12 @@ Town :: struct {
 	waterAccessTerrainRevision: u64,
 	waterAccessCached: bool,
 	foodShortage, waterShortage: f32,
+	coastal: bool,
+	coastalCached: bool,
+	coastalTerrainRevision: u64,
+	coastalAreaRadius, coastalDistricts: int,
+	blockadeUntil: f32,
+	blockadeBy: int,
 	areaRadius: int,
 	districts: [MAX_TOWN_DISTRICTS]TownDistrict,
 	districtCount: int,
@@ -427,6 +436,8 @@ TownInitialize :: proc(w: ^World, kingdomSlot, townSlot, hallSlot, x, y: int, st
 		unlockedUnits = TOWN_BASE_UNLOCKED_UNITS,
 	}
 	for &slot in town.buildingSlots do slot = -1
+	TownApplyTechUnlocks(w, kingdomSlot, townSlot)
+	if KingdomHasTech(w, kingdomSlot, .Metropolis) do town.areaRadius += 1
 	town.buildingSlots[.TownHall] = hallSlot
 	town.buildingCounts[.TownHall] = 1
 	town.growthCooldown = TOWN_ERAS[0].interval
@@ -454,7 +465,8 @@ TownEffectiveBatch :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	base := f32(TownBaseBatch(w, kingdomSlot, townSlot))
 	halls := f32(town.buildingCounts[.DistrictHall])
-	return max(1, int(math.round(base*(1+TOWN_DISTRICT_GROWTH_BONUS*halls))))
+	growth := KingdomTechGrowthMultiplier(w, kingdomSlot, townSlot)
+	return max(1, int(math.round(base*(1+TOWN_DISTRICT_GROWTH_BONUS*halls)*growth)))
 }
 
 KingdomFreeTownSlot :: proc(w: ^World, kingdomSlot: int) -> int {
@@ -482,7 +494,14 @@ KingdomTownCount :: proc(w: ^World, kingdomSlot: int) -> int {
 // adds a fixed increment, so wide expansion gets steadily more expensive.
 TownFoundingWoodCost :: proc(w: ^World, kingdomSlot: int) -> f32 {
 	towns := max(KingdomTownCount(w, kingdomSlot)-1, 0)
-	return f32(TOWN_FOUNDING_WOOD+TOWN_FOUNDING_WOOD_PER_TOWN*towns)
+	base := f32(TOWN_FOUNDING_WOOD+TOWN_FOUNDING_WOOD_PER_TOWN*towns)
+	base *= KingdomTechFoundingCostMultiplier(w, kingdomSlot)
+	if KingdomHasHarbor(w, kingdomSlot) do base *= 0.80
+	return base
+}
+
+TownFoundingSettlers :: proc(w: ^World, kingdomSlot: int) -> int {
+	return max(1, TOWN_FOUNDING_SETTLERS-KingdomTechFoundingSettlerReduction(w, kingdomSlot))
 }
 
 // Builders stop chopping at a routine stockpile, but expansion needs a much
@@ -529,6 +548,7 @@ TownFound :: proc(w: ^World, kingdomSlot, x, y, settlers: int) -> bool {
 		TownSpawnCitizen(w, kingdomSlot, townSlot, Villager{})
 	}
 	TownSpawnCitizen(w, kingdomSlot, townSlot, Builder{})
+	KingdomAddInsight(w, kingdomSlot, CROWN_INSIGHT_PER_TOWN)
 	return true
 }
 
@@ -658,7 +678,8 @@ TownStartFounding :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> bool {
 	cost := TownFoundingWoodCost(w, kingdomSlot)
 	if town.wood < cost do return false
 	if town.citizens < TOWN_FOUNDING_MIN_CITIZENS do return false
-	if TownUnitCount(w, kingdomSlot, townSlot, .Villager) < TOWN_FOUNDING_SETTLERS {
+	requiredSettlers := TownFoundingSettlers(w, kingdomSlot)
+	if TownUnitCount(w, kingdomSlot, townSlot, .Villager) < requiredSettlers {
 		return false
 	}
 	if TownUnitCount(w, kingdomSlot, townSlot, .Builder) <= 0 do return false
@@ -672,8 +693,8 @@ TownStartFounding :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> bool {
 	}
 
 	town.wood -= cost
-	settlers := TownTakeVillagers(w, kingdomSlot, townSlot, TOWN_FOUNDING_SETTLERS)
-	if settlers < TOWN_FOUNDING_SETTLERS {
+	settlers := TownTakeVillagers(w, kingdomSlot, townSlot, requiredSettlers)
+	if settlers < requiredSettlers {
 		town.wood += cost
 		for _ in 0..<settlers do TownSpawnCitizen(w, kingdomSlot, townSlot, Villager{})
 		return false
@@ -915,6 +936,9 @@ TownMilestoneCheck :: proc(w: ^World, kingdomSlot, townSlot: int) {
 		next := TOWN_ERAS[town.milestonesEarned+1].threshold
 		if town.citizens < next do break
 		town.milestonesEarned += 1
+		insight := CROWN_INSIGHT_PER_MILESTONE
+		if KingdomHasTech(w, kingdomSlot, .HighCouncil) do insight *= 2
+		KingdomAddInsight(w, kingdomSlot, insight)
 		if kingdomSlot == w.observerKingdom {
 			WorldAlertAdd(w, .Milestone, kingdomSlot, townSlot, -1, f32(town.x), f32(town.y))
 		}
@@ -1143,6 +1167,7 @@ TownFuse :: proc(
 	w.kingdoms[kingdomSlot].towns[guestSlot] = Town{}
 	WorldConstructionChanged(w)
 	w.navigationRevision += 1
+	KingdomAddInsight(w, kingdomSlot, CROWN_INSIGHT_PER_FUSION)
 	return true
 }
 

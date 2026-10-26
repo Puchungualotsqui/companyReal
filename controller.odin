@@ -30,6 +30,7 @@ KingdomCommand :: union {
 	CommandStopDefend,
 	CommandDeclareWar,
 	CommandMakePeace,
+	CommandUseOrder,
 }
 
 CommandQueueConversion :: struct {
@@ -100,6 +101,11 @@ CommandMakePeace :: struct {
 	other: int,
 }
 
+CommandUseOrder :: struct {
+	kind: OrderKind,
+	x, y: f32,
+}
+
 KingdomIssueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) -> bool {
 	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do return false
 
@@ -136,6 +142,8 @@ KingdomIssueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) ->
 		if !KingdomAtWar(w, kingdom, cmd.other) do return false
 		KingdomMakePeace(w, kingdom, cmd.other)
 		return true
+	case CommandUseOrder:
+		return OrderStart(w, kingdom, cmd.kind, cmd.x, cmd.y)
 	}
 	return false
 }

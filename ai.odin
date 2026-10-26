@@ -101,6 +101,54 @@ AIDecide :: proc(w: ^World, kingdom: int) {
 		AITownEconomy(w, kingdom, townSlot, &counts[townSlot], brain)
 		AITryCombatBuilding(w, kingdom, townSlot, &counts[townSlot])
 	}
+	AITechUpdate(w, kingdom)
+	AIUseOrders(w, kingdom)
+}
+
+AITechUpdate :: proc(w: ^World, kingdom: int) {
+	if KingdomInsight(w, kingdom) <= 0 do return
+	priorities: [5]CrownBranch = {.Warfare, .Provisioning, .Industry, .Statecraft, .Seafaring}
+	if KingdomHasWar(w, kingdom) {
+		priorities = {.Warfare, .Industry, .Statecraft, .Provisioning, .Seafaring}
+	}
+	if w.kingdoms[kingdom].coastalTownCount > 0 {
+		priorities = {.Seafaring, .Warfare, .Provisioning, .Industry, .Statecraft}
+	}
+
+	for _ in 0..<3 {
+		unlockedAny := false
+		for branch in priorities {
+			for tech in CROWN_BRANCH_TECHS[branch] {
+				if !KingdomCanUnlockTech(w, kingdom, tech) do continue
+				if KingdomUnlockTech(w, kingdom, tech) {
+					unlockedAny = true
+					break
+				}
+			}
+		}
+		if !unlockedAny do break
+	}
+}
+
+AIUseOrders :: proc(w: ^World, kingdom: int) {
+	if OrderSourceReadyCount(w, kingdom, .GiantMortar) <= 0 do return
+	for other in 0 ..< KINGDOMS_CAPACITY {
+		if !KingdomAtWar(w, kingdom, other) do continue
+		targetTown := AINearestTownOf(w, other, kingdom)
+		if targetTown < 0 do continue
+		town := &w.kingdoms[other].towns[targetTown]
+		if KingdomIssueCommand(
+			w,
+			kingdom,
+			CommandUseOrder{
+				kind = .GiantMortar,
+				x = f32(town.x)+2,
+				y = f32(town.y)+2,
+			},
+		) {
+			return
+		}
+	}
 }
 
 AIKindIsWarrior :: proc(kind: UnitKind) -> bool {
@@ -338,7 +386,7 @@ AIChooseMilestoneOption :: proc(
 
 AICombatBuildingChoice :: proc(w: ^World, kingdom, townSlot: int) -> (BuildingKind, bool) {
 	town := &w.kingdoms[kingdom].towns[townSlot]
-	kinds := [2]BuildingKind{.Watchtower, .Cannon}
+	kinds := [3]BuildingKind{.Watchtower, .Cannon, .GiantMortar}
 	for kind in kinds {
 		if !(kind in town.unlockedBuildings) do continue
 		if town.buildingCounts[kind] > 0 do continue
@@ -567,7 +615,7 @@ AIExpand :: proc(w: ^World, kingdom: int) {
 		town := &w.kingdoms[kingdom].towns[townSlot]
 		if town.citizens < TOWN_FOUNDING_MIN_CITIZENS do continue
 		if town.wood < TownFoundingWoodCost(w, kingdom) do continue
-		if TownUnitCount(w, kingdom, townSlot, .Villager) < TOWN_FOUNDING_SETTLERS do continue
+		if TownUnitCount(w, kingdom, townSlot, .Villager) < TownFoundingSettlers(w, kingdom) do continue
 		if TownConstructionKindCount(w, kingdom, townSlot, .TownHall) > 0 do continue
 		if TownUnitCount(w, kingdom, townSlot, .Builder) <= 0 do continue
 		if KingdomFreeTownSlot(w, kingdom) < 0 do continue
