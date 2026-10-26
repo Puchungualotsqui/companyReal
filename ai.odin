@@ -8,6 +8,8 @@ import "core:math"
 
 AI_DECISION_MIN :: 2.8
 AI_DECISION_MAX :: 5.4
+AI_ORDER_MIN :: 12
+AI_ORDER_MAX :: 22
 AI_DIPLOMACY_MIN :: 22
 AI_DIPLOMACY_MAX :: 46
 AI_EXPAND_MIN :: 9
@@ -18,6 +20,7 @@ AI_TRUCE_SECONDS :: 90
 
 AIBrain :: struct {
 	decisionTimer:     f32,
+	orderTimer:        f32,
 	diplomacyTimer:    f32,
 	expandTimer:       f32,
 	aggression:        f32,
@@ -33,6 +36,7 @@ AIStateInit :: proc(w: ^World, kingdom: int) {
 	brain.aggression = WorldNoiseHash(kingdom, 3, seed)
 	brain.expansion = WorldNoiseHash(kingdom, 11, seed)
 	brain.decisionTimer = 0.8+WorldNoiseHash(kingdom, 17, seed)*2
+	brain.orderTimer = 6+WorldNoiseHash(kingdom, 29, seed)*8
 	brain.diplomacyTimer = 8+WorldNoiseHash(kingdom, 19, seed)*18
 	brain.expandTimer = 5+WorldNoiseHash(kingdom, 23, seed)*10
 	brain.warCommitUntil = 0
@@ -54,6 +58,7 @@ AIControllerUpdate :: proc(w: ^World, kingdom: int, deltaTime: f32) {
 	brain := &w.controllers[kingdom].ai
 
 	brain.decisionTimer -= deltaTime
+	brain.orderTimer -= deltaTime
 	brain.diplomacyTimer -= deltaTime
 	brain.expandTimer -= deltaTime
 
@@ -61,6 +66,10 @@ AIControllerUpdate :: proc(w: ^World, kingdom: int, deltaTime: f32) {
 		brain.decisionTimer = AI_DECISION_MIN+
 			AIRandom(w, kingdom, 31)*(AI_DECISION_MAX-AI_DECISION_MIN)
 		AIDecide(w, kingdom)
+	}
+	if brain.orderTimer <= 0 {
+		brain.orderTimer = AI_ORDER_MIN+AIRandom(w, kingdom, 43)*(AI_ORDER_MAX-AI_ORDER_MIN)
+		AIUseOrders(w, kingdom)
 	}
 	if brain.diplomacyTimer <= 0 {
 		brain.diplomacyTimer = AI_DIPLOMACY_MIN+
@@ -102,7 +111,6 @@ AIDecide :: proc(w: ^World, kingdom: int) {
 		AITryCombatBuilding(w, kingdom, townSlot, &counts[townSlot])
 	}
 	AITechUpdate(w, kingdom)
-	AIUseOrders(w, kingdom)
 }
 
 AITechUpdate :: proc(w: ^World, kingdom: int) {
@@ -130,25 +138,82 @@ AITechUpdate :: proc(w: ^World, kingdom: int) {
 	}
 }
 
+// Strongest first. Every source fires once per cooldown, so the AI spends its
+// rare orders before falling back to mortars and naval utility.
+AI_ORDER_PRIORITY := [len(ALL_ORDER_KINDS)]OrderKind{
+	.Starfall,
+	.NapalmBarrage,
+	.SiegeTremor,
+	.WaterBomber,
+	.MiasmaBarrage,
+	.GlacierShell,
+	.GiantMortar,
+	.Blockade,
+}
+
 AIUseOrders :: proc(w: ^World, kingdom: int) {
-	if OrderSourceReadyCount(w, kingdom, .GiantMortar) <= 0 do return
+	if !KingdomHasWar(w, kingdom) do return
+	for kind in AI_ORDER_PRIORITY {
+		if OrderSourceReadyCount(w, kingdom, kind) <= 0 do continue
+		if kind == .Blockade {
+			if AIUseBlockade(w, kingdom) do return
+			continue
+		}
+		hazard := kind == .GlacierShell || kind == .WaterBomber ||
+			kind == .MiasmaBarrage || kind == .NapalmBarrage
+		for other in 0 ..< KINGDOMS_CAPACITY {
+			if !KingdomAtWar(w, kingdom, other) do continue
+			targetTown := AINearestTownOf(w, other, kingdom)
+			if targetTown < 0 do continue
+			town := &w.kingdoms[other].towns[targetTown]
+			x := f32(town.x)+2
+			y := f32(town.y)+2
+			if hazard && !AIOrderHazardClear(w, kingdom, x, y, OrderRadius(kind)) do continue
+			if KingdomIssueCommand(
+				w,
+				kingdom,
+				CommandUseOrder{kind = kind, x = x, y = y},
+			) {
+				return
+			}
+		}
+	}
+}
+
+// Flood, gas, fire and ice ignore kingdoms. Do not drop one on the assault.
+// Mortars, tremors and starfall are exempt: those only damage enemies.
+AIOrderHazardClear :: proc(w: ^World, kingdom: int, x, y, radius: f32) -> bool {
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	radiusSquared := radius*radius
+	for unitSlot in 0 ..< UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil do continue
+		if w.units[unitSlot].kingdome != kingdom do continue
+		if UnitHiddenInside(w, unitSlot) do continue
+		deltaX := WorldShortestWrappedDelta(w.units[unitSlot].x-x, worldWidth)
+		deltaY := WorldShortestWrappedDelta(w.units[unitSlot].y-y, worldHeight)
+		if deltaX*deltaX+deltaY*deltaY <= radiusSquared do return false
+	}
+	return true
+}
+
+// Blockades only matter on coastal towns that are not already cut off.
+AIUseBlockade :: proc(w: ^World, kingdom: int) -> bool {
 	for other in 0 ..< KINGDOMS_CAPACITY {
 		if !KingdomAtWar(w, kingdom, other) do continue
-		targetTown := AINearestTownOf(w, other, kingdom)
+		targetTown := AINearestTownOf(w, other, kingdom, coastalOnly = true)
 		if targetTown < 0 do continue
 		town := &w.kingdoms[other].towns[targetTown]
+		if town.blockadeUntil > w.simulationTime do continue
 		if KingdomIssueCommand(
 			w,
 			kingdom,
-			CommandUseOrder{
-				kind = .GiantMortar,
-				x = f32(town.x)+2,
-				y = f32(town.y)+2,
-			},
+			CommandUseOrder{kind = .Blockade, x = f32(town.x)+2, y = f32(town.y)+2},
 		) {
-			return
+			return true
 		}
 	}
+	return false
 }
 
 AIKindIsWarrior :: proc(kind: UnitKind) -> bool {
@@ -462,7 +527,7 @@ KingdomHasWar :: proc(w: ^World, kingdom: int) -> bool {
 	return false
 }
 
-AINearestTownOf :: proc(w: ^World, kingdom, fromKingdom: int) -> int {
+AINearestTownOf :: proc(w: ^World, kingdom, fromKingdom: int, coastalOnly := false) -> int {
 	if !w.kingdomUsed[fromKingdom] do return -1
 	centerTown := w.kingdoms[fromKingdom].capitalSlot
 	if centerTown < 0 || !w.kingdoms[fromKingdom].townUsed[centerTown] {
@@ -482,6 +547,7 @@ AINearestTownOf :: proc(w: ^World, kingdom, fromKingdom: int) -> int {
 	bestDistance: f32 = 0
 	for townSlot in 0 ..< TOWN_CAPACITY {
 		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+		if coastalOnly && !TownIsCoastal(w, kingdom, townSlot) do continue
 		town := &w.kingdoms[kingdom].towns[townSlot]
 		deltaX := WorldShortestWrappedDelta(f32(town.x)+2-centerX, f32(w.maxX))
 		deltaY := WorldShortestWrappedDelta(f32(town.y)+2-centerY, f32(w.maxY))
