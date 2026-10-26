@@ -234,9 +234,10 @@ TownAtPoint :: proc(w: ^World, x, y: f32) -> (kingdom, town: int, found: bool) {
 	return -1, -1, false
 }
 
+// Target validity only covers the map and the order rules. Whether a source
+// is currently ready is checked when the strike is issued.
 OrderTargetValid :: proc(w: ^World, kingdom: int, kind: OrderKind, x, y: f32) -> bool {
 	if !OrderUnlocked(w, kingdom, kind) do return false
-	if OrderSourceReadyCount(w, kingdom, kind) <= 0 do return false
 	switch kind {
 	case .GiantMortar:
 		if kingdom == w.observerKingdom {

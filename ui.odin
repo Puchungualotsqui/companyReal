@@ -3352,10 +3352,12 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 		label = "Choose a combat building  -  Esc to cancel"
 	case .OrderAim:
 		label = fmt.ctprintf("%s  -  click a target  -  Esc to cancel", OrderName(ui.orderKind))
+		kingdom := WorldLocalKingdom(w)
 		if tileX, tileY, ok := UITileAtMouse(w, camera, mouse); ok {
-			kingdom := WorldLocalKingdom(w)
 			if !OrderTargetValid(w, kingdom, ui.orderKind, f32(tileX)+0.5, f32(tileY)+0.5) {
-				label = "Target must be explored and an order source ready"
+				label = "Target must be explored"
+			} else if OrderSourceReadyCount(w, kingdom, ui.orderKind) <= 0 {
+				label = fmt.ctprintf("%s reloading  -  the closest ready source fires", OrderName(ui.orderKind))
 			}
 		}
 	case .Place:
@@ -3439,7 +3441,7 @@ UIOrderPanelUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bo
 					if !rl.CheckCollisionPointRec(mouse, rects[index]) do continue
 					if ui.command == .OrderAim && ui.orderKind == kinds[index] {
 						ui.command = .Inspect
-					} else if OrderSourceReadyCount(w, local, kinds[index]) > 0 {
+					} else if OrderSourceCount(w, local, kinds[index]) > 0 {
 						ui.command = .OrderAim
 						ui.orderKind = kinds[index]
 					}
@@ -3455,7 +3457,7 @@ UIOrderPanelUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bo
 		if rl.IsMouseButtonPressed(.LEFT) {
 			if ui.command == .OrderAim && ui.orderKind == kinds[index] {
 				ui.command = .Inspect
-			} else if OrderSourceReadyCount(w, local, kinds[index]) > 0 {
+			} else if OrderSourceCount(w, local, kinds[index]) > 0 {
 				ui.command = .OrderAim
 				ui.orderKind = kinds[index]
 			}
@@ -3472,7 +3474,6 @@ UIOrderTargetingUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mou
 		return
 	}
 	if OrderSourceCount(w, local, ui.orderKind) <= 0 ||
-		OrderSourceReadyCount(w, local, ui.orderKind) <= 0 ||
 		rl.IsKeyPressed(.ESCAPE) || rl.IsMouseButtonPressed(.RIGHT) {
 		ui.command = .Inspect
 		ui.hover = {}
@@ -3502,6 +3503,7 @@ UIOrderTargetingUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mou
 	targetY := f32(tileY)+0.5
 	if !OrderTargetValid(w, local, ui.orderKind, targetX, targetY) do return
 	if !rl.IsMouseButtonPressed(.LEFT) do return
+	if OrderSourceReadyCount(w, local, ui.orderKind) <= 0 do return
 	if KingdomIssueCommand(
 		w,
 		local,
@@ -3544,7 +3546,6 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 		hovered := rl.CheckCollisionPointRec(mouse, rect)
 
 		background := hovered ? UI_COLOR_BUTTON_HOVER : UI_COLOR_BUTTON
-		if ready <= 0 && active <= 0 do background = UI_COLOR_BUTTON_OFF
 		rl.DrawRectangleRec(rect, background)
 		border := UI_COLOR_BORDER_INNER
 		if active > 0 do border = UI_COLOR_ATTACK
@@ -3556,7 +3557,6 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 		if texture.id != 0 {
 			source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 			tint := rl.WHITE
-			if ready <= 0 && active <= 0 do tint = rl.Color{110, 110, 116, 255}
 			rl.DrawTexturePro(
 				texture,
 				source,
@@ -3627,7 +3627,7 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 		status = fmt.ctprintf("Next ready in %ds  -  %d built", int(math.ceil(next)), total)
 	}
 
-	height: f32 = 104
+	height: f32 = 130
 	x := clamp(rect.x-UI_ORDER_TOOLTIP_W-12, UI_MARGIN, f32(rl.GetScreenWidth())-UI_ORDER_TOOLTIP_W-UI_MARGIN)
 	y := clamp(rect.y, UI_MARGIN, f32(rl.GetScreenHeight())-height-UI_MARGIN)
 	box := rl.Rectangle{x, y, UI_ORDER_TOOLTIP_W, height}
@@ -3651,6 +3651,7 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 			UI_COLOR_DIM,
 		)
 	}
+	UIText("Uses the nearest ready source.", box.x+UI_PAD, box.y+102, UI_COLOR_DIM)
 }
 
 UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
@@ -3662,8 +3663,13 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 	centerX := f32(tileX)+0.5
 	centerY := f32(tileY)+0.5
 	valid := OrderTargetValid(w, local, ui.orderKind, centerX, centerY)
+	anyReady := OrderSourceReadyCount(w, local, ui.orderKind) > 0
 	color := rl.Color{110, 218, 128, 220}
-	if !valid do color = rl.Color{228, 92, 82, 220}
+	if !valid {
+		color = rl.Color{228, 92, 82, 220}
+	} else if !anyReady {
+		color = rl.Color{224, 176, 70, 220}
+	}
 
 	if ui.orderKind == .Blockade {
 		if targetKingdom, targetTown, found := TownAtPoint(w, centerX, centerY); found {
@@ -3673,6 +3679,13 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 
 	radius := OrderRadius(ui.orderKind)
 	if radius <= 0 do radius = 2.5
+	source := OrderSourceNearestReady(w, local, ui.orderKind, centerX, centerY)
+
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	halfWidth := f32(rl.GetScreenWidth())/(2*camera.zoom)
+	halfHeight := f32(rl.GetScreenHeight())/(2*camera.zoom)
+
 	rl.BeginMode2D(camera)
 	rl.DrawCircleV(rl.Vector2{centerX, centerY}, radius, rl.Color{color[0], color[1], color[2], 40})
 	rl.DrawCircleLines(i32(centerX), i32(centerY), radius, color)
@@ -3689,11 +3702,47 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 		color,
 	)
 
-	source := OrderSourceNearestReady(w, local, ui.orderKind, centerX, centerY)
+	// Every source shows its own readiness ring: gold ready, dim recharging,
+	// red firing. The source the strike will use is highlighted.
+	for slot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != local do continue
+		orderKind, isOrder := BuildingOrderKind(BuildingKindOf(w.buildings[slot].type))
+		if !isOrder || orderKind != ui.orderKind do continue
+		order, hasOrder := BuildingOrderState(w, slot)
+		if !hasOrder do continue
+
+		sourceX, sourceY := OrderBuildingCenter(w, slot)
+		if abs(WorldShortestWrappedDelta(sourceX-camera.target.x, worldWidth)) > halfWidth+4 ||
+			abs(WorldShortestWrappedDelta(sourceY-camera.target.y, worldHeight)) > halfHeight+4 {
+			continue
+		}
+		width, height := BuildingTileSize(w.buildings[slot].type)
+		ringRadius := max(f32(width), f32(height))*0.5+0.9
+		ringColor := rl.Color{224, 176, 70, 130}
+		fillColor := rl.Color{224, 176, 70, 24}
+		if order.orderActive > 0 {
+			pulse := 0.55+0.45*math.sin(w.simulationTime*5)
+			ringColor = rl.Color{226, 96, 76, u8(90+80*pulse)}
+			fillColor = rl.Color{226, 96, 76, 20}
+		} else if order.orderCooldown > 0 {
+			ringColor = rl.Color{150, 120, 110, 70}
+			fillColor = rl.Color{150, 120, 110, 12}
+		}
+		if slot == source {
+			ringColor = rl.Color{255, 226, 136, 220}
+			fillColor = rl.Color{224, 176, 70, 40}
+		}
+		rl.DrawCircleV(rl.Vector2{sourceX, sourceY}, ringRadius, fillColor)
+		rl.DrawCircleLines(i32(sourceX), i32(sourceY), ringRadius, ringColor)
+		if slot == source {
+			rl.DrawCircleV(rl.Vector2{sourceX, sourceY}, 0.28, rl.Color{255, 226, 136, 230})
+		}
+	}
+
 	if source >= 0 {
 		sourceX, sourceY := OrderBuildingCenter(w, source)
-		deltaX := WorldShortestWrappedDelta(centerX-sourceX, f32(w.maxX))
-		deltaY := WorldShortestWrappedDelta(centerY-sourceY, f32(w.maxY))
+		deltaX := WorldShortestWrappedDelta(centerX-sourceX, worldWidth)
+		deltaY := WorldShortestWrappedDelta(centerY-sourceY, worldHeight)
 		rl.DrawLineEx(
 			rl.Vector2{sourceX, sourceY},
 			rl.Vector2{sourceX+deltaX, sourceY+deltaY},
@@ -3702,6 +3751,40 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 		)
 	}
 	rl.EndMode2D()
+
+	// Cooldown seconds above recharging sources.
+	for slot in 0..<BUILDING_CAPACITY {
+		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != local do continue
+		orderKind, isOrder := BuildingOrderKind(BuildingKindOf(w.buildings[slot].type))
+		if !isOrder || orderKind != ui.orderKind do continue
+		order, hasOrder := BuildingOrderState(w, slot)
+		if !hasOrder || order.orderActive > 0 || order.orderCooldown <= 0 do continue
+
+		sourceX, sourceY := OrderBuildingCenter(w, slot)
+		if abs(WorldShortestWrappedDelta(sourceX-camera.target.x, worldWidth)) > halfWidth+4 ||
+			abs(WorldShortestWrappedDelta(sourceY-camera.target.y, worldHeight)) > halfHeight+4 {
+			continue
+		}
+		_, height := BuildingTileSize(w.buildings[slot].type)
+		anchor := rl.GetWorldToScreen2D(
+			rl.Vector2{sourceX, sourceY-f32(height)*0.5-0.9},
+			camera,
+		)
+		label := fmt.ctprintf("%ds", int(math.ceil(order.orderCooldown)))
+		labelWidth := rl.MeasureTextEx(UIFont(), label, 12, 1).x
+		rl.DrawRectangleRec(
+			rl.Rectangle{anchor.x-labelWidth*0.5-4, anchor.y-2, labelWidth+8, 16},
+			rl.Color{20, 18, 22, 200},
+		)
+		rl.DrawTextEx(
+			UIFont(),
+			label,
+			rl.Vector2{anchor.x-labelWidth*0.5, anchor.y},
+			12,
+			1,
+			UI_COLOR_DIM,
+		)
+	}
 }
 
 UIDrawOrderActiveAreas :: proc(w: ^World, camera: rl.Camera2D) {
