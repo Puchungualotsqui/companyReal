@@ -130,6 +130,7 @@ UI_COMBAT_BUILD_KINDS := [4]BuildingKind{
 UIStat :: struct {
 	label, value: cstring,
 	color:       rl.Color,
+	icon:        rl.Texture2D, // Drawn after the label when set
 }
 
 UI_FOUND_REQ_ICON : f32 : 18
@@ -139,10 +140,8 @@ UI_FOUND_HINT_TEXT_SIZE : f32 : 16
 
 UIFoundRequirementIcon :: enum {
 	Wood,
-	Citizens,
 	Settlers,
 	Builders,
-	TownSlot,
 }
 
 UIFoundRequirement :: struct {
@@ -1594,7 +1593,7 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 	panel := UIPanelRect(w, ui)
 	UIDrawPanel(w, renderer, ui, panel)
 	if !milestonePending {
-		UIDrawCommandBar(w, ui)
+		UIDrawCommandBar(w, renderer, ui)
 		UIDrawBuildButton(w, ui)
 		UIDrawBuildPalette(w, renderer, ui)
 	}
@@ -1724,6 +1723,14 @@ UIDrawSelection :: proc(w: ^World, camera: rl.Camera2D, selection: Selection) {
 	rl.EndMode2D()
 }
 
+UIDrawStatLabel :: proc(stat: UIStat, x, y: f32) {
+	UIText(stat.label, x, y, UI_COLOR_DIM)
+	if stat.icon.id == 0 do return
+	width := rl.MeasureTextEx(UIFont(), stat.label, UI_TEXT_SIZE, 1).x
+	source := rl.Rectangle{0, 0, f32(stat.icon.width), f32(stat.icon.height)}
+	rl.DrawTexturePro(stat.icon, source, rl.Rectangle{x+width+2, y-1, 16, 16}, rl.Vector2{0, 0}, 0, rl.WHITE)
+}
+
 UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle) {
 	rl.DrawRectangleRec(panel, UI_COLOR_BG)
 	rl.DrawRectangleLinesEx(panel, 2, UI_COLOR_BORDER)
@@ -1778,7 +1785,7 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 	}
 
 	stats: [8]UIStat
-	statCount := UIFillStats(w, ui, &stats)
+	statCount := UIFillStats(w, renderer, ui, &stats)
 	if UISelectionTownHall(w, ui.selection) {
 		leftLabelX := panel.x+UI_PAD
 		leftValueX := panel.x+UI_PAD+170
@@ -1791,10 +1798,10 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 			valueColor := stats[i].color
 			if valueColor.a == 0 do valueColor = UI_COLOR_TEXT
 			if column == 0 {
-				UIText(stats[i].label, leftLabelX, y, UI_COLOR_DIM)
+				UIDrawStatLabel(stats[i], leftLabelX, y)
 				UITextRight(stats[i].value, leftValueX, y, valueColor)
 			} else {
-				UIText(stats[i].label, rightLabelX, y, UI_COLOR_DIM)
+				UIDrawStatLabel(stats[i], rightLabelX, y)
 				UITextRight(stats[i].value, rightValueX, y, valueColor)
 			}
 		}
@@ -1804,7 +1811,7 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 			y := panel.y+UI_STAT_Y+f32(i)*UI_STAT_H
 			valueColor := stats[i].color
 			if valueColor.a == 0 do valueColor = UI_COLOR_TEXT
-			UIText(stats[i].label, panel.x+UI_PAD, y, UI_COLOR_DIM)
+			UIDrawStatLabel(stats[i], panel.x+UI_PAD, y)
 			UIText(stats[i].value, panel.x+UI_PAD+104, y, valueColor)
 		}
 	}
@@ -1965,42 +1972,43 @@ UIResourceCoverage :: proc(potential, need: f32) -> (cstring, rl.Color) {
 	return fmt.ctprintf("%d%%", percent), color
 }
 
-UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[8]UIStat) -> int {
+UIFillStats :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, stats: ^[8]UIStat) -> int {
 	switch ui.selection.kind {
 	case .Unit:
 		unit := w.units[ui.selection.slot]
-		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(unit.health), int(UnitDefaultHealth(unit.type))), UI_COLOR_TEXT}
-		stats[1] = {"Task", UIUnitStateName(unit.state), UI_COLOR_TEXT}
+		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(unit.health), int(UnitDefaultHealth(unit.type))), UI_COLOR_TEXT, {}}
+		stats[1] = {"Task", UIUnitStateName(unit.state), UI_COLOR_TEXT, {}}
 		return 2
 
 	case .Building:
 		building := w.buildings[ui.selection.slot]
 		kind := BuildingKindOf(building.type)
-		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(building.health), int(BuildingDefaultHealth(building.type))), UI_COLOR_TEXT}
+		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(building.health), int(BuildingDefaultHealth(building.type))), UI_COLOR_TEXT, {}}
 		if kind == .TownHall {
 			t := &w.kingdoms[building.kingdom].towns[building.town]
-			stats[1] = {"Citizens", fmt.ctprintf("%d", t.citizens), UI_COLOR_TEXT}
+			stats[1] = {"Citizens", fmt.ctprintf("%d", t.citizens), UI_COLOR_TEXT, {}}
 			if building.kingdom == NEUTRAL_KINGDOM {
 				guards := TownUnitCount(w, building.kingdom, building.town, .Knight)
-				stats[2] = {"Guards", fmt.ctprintf("%d", guards), UI_COLOR_TEXT}
-				stats[3] = {"Growth", "None", UI_COLOR_DIM}
+				stats[2] = {"Guards", fmt.ctprintf("%d", guards), UI_COLOR_TEXT, {}}
+				stats[3] = {"Growth", "None", UI_COLOR_DIM, {}}
 				return 4
 			}
-			stats[2] = {"Wood", fmt.ctprintf("%d", int(t.wood)), UI_COLOR_TEXT}
+			stats[2] = {"Wood", fmt.ctprintf("%d", int(t.wood)), UI_COLOR_TEXT, renderer.sprites.woodIcon}
 			if t.milestonesEarned < TOWN_MILESTONE_TIER_COUNT {
 				stats[3] = {
 					"Next era",
 					fmt.ctprintf("%d / %d", t.citizens, TOWN_ERAS[t.milestonesEarned+1].threshold),
 					UI_COLOR_TEXT,
+					{},
 				}
 			} else {
-				stats[3] = {"Era", "5 - complete", UI_COLOR_TEXT}
+				stats[3] = {"Era", "5 - complete", UI_COLOR_TEXT, {}}
 			}
 			foodText, foodColor := UIResourceCoverage(t.foodPotential, f32(t.citizens)*0.025)
 			waterText, waterColor := UIResourceCoverage(t.waterPotential, f32(t.citizens)*0.025)
-			stats[4] = {"Food", foodText, foodColor}
-			stats[5] = {"Water", waterText, waterColor}
-			stats[6] = {"Housing", fmt.ctprintf("%d", t.homes), UI_COLOR_TEXT}
+			stats[4] = {"Food", foodText, foodColor, {}}
+			stats[5] = {"Water", waterText, waterColor, {}}
+			stats[6] = {"Housing", fmt.ctprintf("%d", t.homes), UI_COLOR_TEXT, {}}
 			return 7
 		}
 		if kind == .DistrictHall {
@@ -2017,12 +2025,13 @@ UIFillStats :: proc(w: ^World, ui: ^UIState, stats: ^[8]UIStat) -> int {
 				"Growth",
 				fmt.ctprintf("+%d%%", int(TOWN_DISTRICT_GROWTH_BONUS*100)),
 				UI_COLOR_GOOD,
+				{},
 			}
-			stats[2] = {"District", districtName, UI_COLOR_TEXT}
+			stats[2] = {"District", districtName, UI_COLOR_TEXT, {}}
 			return 3
 		}
 		if BuildingIsTraining(kind) {
-			stats[1] = {"Trains", UIUnitName(UIUnitFromTraining(kind)), UI_COLOR_TEXT}
+			stats[1] = {"Trains", UIUnitName(UIUnitFromTraining(kind)), UI_COLOR_TEXT, {}}
 			return 2
 		}
 		return 1
@@ -2341,7 +2350,7 @@ UIDrawConstructionsTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Re
 	}
 }
 
-UIDrawCommandBar :: proc(w: ^World, ui: ^UIState) {
+UIDrawCommandBar :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 	if !UISelectionPlayerTownHall(w, ui.selection) do return
 	kingdom, town := UISelectionTown(w, ui.selection)
 	attackRect, defendRect, foundRect, fuseRect := UICommandBarRects()
@@ -2375,84 +2384,52 @@ UIDrawCommandBar :: proc(w: ^World, ui: ^UIState) {
 		}
 	}
 	if rl.CheckCollisionPointRec(rl.GetMousePosition(), foundRect) {
-		UIDrawFoundHint(w, foundRect, kingdom, town)
+		UIDrawFoundHint(w, renderer, foundRect, kingdom, town)
 	}
 }
 
 // Found-button hover readout: one chip per requirement, each with an icon and
 // a red/green current/required readout so the missing piece is obvious.
-UIFoundRequirements :: proc(w: ^World, kingdom, town: int) -> ([5]UIFoundRequirement, int) {
+UIFoundRequirements :: proc(w: ^World, kingdom, town: int) -> ([3]UIFoundRequirement, int) {
 	townState := &w.kingdoms[kingdom].towns[town]
-	freeSlot := KingdomFreeTownSlot(w, kingdom)
-	requirements := [5]UIFoundRequirement{
+	requirements := [3]UIFoundRequirement{
 		{.Wood, int(townState.wood), int(TownFoundingWoodCost(w, kingdom))},
-		{.Citizens, townState.citizens, TOWN_FOUNDING_MIN_CITIZENS},
 		{.Settlers, TownUnitCount(w, kingdom, town, .Villager), TOWN_FOUNDING_SETTLERS},
 		{.Builders, TownUnitCount(w, kingdom, town, .Builder), 1},
-		{.TownSlot, freeSlot >= 0 ? 1 : 0, 1},
 	}
 	return requirements, len(requirements)
 }
 
-UIDrawFoundRequirementIcon :: proc(icon: UIFoundRequirementIcon, x, y: f32, color: rl.Color) {
-	dark := rl.Color{12, 11, 14, 230}
-	centerX := x+UI_FOUND_REQ_ICON*0.5
+UIDrawFoundSpriteIcon :: proc(texture: rl.Texture2D, x, y: f32) {
+	if texture.id == 0 do return
+	source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+	rl.DrawTexturePro(texture, source, rl.Rectangle{x+1, y+1, 16, 16}, rl.Vector2{0, 0}, 0, rl.WHITE)
+}
+
+UIDrawFoundRequirementIcon :: proc(
+	renderer: ^WorldRenderer,
+	faction: int,
+	icon: UIFoundRequirementIcon,
+	x, y: f32,
+) {
 	switch icon {
 	case .Wood:
-		// A log with a visible end grain.
-		rl.DrawRectangleRec(rl.Rectangle{x+1, y+6, 14, 7}, dark)
-		rl.DrawRectangleRec(rl.Rectangle{x+2, y+7, 11, 5}, color)
-		rl.DrawCircle(i32(x)+15, i32(y)+9, 4, dark)
-		rl.DrawCircle(i32(x)+15, i32(y)+9, 3, color)
-	case .Citizens:
-		rl.DrawCircle(i32(centerX), i32(y)+5, 4, color)
-		rl.DrawTriangle(
-			rl.Vector2{x+1, y+18},
-			rl.Vector2{x+17, y+18},
-			rl.Vector2{centerX, y+9},
-			color,
-		)
+		UIDrawFoundSpriteIcon(renderer.sprites.woodIcon, x, y)
 	case .Settlers:
-		// A traveller carrying a banner.
-		rl.DrawCircle(i32(centerX)-3, i32(y)+5, 3, color)
-		rl.DrawTriangle(
-			rl.Vector2{x, y+18},
-			rl.Vector2{x+12, y+18},
-			rl.Vector2{x+6, y+9},
-			color,
-		)
-		rl.DrawLineEx(rl.Vector2{x+14, y+1}, rl.Vector2{x+14, y+12}, 2, dark)
-		rl.DrawTriangle(
-			rl.Vector2{x+15, y+1},
-			rl.Vector2{x+18, y+4},
-			rl.Vector2{x+15, y+7},
-			color,
-		)
+		UIDrawFoundSpriteIcon(renderer.sprites.unit[faction][.Villager], x, y)
 	case .Builders:
-		// Hammer.
-		rl.DrawRectangleRec(rl.Rectangle{centerX-1, y+6, 3, 12}, color)
-		rl.DrawRectangleRec(rl.Rectangle{x+1, y+2, 16, 6}, dark)
-		rl.DrawRectangleRec(rl.Rectangle{x+2, y+3, 14, 4}, color)
-	case .TownSlot:
-		// Hall with a flag.
-		rl.DrawRectangleRec(rl.Rectangle{x+2, y+8, 14, 9}, color)
-		rl.DrawTriangle(
-			rl.Vector2{centerX, y+1},
-			rl.Vector2{x+1, y+9},
-			rl.Vector2{x+17, y+9},
-			color,
-		)
-		rl.DrawRectangleRec(rl.Rectangle{x+7, y+11, 4, 6}, dark)
+		UIDrawFoundSpriteIcon(renderer.sprites.unit[faction][.Builder], x, y)
 	}
 }
 
-UIDrawFoundHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {
+UIDrawFoundHint :: proc(w: ^World, renderer: ^WorldRenderer, rect: rl.Rectangle, kingdom, town: int) {
 	if !WorldTownExists(w, kingdom, town) do return
 	requirements, count := UIFoundRequirements(w, kingdom, town)
+	faction := FactionSpriteIndex(kingdom)
 
 	title: cstring = "FOUND TOWN"
 	titleWidth := rl.MeasureTextEx(UIFont(), title, UI_TEXT_SIZE, 1).x
-	chips: [5]f32
+	chips: [3]f32
 	chipsWidth: f32 = 0
 	allMet := true
 	for requirement, index in requirements[:count] {
@@ -2480,7 +2457,7 @@ UIDrawFoundHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {
 	for requirement, index in requirements[:count] {
 		met := requirement.current >= requirement.required
 		statusColor := met ? UI_COLOR_GOOD : UI_COLOR_BAD
-		UIDrawFoundRequirementIcon(requirement.icon, chipX, chipY, statusColor)
+		UIDrawFoundRequirementIcon(renderer, faction, requirement.icon, chipX, chipY)
 		text := fmt.ctprintf("%d/%d", requirement.current, requirement.required)
 		rl.DrawTextEx(
 			UIFont(),
@@ -3311,19 +3288,12 @@ UIHudTimeLabel :: proc(w: ^World) -> cstring {
 	return fmt.ctprintf("Day %d  %02dh", w.dayNumber+1, int(WorldTimeOfDay(w)))
 }
 
-UIHudWarLabel :: proc(w: ^World) -> cstring {
-	warCount := UIWarCount(w)
-	if warCount > 0 do return fmt.ctprintf("AT WAR: %d", warCount)
-	return "At peace"
-}
-
 UIHudRect :: proc(w: ^World) -> rl.Rectangle {
 	local := WorldLocalKingdom(w)
 	name := local >= 0 ? NameKingdomCString(w, local) : cstring("SPECTATOR")
 	nameWidth := UIHudTextWidth(name)
 	timeWidth := UIHudTextWidth(UIHudTimeLabel(w))
-	warWidth := UIHudTextWidth(UIHudWarLabel(w))
-	lineWidth := max(nameWidth, timeWidth+24+warWidth)
+	lineWidth := max(nameWidth, timeWidth)
 
 	townsWidth := UIHudTextWidth("TOWNS")+2*UI_HUD_BUTTON_PAD
 	diplomacyWidth := UIHudTextWidth("DIPLOMACY")+2*UI_HUD_BUTTON_PAD
@@ -3462,16 +3432,6 @@ UITownUnderAttack :: proc(w: ^World, kingdom, town: int) -> bool {
 		}
 	}
 	return false
-}
-
-UIWarCount :: proc(w: ^World) -> int {
-	local := WorldLocalKingdom(w)
-	if local < 0 do return 0
-	count := 0
-	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
-		if KingdomAtWar(w, local, kingdomSlot) do count += 1
-	}
-	return count
 }
 
 UIFocusTown :: proc(w: ^World, view: ^WorldView, kingdomSlot, townSlot: int) {
@@ -3701,15 +3661,7 @@ UIDrawHud :: proc(w: ^World, ui: ^UIState) {
 	UIText(NameKingdomCString(w, local), textX, titleY, UI_COLOR_GOLD)
 
 	timeLabel := UIHudTimeLabel(w)
-	timeWidth := UIHudTextWidth(timeLabel)
-	warLabel := UIHudWarLabel(w)
 	UIText(timeLabel, textX, detailY, UI_COLOR_DIM)
-	UIText(
-		warLabel,
-		textX+timeWidth+24,
-		detailY,
-		UIWarCount(w) > 0 ? UI_COLOR_ATTACK : UI_COLOR_DIM,
-	)
 
 	townsRect := UIHudTownsButtonRect(w)
 	diplomacyRect := UIHudDiplomacyButtonRect(w)
@@ -3748,7 +3700,6 @@ UIDrawSidePanel :: proc(w: ^World, ui: ^UIState) {
 		for row in 0..<visible {
 			townSlot, found := UIPlayerTownAt(w, ui.townScroll+row)
 			if !found do continue
-			town := &w.kingdoms[local].towns[townSlot]
 			rowRect := rl.Rectangle{
 				panel.x+8,
 				panel.y+UI_SIDE_HEADER_H+f32(row)*UI_SIDE_ROW_H,
@@ -3758,14 +3709,8 @@ UIDrawSidePanel :: proc(w: ^World, ui: ^UIState) {
 			hovered := rl.CheckCollisionPointRec(rl.GetMousePosition(), rowRect)
 			if hovered do rl.DrawRectangleRec(rowRect, UI_COLOR_BUTTON_HOVER)
 			UIText(NameTownCString(w, local, townSlot), rowRect.x+6, rowRect.y+4, UI_COLOR_TEXT)
-			UITextRight(
-				fmt.ctprintf("C%d  W%d", town.citizens, int(town.wood)),
-				rowRect.x+rowRect.width-6,
-				rowRect.y+4,
-				UI_COLOR_DIM,
-			)
 			if UITownUnderAttack(w, local, townSlot) {
-				UIText("!", rowRect.x+rowRect.width-132, rowRect.y+4, UI_COLOR_ATTACK)
+				UIText("!", rowRect.x+rowRect.width-16, rowRect.y+4, UI_COLOR_ATTACK)
 			}
 		}
 		if count > UI_SIDE_MAX_TOWN_ROWS {

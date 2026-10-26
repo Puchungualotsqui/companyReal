@@ -1976,6 +1976,25 @@ DrawEffectIcon :: proc(effect: UnitEffects) -> Art {
 	return art
 }
 
+// A bundle of cut logs, used wherever wood is shown in the UI.
+DrawWoodIcon :: proc() -> Art {
+	art := ArtInit(16, 16)
+	DrawWoodLogIcon(&art, 1, 2)
+	DrawWoodLogIcon(&art, 2, 9)
+	return art
+}
+
+@(private = "file")
+DrawWoodLogIcon :: proc(art: ^Art, x, y: int) {
+	ArtRect(art, x, y, 13, 5, C_OUTLINE)
+	ArtRect(art, x+1, y+1, 11, 3, C_WOOD)
+	ArtRect(art, x+1, y+1, 11, 1, C_WOOD_LIGHT)
+	ArtRect(art, x+3, y+3, 6, 1, C_WOOD_DARK)
+	// Light cut face on the right end.
+	ArtRect(art, x+10, y+1, 2, 3, C_WOOD_LIGHT)
+	ArtRect(art, x+10, y+2, 2, 1, C_WOOD_DARK)
+}
+
 SpriteSet :: struct {
 	building:        [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
 	buildingDamaged: [SPRITE_FACTION_COUNT][BuildingKind][2]rl.Texture2D,
@@ -1993,6 +2012,7 @@ SpriteSet :: struct {
 	fire:            rl.Texture2D,
 	shadow:          rl.Texture2D,
 	glow:            rl.Texture2D,
+	woodIcon:        rl.Texture2D,
 }
 
 SpriteSetInit :: proc(w: ^World) -> SpriteSet {
@@ -2097,6 +2117,7 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 		)
 	}
 	set.fire = ArtToTexture(DrawFireSprite())
+	set.woodIcon = ArtTakeTexture(DrawWoodIcon())
 	return set
 }
 
@@ -2172,4 +2193,5 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 		}
 	}
 	if set.fire.id != 0 do rl.UnloadTexture(set.fire)
+	if set.woodIcon.id != 0 do rl.UnloadTexture(set.woodIcon)
 }
