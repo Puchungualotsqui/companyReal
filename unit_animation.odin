@@ -21,6 +21,7 @@ UnitAnimationPose :: struct {
 	bob, swayX, swayY: f32,
 	stretchX, stretchY: f32,
 	moving:            bool,
+	damageStage:       int,
 }
 
 UnitAnimationProfileFor :: proc(kind: UnitKind) -> UnitAnimationProfile {
@@ -59,10 +60,15 @@ UnitAnimationPoseFor :: proc(w: ^World, unitSlot: int, kind: UnitKind, now: f32)
 	unit := &w.units[unitSlot]
 	profile := UnitAnimationProfileFor(kind)
 	pose := UnitAnimationPose{stretchX = 1, stretchY = 1}
+	pose.damageStage = UnitDamageStage(w, unitSlot)
 
 	idle := math.sin(now*profile.idleSpeed+f32(unitSlot)*1.7)
 	pose.bob = idle*profile.idleBob
 	pose.stretchY = 1+idle*0.012
+	if pose.damageStage > 0 {
+		pose.bob -= f32(pose.damageStage)*0.012
+		pose.stretchY *= 1-f32(pose.damageStage)*0.02
+	}
 
 	if UnitAnimationMoving(w, unitSlot) {
 		pose.moving = true

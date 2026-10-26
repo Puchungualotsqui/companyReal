@@ -201,6 +201,17 @@ ArtPixel :: proc(art: ^Art, x, y: int, color: rl.Color) {
 	rl.ImageDrawPixel(&art.image, i32(x), i32(y), color)
 }
 
+ArtCopy :: proc(base: Art) -> Art {
+	result := ArtInit(base.width, base.height)
+	for y in 0..<base.height {
+		for x in 0..<base.width {
+			color := rl.GetImageColor(base.image, i32(x), i32(y))
+			if color.a != 0 do ArtPixel(&result, x, y, color)
+		}
+	}
+	return result
+}
+
 ArtRect :: proc(art: ^Art, x, y, width, height: int, color: rl.Color) {
 	if width <= 0 || height <= 0 do return
 	for py in y ..< y+height {
@@ -469,6 +480,137 @@ DrawBuildingSprite :: proc(kind: BuildingKind, accent: rl.Color) -> Art {
 		DrawPath(&art, accent)
 	case .DistrictHall:
 		DrawDistrictHall(&art, accent)
+	}
+	return art
+}
+
+BuildingArtEdgePixel :: proc(art: Art, x, y: int) -> bool {
+	if x < 0 || y < 0 || x >= art.width || y >= art.height do return false
+	if rl.GetImageColor(art.image, i32(x), i32(y)).a < 200 do return false
+	neighbours := [4]Point{{1, 0}, {-1, 0}, {0, 1}, {0, -1}}
+	for offset in neighbours {
+		nx := x+offset[0]
+		ny := y+offset[1]
+		if nx < 0 || ny < 0 || nx >= art.width || ny >= art.height do return true
+		if rl.GetImageColor(art.image, i32(nx), i32(ny)).a == 0 do return true
+	}
+	return false
+}
+
+// Battle damage is layered on the base art: cracks first, then scorch marks,
+// dark holes and chipped edges as severity grows.
+DamageBuildingArt :: proc(base: Art, severity: int, seed: u64) -> Art {
+	art := ArtCopy(base)
+	size := max(base.width, base.height)
+	stageSeed := seed+u64(severity)*0x9E3779B97F4A7C15
+
+	crackCount := 1+severity+size/32
+	for crack in 0..<crackCount {
+		x: int
+		y: int
+		solid := false
+		for attempt in 0..<6 {
+			x = int(WorldNoiseHash(crack, attempt, stageSeed+0xB001)*f32(base.width))
+			y = int(WorldNoiseHash(attempt, crack, stageSeed+0xB002)*f32(base.height))
+			if x < 0 || y < 0 || x >= base.width || y >= base.height do continue
+			if rl.GetImageColor(art.image, i32(x), i32(y)).a < 200 do continue
+			solid = true
+			break
+		}
+		if !solid do continue
+		length := 3+severity*2+size/16
+		lean := 1
+		if WorldNoiseHash(crack, size, stageSeed+0xB003) < 0.5 do lean = -1
+		for step in 0..<length {
+			if x < 0 || y < 0 || x >= base.width || y >= base.height do break
+			color := rl.GetImageColor(art.image, i32(x), i32(y))
+			if color.a < 200 do break
+			ArtPixel(&art, x, y, CShade(color, 0.32))
+			roll := WorldNoiseHash(step, crack, stageSeed+0xB004)
+			if roll < 0.45 do x += lean
+			else if roll < 0.7 do x -= lean
+			y += 1
+		}
+	}
+
+	scorchCount := 1+severity+size/32
+	scorchRadius := 1+severity/2+size/32
+	for scorch in 0..<scorchCount {
+		centerX: int
+		centerY: int
+		solid := false
+		for attempt in 0..<6 {
+			centerX = int(WorldNoiseHash(scorch, attempt, stageSeed+0xB101)*f32(base.width))
+			centerY = int(WorldNoiseHash(attempt, scorch, stageSeed+0xB102)*f32(base.height))
+			if centerX < 0 || centerY < 0 || centerX >= base.width || centerY >= base.height {
+				continue
+			}
+			if rl.GetImageColor(art.image, i32(centerX), i32(centerY)).a < 200 do continue
+			solid = true
+			break
+		}
+		if !solid do continue
+		for dy := -scorchRadius; dy <= scorchRadius; dy += 1 {
+			for dx := -scorchRadius; dx <= scorchRadius; dx += 1 {
+				if dx*dx+dy*dy > scorchRadius*scorchRadius do continue
+				px := centerX+dx
+				py := centerY+dy
+				if px < 0 || py < 0 || px >= base.width || py >= base.height do continue
+				color := rl.GetImageColor(art.image, i32(px), i32(py))
+				if color.a < 200 do continue
+				if WorldNoiseHash(px, py, stageSeed+0xB103) < 0.22 do continue
+				ArtPixel(&art, px, py, CShade(color, 0.60))
+			}
+		}
+	}
+
+	if severity >= 2 {
+		holeCount := 1+size/32
+		holeRadius := 1+size/48
+		for hole in 0..<holeCount {
+			centerX: int
+			centerY: int
+			solid := false
+			for attempt in 0..<6 {
+				centerX = int(WorldNoiseHash(hole, attempt, stageSeed+0xB201)*f32(base.width))
+				centerY = int(WorldNoiseHash(attempt, hole, stageSeed+0xB202)*f32(base.height))
+				if centerX < 0 || centerY < 0 || centerX >= base.width ||
+					centerY >= base.height {
+					continue
+				}
+				if rl.GetImageColor(art.image, i32(centerX), i32(centerY)).a < 200 {
+					continue
+				}
+				solid = true
+				break
+			}
+			if !solid do continue
+			for dy := -holeRadius; dy <= holeRadius; dy += 1 {
+				for dx := -holeRadius; dx <= holeRadius; dx += 1 {
+					if dx*dx+dy*dy > holeRadius*holeRadius do continue
+					if WorldNoiseHash(centerX+dx, centerY+dy, stageSeed+0xB203) < 0.25 {
+						continue
+					}
+					px := centerX+dx
+					py := centerY+dy
+					if px < 0 || py < 0 || px >= base.width || py >= base.height {
+						continue
+					}
+					color := rl.GetImageColor(art.image, i32(px), i32(py))
+					if color.a < 200 do continue
+					ArtPixel(&art, px, py, C_OUTLINE)
+				}
+			}
+		}
+	}
+
+	chipCount := severity*(1+size/48)
+	for chip in 0..<chipCount {
+		px := int(WorldNoiseHash(chip, 7, stageSeed+0xB301)*f32(base.width))
+		py := int(WorldNoiseHash(chip, 8, stageSeed+0xB302)*f32(base.height))
+		if !BuildingArtEdgePixel(art, px, py) do continue
+		ArtPixel(&art, px, py, C_CLEAR)
+		if WorldNoiseHash(chip, 9, stageSeed+0xB303) < 0.5 do ArtPixel(&art, px+1, py, C_CLEAR)
 	}
 	return art
 }
@@ -1139,6 +1281,59 @@ UnitWalkFrame :: proc(base: Art, shift: int) -> Art {
 	return frame
 }
 
+// Wounds are painted over the unit body using its blood colour. Siege engines
+// have no blood, so they collect dark splinters and cracks instead.
+DamageUnitArt :: proc(base: Art, kind: UnitKind, severity: int, seed: u64) -> Art {
+	art := ArtCopy(base)
+	stageSeed := seed+u64(severity)*0x85EBCA6B
+	tint := BloodTintForUnitType(UnitTypeFromKind(kind))
+	if tint == BLOOD_TINT_NONE {
+		count := 1+severity*2
+		for splinter in 0..<count {
+			px := 2+int(WorldNoiseHash(splinter, 1, stageSeed+0xE001)*f32(base.width-4))
+			py := 6+int(WorldNoiseHash(splinter, 2, stageSeed+0xE002)*f32(base.height-9))
+			if px < 0 || py < 0 || px >= base.width || py >= base.height do continue
+			color := rl.GetImageColor(art.image, i32(px), i32(py))
+			if color.a == 0 || SameColor(color, C_OUTLINE) || SameColor(color, C_SHADOW) {
+				continue
+			}
+			ArtPixel(&art, px, py, C_WOOD_DARKEST)
+			ArtPixel(&art, px+1, py, CShade(color, 0.5))
+			if severity >= 2 do ArtPixel(&art, px, py+1, C_STONE_DARK)
+		}
+		return art
+	}
+
+	blood := CShade(BLOOD_PALETTE[int(tint)], 1.25)
+	bloodDark := CShade(blood, 0.6)
+	stainCount := 1+severity*2
+	for stain in 0..<stainCount {
+		for attempt in 0..<8 {
+			px := 3+int(WorldNoiseHash(stain, attempt, stageSeed+0xE101)*f32(base.width-6))
+			py := 6+int(WorldNoiseHash(attempt, stain, stageSeed+0xE102)*f32(base.height-9))
+			if px < 0 || py < 0 || px >= base.width || py >= base.height do continue
+			color := rl.GetImageColor(art.image, i32(px), i32(py))
+			if color.a == 0 || SameColor(color, C_OUTLINE) || SameColor(color, C_SHADOW) {
+				continue
+			}
+			ArtPixel(&art, px, py, blood)
+			if WorldNoiseHash(stain, attempt, stageSeed+0xE103) < 0.6 {
+				ArtPixel(&art, px+1, py, bloodDark)
+			}
+			if severity >= 2 {
+				if WorldNoiseHash(attempt, stain, stageSeed+0xE104) < 0.6 {
+					ArtPixel(&art, px, py+1, blood)
+				}
+				if WorldNoiseHash(stain, attempt, stageSeed+0xE105) < 0.5 {
+					ArtPixel(&art, px-1, py+1, bloodDark)
+				}
+			}
+			break
+		}
+	}
+	return art
+}
+
 UnitShadow :: proc(art: ^Art) {
 	ArtEllipse(art, 8, 14, 4, 2, C_SHADOW)
 }
@@ -1730,19 +1925,22 @@ DrawEffectIcon :: proc(effect: UnitEffects) -> Art {
 }
 
 SpriteSet :: struct {
-	building:     [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
-	unit:         [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
-	unitWalk:     [SPRITE_FACTION_COUNT][UnitKind][2]rl.Texture2D,
-	decoration:   [DecorationKind]rl.Texture2D,
-	construction: [SPRITE_FACTION_COUNT]rl.Texture2D,
-	bloodSplat:   [BLOOD_SPLAT_VARIANTS]rl.Texture2D,
-	bloodPool:    [BLOOD_POOL_VARIANTS]rl.Texture2D,
-	gore:         [SPRITE_FACTION_COUNT][UnitKind][GorePartKind]rl.Texture2D,
-	particle:     [ParticleKind]rl.Texture2D,
-	effect:       [UnitEffects]rl.Texture2D,
-	fire:         rl.Texture2D,
-	shadow:       rl.Texture2D,
-	glow:         rl.Texture2D,
+	building:        [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
+	buildingDamaged: [SPRITE_FACTION_COUNT][BuildingKind][2]rl.Texture2D,
+	unit:            [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
+	unitWalk:        [SPRITE_FACTION_COUNT][UnitKind][2]rl.Texture2D,
+	unitHurt:        [SPRITE_FACTION_COUNT][UnitKind][2]rl.Texture2D,
+	unitHurtWalk:    [SPRITE_FACTION_COUNT][UnitKind][2][2]rl.Texture2D,
+	decoration:      [DecorationKind]rl.Texture2D,
+	construction:    [SPRITE_FACTION_COUNT]rl.Texture2D,
+	bloodSplat:      [BLOOD_SPLAT_VARIANTS]rl.Texture2D,
+	bloodPool:       [BLOOD_POOL_VARIANTS]rl.Texture2D,
+	gore:            [SPRITE_FACTION_COUNT][UnitKind][GorePartKind]rl.Texture2D,
+	particle:        [ParticleKind]rl.Texture2D,
+	effect:          [UnitEffects]rl.Texture2D,
+	fire:            rl.Texture2D,
+	shadow:          rl.Texture2D,
+	glow:            rl.Texture2D,
 }
 
 SpriteSetInit :: proc(w: ^World) -> SpriteSet {
@@ -1762,12 +1960,20 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 			}
 			ArtGrain(&art, u64(kind)+1)
 			set.building[faction][kind] = ArtToTexture(art)
+			damageSeed := u64(faction)*0x9E3779B97F4A7C15 ~ u64(kind)*0x85EBCA6B ~ 0xB0DE
+			damage1 := DamageBuildingArt(art, 1, damageSeed)
+			set.buildingDamaged[faction][kind][0] = ArtToTexture(damage1)
+			damage2 := DamageBuildingArt(damage1, 2, damageSeed)
+			set.buildingDamaged[faction][kind][1] = ArtToTexture(damage2)
+			rl.UnloadImage(damage2.image)
+			rl.UnloadImage(damage1.image)
 			rl.UnloadImage(art.image)
 		}
 		for kind in ALL_UNIT_KINDS {
 			art := DrawUnitSprite(kind, accent)
 			set.unit[faction][kind] = ArtToTexture(art)
-			if UnitKindHasWalkFrames(kind) {
+			hasWalk := UnitKindHasWalkFrames(kind)
+			if hasWalk {
 				for frame in 0..<2 {
 					shift := frame == 0 ? -1 : 1
 					walkArt := UnitWalkFrame(art, shift)
@@ -1775,6 +1981,29 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 					rl.UnloadImage(walkArt.image)
 				}
 			}
+			hurtSeed := u64(faction)*0x9E3779B97F4A7C15 ~ u64(kind)*0x85EBCA6B ~ 0xE0DE
+			hurt1 := DamageUnitArt(art, kind, 1, hurtSeed)
+			set.unitHurt[faction][kind][0] = ArtToTexture(hurt1)
+			if hasWalk {
+				for frame in 0..<2 {
+					shift := frame == 0 ? -1 : 1
+					hurtWalk := UnitWalkFrame(hurt1, shift)
+					set.unitHurtWalk[faction][kind][0][frame] = ArtToTexture(hurtWalk)
+					rl.UnloadImage(hurtWalk.image)
+				}
+			}
+			hurt2 := DamageUnitArt(hurt1, kind, 2, hurtSeed)
+			set.unitHurt[faction][kind][1] = ArtToTexture(hurt2)
+			if hasWalk {
+				for frame in 0..<2 {
+					shift := frame == 0 ? -1 : 1
+					hurtWalk := UnitWalkFrame(hurt2, shift)
+					set.unitHurtWalk[faction][kind][1][frame] = ArtToTexture(hurtWalk)
+					rl.UnloadImage(hurtWalk.image)
+				}
+			}
+			rl.UnloadImage(hurt2.image)
+			rl.UnloadImage(hurt1.image)
 			rl.UnloadImage(art.image)
 		}
 		art := DrawConstructionSprite(accent)
@@ -1827,6 +2056,11 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 			if set.building[faction][kind].id != 0 {
 				rl.UnloadTexture(set.building[faction][kind])
 			}
+			for stage in 0..<2 {
+				if set.buildingDamaged[faction][kind][stage].id != 0 {
+					rl.UnloadTexture(set.buildingDamaged[faction][kind][stage])
+				}
+			}
 		}
 		for kind in ALL_UNIT_KINDS {
 			if set.unit[faction][kind].id != 0 {
@@ -1835,6 +2069,16 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 			for frame in 0..<2 {
 				if set.unitWalk[faction][kind][frame].id != 0 {
 					rl.UnloadTexture(set.unitWalk[faction][kind][frame])
+				}
+			}
+			for stage in 0..<2 {
+				if set.unitHurt[faction][kind][stage].id != 0 {
+					rl.UnloadTexture(set.unitHurt[faction][kind][stage])
+				}
+				for frame in 0..<2 {
+					if set.unitHurtWalk[faction][kind][stage][frame].id != 0 {
+						rl.UnloadTexture(set.unitHurtWalk[faction][kind][stage][frame])
+					}
 				}
 			}
 		}

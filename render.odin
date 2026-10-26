@@ -569,10 +569,16 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 						alpha = u8(night*flicker),
 					})
 				}
+				texture := renderer.sprites.building[faction][kind]
+				damageStage := BuildingDamageStage(w, buildingSlot)
+				if damageStage > 0 {
+					damaged := renderer.sprites.buildingDamaged[faction][kind][damageStage-1]
+					if damaged.id != 0 do texture = damaged
+				}
 				append(&renderer.items, RenderItem{
 					baseY = baseY,
 					dest = rl.Rectangle{offsetX+buildingX, offsetY+buildingY, width, height},
-					texture = renderer.sprites.building[faction][kind],
+					texture = texture,
 				})
 			}
 
@@ -762,10 +768,18 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 
 				faction := FactionSpriteIndex(w.units[unitSlot].kingdome)
 				texture := renderer.sprites.unit[faction][kind]
+				if pose.damageStage > 0 {
+					hurt := renderer.sprites.unitHurt[faction][kind][pose.damageStage-1]
+					if hurt.id != 0 do texture = hurt
+				}
 				if pose.moving {
 					frame := math.sin(w.units[unitSlot].walkPhase) < 0 ? 1 : 0
-					if renderer.sprites.unitWalk[faction][kind][frame].id != 0 {
-						texture = renderer.sprites.unitWalk[faction][kind][frame]
+					if pose.damageStage > 0 {
+						hurtWalk := renderer.sprites.unitHurtWalk[faction][kind][pose.damageStage-1][frame]
+						if hurtWalk.id != 0 do texture = hurtWalk
+					} else {
+						walk := renderer.sprites.unitWalk[faction][kind][frame]
+						if walk.id != 0 do texture = walk
 					}
 				}
 				flipX := false

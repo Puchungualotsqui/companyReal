@@ -1871,6 +1871,11 @@ UIDrawHomeOccupant :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectan
 	kind := UnitKindOf(w.units[resident].type)
 	faction := FactionSpriteIndex(w.units[resident].kingdome)
 	texture := renderer.sprites.unit[faction][kind]
+	stage := UnitDamageStage(w, resident)
+	if stage > 0 {
+		hurt := renderer.sprites.unitHurt[faction][kind][stage-1]
+		if hurt.id != 0 do texture = hurt
+	}
 	icon := rl.Rectangle{panel.x+UI_PAD, y+26, 32, 32}
 	if texture.id != 0 {
 		source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
@@ -1923,9 +1928,21 @@ UIDrawPortrait :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, box: r
 	texture: rl.Texture2D
 	switch ui.selection.kind {
 	case .Unit:
-		texture = renderer.sprites.unit[faction][UnitKindOf(w.units[ui.selection.slot].type)]
+		kind := UnitKindOf(w.units[ui.selection.slot].type)
+		texture = renderer.sprites.unit[faction][kind]
+		stage := UnitDamageStage(w, ui.selection.slot)
+		if stage > 0 {
+			hurt := renderer.sprites.unitHurt[faction][kind][stage-1]
+			if hurt.id != 0 do texture = hurt
+		}
 	case .Building:
-		texture = renderer.sprites.building[faction][BuildingKindOf(w.buildings[ui.selection.slot].type)]
+		kind := BuildingKindOf(w.buildings[ui.selection.slot].type)
+		texture = renderer.sprites.building[faction][kind]
+		stage := BuildingDamageStage(w, ui.selection.slot)
+		if stage > 0 {
+			damaged := renderer.sprites.buildingDamaged[faction][kind][stage-1]
+			if damaged.id != 0 do texture = damaged
+		}
 	case .None:
 		return
 	}

@@ -197,6 +197,18 @@ BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
 	unreachable()
 }
 
+BuildingDamageStage :: proc(w: ^World, buildingSlot: int) -> int {
+	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] {
+		return 0
+	}
+	maximum := BuildingDefaultHealth(w.buildings.type[buildingSlot])
+	if maximum <= 0 do return 0
+	ratio := clamp(w.buildings.health[buildingSlot]/maximum, 0, 1)
+	if ratio <= 0.33 do return 2
+	if ratio <= 0.66 do return 1
+	return 0
+}
+
 // Buildings also uncover and keep watch over the surrounding area.
 BuildingVision :: proc(kind: BuildingKind) -> f32 {
 	switch kind {
@@ -677,6 +689,17 @@ UnitDefaultHealth :: proc(type: UnitType) -> f32 {
 		return 18
 	}
 	unreachable()
+}
+
+UnitDamageStage :: proc(w: ^World, unitSlot: int) -> int {
+	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return 0
+	if w.units.type[unitSlot] == nil do return 0
+	maximum := UnitDefaultHealth(w.units.type[unitSlot])
+	if maximum <= 0 do return 0
+	ratio := clamp(w.units.health[unitSlot]/maximum, 0, 1)
+	if ratio <= 0.33 do return 2
+	if ratio <= 0.66 do return 1
+	return 0
 }
 
 UnitDefaultSpeed :: proc(type: UnitType) -> f32 {
