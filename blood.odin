@@ -887,6 +887,54 @@ DecorationDebris :: proc(w: ^World, x, y: f32, kind: DecorationKind) {
 	}
 }
 
+// Dust ring and shaken leaves for attacks that tear through scenery.
+DecorationBlastBurst :: proc(w: ^World, x, y, radius: f32) {
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	centerX := WorldWrapPosition(x, worldWidth)
+	centerY := WorldWrapPosition(y, worldHeight)
+
+	for _ in 0 ..< 4+int(radius*2) {
+		angle := PRandom(w)*6.2831853
+		distance := radius*(0.2+PRandom(w)*0.8)
+		ParticleSpawn(w, Particle{
+			x = WorldWrapPosition(centerX+math.cos(angle)*distance, worldWidth),
+			y = WorldWrapPosition(centerY+math.sin(angle)*distance, worldHeight),
+			z = PRandomRange(w, 0.05, 0.30),
+			vx = math.cos(angle)*PRandomRange(w, 0.3, 1.4),
+			vy = math.sin(angle)*PRandomRange(w, 0.3, 1.4),
+			vz = PRandomRange(w, 0.15, 0.8),
+			life = PRandomRange(w, 0.4, 1.0),
+			size = PRandomRange(w, 0.16, 0.42),
+			drag = 2.5,
+			gravity = 0.8,
+			kind = .Dust,
+			tint = rl.Color{196, 180, 150, 220},
+		})
+	}
+	for _ in 0 ..< 3+int(radius) {
+		angle := PRandom(w)*6.2831853
+		distance := radius*(0.3+PRandom(w)*0.7)
+		ParticleSpawn(w, Particle{
+			x = WorldWrapPosition(centerX+math.cos(angle)*distance, worldWidth),
+			y = WorldWrapPosition(centerY+math.sin(angle)*distance, worldHeight),
+			z = PRandomRange(w, 0.6, 1.8),
+			vx = math.cos(angle)*PRandomRange(w, 0.2, 1.2),
+			vy = math.sin(angle)*PRandomRange(w, 0.2, 1.2),
+			vz = PRandomRange(w, 0.3, 1.4),
+			life = PRandomRange(w, 1.2, 2.6),
+			size = PRandomRange(w, 0.10, 0.20),
+			rotation = PRandom(w)*360,
+			spin = PRandomRange(w, -180, 180),
+			drag = 1.8,
+			gravity = 2.5,
+			bounce = 0.1,
+			kind = .Leaf,
+			tint = rl.Color{255, 255, 255, 255},
+		})
+	}
+}
+
 // --- fire ambience ----------------------------------------------------------
 
 FireParticleTick :: proc(w: ^World, fireSlot: int, deltaTime: f32) {

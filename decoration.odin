@@ -283,6 +283,7 @@ DecorationFell :: proc(w: ^World, slot: int) {
 	case .Bush, .Flowers, .Cactus, .Reed, .Stump, .Lamp, .Rubble, .BurntRubble:
 		WorldDecorationDespawn(w, slot)
 	case .Rock:
+		WorldDecorationDespawn(w, slot)
 	}
 }
 
@@ -344,6 +345,44 @@ WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> f32 {
 		}
 	}
 	return harvested
+}
+
+// Splash damage fells trees and brush around the impact; stone takes longer.
+WorldDecorationAreaDamage :: proc(w: ^World, x, y, radius, damage: f32) {
+	if radius <= 0 || damage <= 0 do return
+	chunkSize := w.spatial.chunkSize
+	if chunkSize <= 0 do return
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	centerX := WorldWrapPosition(x, worldWidth)
+	centerY := WorldWrapPosition(y, worldHeight)
+	radiusSquared := radius*radius
+	hit := 0
+
+	centerChunkX := int(centerX)/chunkSize
+	centerChunkY := int(centerY)/chunkSize
+	chunkRadius := int(radius)/chunkSize+1
+	for offsetX in -chunkRadius..=chunkRadius {
+		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
+		for offsetY in -chunkRadius..=chunkRadius {
+			chunkY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
+			chunk := chunkX*w.spatial.chunksY+chunkY
+			slot := w.spatial.decorationHead[chunk]
+			for slot >= 0 {
+				next := w.spatial.decorationNext[slot]
+				deltaX := WorldShortestWrappedDelta(w.decorations.x[slot]-centerX, worldWidth)
+				deltaY := WorldShortestWrappedDelta(w.decorations.y[slot]-centerY, worldHeight)
+				if deltaX*deltaX+deltaY*deltaY <= radiusSquared {
+					w.decorations.health[slot] -= damage
+					hit += 1
+					if w.decorations.health[slot] <= 0 do DecorationFell(w, slot)
+				}
+				slot = next
+			}
+		}
+	}
+
+	if hit > 0 do DecorationBlastBurst(w, centerX, centerY, radius)
 }
 
 WorldDecorationUpdate :: proc(w: ^World, deltaTime: f32) {

@@ -663,6 +663,7 @@ WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 		UnitAttackBurst(w, unitSlot, impactX, impactY)
 		if areaRadius > 0 {
 			WarriorAreaUnitDamage(w, unitSlot, state, impactX, impactY, areaRadius, damage)
+			WorldDecorationAreaDamage(w, impactX, impactY, areaRadius, damage)
 		} else {
 			UnitApplyDamage(w, target.slot, damage, unit.x, unit.y, .Melee)
 		}
@@ -703,6 +704,7 @@ WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 		}
 		if areaRadius > 0 {
 			WarriorAreaUnitDamage(w, unitSlot, state, impactX, impactY, areaRadius, damage)
+			WorldDecorationAreaDamage(w, impactX, impactY, areaRadius, damage)
 		}
 	}
 }

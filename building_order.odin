@@ -434,6 +434,8 @@ OrderAreaDamage :: proc(
 			}
 		}
 	}
+
+	WorldDecorationAreaDamage(w, centerX, centerY, radius, buildingDamage)
 }
 
 @(private = "file")
