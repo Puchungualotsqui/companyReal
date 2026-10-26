@@ -3500,14 +3500,15 @@ UIDrawOrderActiveAreas :: proc(w: ^World, camera: rl.Camera2D) {
 	}
 }
 
-UI_CROWN_CARD_W : f32 : 196
-UI_CROWN_CARD_H : f32 : 96
+UI_CROWN_CARD_W : f32 : 190
+UI_CROWN_CARD_H : f32 : 48
 UI_CROWN_GAP : f32 : 8
-UI_CROWN_MARGIN : f32 : 20
-UI_CROWN_HEADER_H : f32 : 72
-UI_CROWN_NAME_SIZE : f32 : 16
-UI_CROWN_COST_SIZE : f32 : 16
-UI_CROWN_ICON_SIZE : f32 : 32
+UI_CROWN_MARGIN : f32 : 22
+UI_CROWN_HEADER_H : f32 : 88
+UI_CROWN_BRANCH_H : f32 : 26
+UI_CROWN_NAME_SIZE : f32 : 15
+UI_CROWN_COST_SIZE : f32 : 15
+UI_CROWN_ICON_SIZE : f32 : 28
 UI_CROWN_BRANCH_ORDER := [5]CrownBranch{
 	.Seafaring,
 	.Provisioning,
@@ -3519,7 +3520,7 @@ UI_CROWN_BRANCH_ORDER := [5]CrownBranch{
 UICrownPanelRect :: proc() -> rl.Rectangle {
 	width := f32(len(UI_CROWN_BRANCH_ORDER))*UI_CROWN_CARD_W+
 		f32(len(UI_CROWN_BRANCH_ORDER)-1)*UI_CROWN_GAP+2*UI_CROWN_MARGIN
-	height := UI_CROWN_HEADER_H+5*UI_CROWN_CARD_H+4*UI_CROWN_GAP+2*UI_CROWN_MARGIN+20
+	height := UI_CROWN_HEADER_H+5*UI_CROWN_CARD_H+4*UI_CROWN_GAP+UI_CROWN_MARGIN
 	return rl.Rectangle{
 		(f32(rl.GetScreenWidth())-width)*0.5,
 		(f32(rl.GetScreenHeight())-height)*0.5,
@@ -3531,29 +3532,27 @@ UICrownPanelRect :: proc() -> rl.Rectangle {
 UICrownCardRect :: proc(panel: rl.Rectangle, branchIndex, tierIndex: int) -> rl.Rectangle {
 	return rl.Rectangle{
 		panel.x+UI_CROWN_MARGIN+f32(branchIndex)*(UI_CROWN_CARD_W+UI_CROWN_GAP),
-		panel.y+UI_CROWN_HEADER_H+UI_CROWN_MARGIN+f32(tierIndex)*(UI_CROWN_CARD_H+UI_CROWN_GAP),
+		panel.y+UI_CROWN_HEADER_H+f32(tierIndex)*(UI_CROWN_CARD_H+UI_CROWN_GAP),
 		UI_CROWN_CARD_W,
 		UI_CROWN_CARD_H,
 	}
 }
 
-UICrownCloseRect :: proc(panel: rl.Rectangle) -> rl.Rectangle {
-	return rl.Rectangle{panel.x+panel.width-UI_PAD-72, panel.y+18, 72, 28}
-}
-
-UICrownSurveyRect :: proc(panel: rl.Rectangle) -> rl.Rectangle {
-	return rl.Rectangle{panel.x+panel.width-UI_PAD-72-8-150, panel.y+18, 150, 28}
-}
-
 UICrownUpdate :: proc(w: ^World, ui: ^UIState, mouse: rl.Vector2) {
 	panel := UICrownPanelRect()
-	if rl.CheckCollisionPointRec(mouse, UICrownCloseRect(panel)) && rl.IsMouseButtonPressed(.LEFT) {
+	if rl.CheckCollisionPointRec(
+		mouse,
+		rl.Rectangle{panel.x+panel.width-UI_PAD-72, panel.y+14, 72, 28},
+	) && rl.IsMouseButtonPressed(.LEFT) {
 		ui.panel = .None
 		return
 	}
 	local := WorldLocalKingdom(w)
 	if local >= 0 && KingdomHasTech(w, local, .Surveyors) &&
-		rl.CheckCollisionPointRec(mouse, UICrownSurveyRect(panel)) &&
+		rl.CheckCollisionPointRec(
+			mouse,
+			rl.Rectangle{panel.x+panel.width-UI_PAD-72-8-150, panel.y+14, 150, 28},
+		) &&
 		rl.IsMouseButtonPressed(.LEFT) {
 		ui.survey = !ui.survey
 		ui.panel = .None
@@ -3582,44 +3581,142 @@ UIDrawCrownPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 	local := WorldLocalKingdom(w)
 	if local < 0 do return
 	panel := UICrownPanelRect()
+	insight := KingdomInsight(w, local)
 
 	rl.DrawRectangleRec(
 		rl.Rectangle{0, 0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight())},
 		rl.Color{0, 0, 0, 170},
 	)
+	rl.DrawRectangleRec(
+		rl.Rectangle{panel.x+6, panel.y+8, panel.width, panel.height},
+		rl.Color{0, 0, 0, 90},
+	)
 	rl.DrawRectangleRec(panel, UI_COLOR_BG)
+	rl.DrawRectangleRec(
+		rl.Rectangle{panel.x+2, panel.y+2, panel.width-4, UI_CROWN_HEADER_H-10},
+		UI_COLOR_HEADER,
+	)
 	rl.DrawRectangleLinesEx(panel, 2, UI_COLOR_BORDER)
 	rl.DrawRectangleLinesEx(
 		rl.Rectangle{panel.x+3, panel.y+3, panel.width-6, panel.height-6},
 		1,
 		UI_COLOR_BORDER_INNER,
 	)
+	rl.DrawLineEx(
+		rl.Vector2{panel.x+3, panel.y+UI_CROWN_HEADER_H-8},
+		rl.Vector2{panel.x+panel.width-3, panel.y+UI_CROWN_HEADER_H-8},
+		1,
+		UI_COLOR_DIVIDER,
+	)
 
 	iconX := panel.x+UI_CROWN_MARGIN
-	iconY := panel.y+18
+	iconY := panel.y+12
 	UIDrawTexture(
 		renderer.sprites.crownIcon,
 		rl.Rectangle{iconX, iconY, UI_CROWN_ICON_SIZE, UI_CROWN_ICON_SIZE},
 		rl.WHITE,
 	)
-	UITitle(
-		"CROWN TECHNOLOGY",
-		iconX+UI_CROWN_ICON_SIZE+12,
-		panel.y+16,
+	titleX := iconX+UI_CROWN_ICON_SIZE+12
+	UITitle("CROWN TECHNOLOGY", titleX, panel.y+10, UI_COLOR_GOLD)
+
+	titleWidth := rl.MeasureTextEx(UITitleFont(), "CROWN TECHNOLOGY", UI_TITLE_SIZE, 1).x
+	insightRect := rl.Rectangle{titleX+titleWidth+18, panel.y+14, 118, 28}
+	rl.DrawRectangleRec(insightRect, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(insightRect, 1, UI_COLOR_BORDER_INNER)
+	UIDrawTexture(
+		renderer.sprites.crownIcon,
+		rl.Rectangle{insightRect.x+8, insightRect.y+6, 16, 16},
+		rl.WHITE,
+	)
+	rl.DrawTextEx(
+		UIFont(),
+		"INSIGHT",
+		rl.Vector2{insightRect.x+28, insightRect.y+8},
+		13,
+		1,
+		UI_COLOR_DIM,
+	)
+	insightText := fmt.ctprintf("%d", insight)
+	insightWidth := rl.MeasureTextEx(UIFont(), insightText, 17, 1).x
+	rl.DrawTextEx(
+		UIFont(),
+		insightText,
+		rl.Vector2{insightRect.x+insightRect.width-10-insightWidth, insightRect.y+5},
+		17,
+		1,
 		UI_COLOR_GOLD,
 	)
-	UIButton(UICrownCloseRect(panel), "CLOSE", true)
+
+	UIButton(
+		rl.Rectangle{panel.x+panel.width-UI_PAD-72, panel.y+14, 72, 28},
+		"CLOSE",
+		true,
+	)
 	if KingdomHasTech(w, local, .Surveyors) {
-		UIButton(UICrownSurveyRect(panel), ui.survey ? "SURVEY ON" : "SURVEY OFF", true)
+		UIButton(
+			rl.Rectangle{panel.x+panel.width-UI_PAD-72-8-150, panel.y+14, 150, 28},
+			ui.survey ? "SURVEY ON" : "SURVEY OFF",
+			true,
+		)
 	}
 
 	mouse := rl.GetMousePosition()
-	insight := KingdomInsight(w, local)
 	hoveredTech: CrownTech
 	tooltipActive := false
 	for branch, branchIndex in UI_CROWN_BRANCH_ORDER {
-		branchX := panel.x+UI_CROWN_MARGIN+f32(branchIndex)*(UI_CROWN_CARD_W+UI_CROWN_GAP)
-		UIText(CrownBranchName(branch), branchX, panel.y+UI_CROWN_HEADER_H-4, UI_COLOR_GOLD)
+		branchRect := rl.Rectangle{
+			panel.x+UI_CROWN_MARGIN+f32(branchIndex)*(UI_CROWN_CARD_W+UI_CROWN_GAP),
+			panel.y+UI_CROWN_HEADER_H-UI_CROWN_BRANCH_H-12,
+			UI_CROWN_CARD_W,
+			UI_CROWN_BRANCH_H,
+		}
+		researchedCount := 0
+		for tech in CROWN_BRANCH_TECHS[branch] {
+			if KingdomHasTech(w, local, tech) do researchedCount += 1
+		}
+		branchComplete := researchedCount == len(CROWN_BRANCH_TECHS[branch])
+
+		rl.DrawRectangleRec(branchRect, UI_COLOR_BUTTON)
+		rl.DrawRectangleLinesEx(branchRect, 1, UI_COLOR_DIVIDER)
+		if branchComplete {
+			rl.DrawRectangleRec(
+				rl.Rectangle{branchRect.x, branchRect.y+branchRect.height-2, branchRect.width, 2},
+				UI_COLOR_GOLD,
+			)
+		}
+		rl.DrawTextEx(
+			UITitleFont(),
+			CrownBranchName(branch),
+			rl.Vector2{branchRect.x+10, branchRect.y+4},
+			15,
+			1,
+			UI_COLOR_GOLD,
+		)
+		progressText := fmt.ctprintf("%d/%d", researchedCount, len(CROWN_BRANCH_TECHS[branch]))
+		progressWidth := rl.MeasureTextEx(UIFont(), progressText, 13, 1).x
+		rl.DrawTextEx(
+			UIFont(),
+			progressText,
+			rl.Vector2{branchRect.x+branchRect.width-10-progressWidth, branchRect.y+6},
+			13,
+			1,
+			branchComplete ? UI_COLOR_GOLD : UI_COLOR_DIM,
+		)
+
+		for tierIndex in 0..<(len(CROWN_BRANCH_TECHS[branch])-1) {
+			from := UICrownCardRect(panel, branchIndex, tierIndex)
+			to := UICrownCardRect(panel, branchIndex, tierIndex+1)
+			connectorColor := UI_COLOR_DIVIDER
+			if KingdomHasTech(w, local, CROWN_BRANCH_TECHS[branch][tierIndex]) {
+				connectorColor = UI_COLOR_GOLD
+			}
+			rl.DrawLineEx(
+				rl.Vector2{from.x+24, from.y+from.height},
+				rl.Vector2{from.x+24, to.y},
+				2,
+				connectorColor,
+			)
+		}
 
 		for tech, tierIndex in CROWN_BRANCH_TECHS[branch] {
 			rect := UICrownCardRect(panel, branchIndex, tierIndex)
@@ -3657,24 +3754,38 @@ UIDrawCrownPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			}
 			rl.DrawRectangleRec(rect, background)
 			rl.DrawRectangleLinesEx(rect, (hovered && available) || researched ? 2 : 1, border)
+			if researched {
+				rl.DrawRectangleRec(
+					rl.Rectangle{rect.x+2, rect.y+2, 3, rect.height-4},
+					UI_COLOR_GOLD,
+				)
+			}
 
 			UIDrawTexture(
 				renderer.sprites.techIcon[tech],
 				rl.Rectangle{rect.x+10, rect.y+10, UI_CROWN_ICON_SIZE, UI_CROWN_ICON_SIZE},
 				iconTint,
 			)
+
+			name := CrownTechName(tech)
+			nameSize := UI_CROWN_NAME_SIZE
+			nameSpace := rect.width-52
+			nameWidth := rl.MeasureTextEx(UIFont(), name, nameSize, 1).x
+			if nameWidth > nameSpace {
+				nameSize = max(11, nameSize*nameSpace/nameWidth)
+			}
 			rl.DrawTextEx(
 				UIFont(),
-				CrownTechName(tech),
-				rl.Vector2{rect.x+50, rect.y+9},
-				UI_CROWN_NAME_SIZE,
+				name,
+				rl.Vector2{rect.x+46, rect.y+7},
+				nameSize,
 				1,
 				nameColor,
 			)
 
 			if researched {
-				checkX := rect.x+14
-				checkY := rect.y+58
+				checkX := rect.x+46
+				checkY := rect.y+34
 				rl.DrawLineEx(
 					rl.Vector2{checkX, checkY},
 					rl.Vector2{checkX+5, checkY+6},
@@ -3683,20 +3794,20 @@ UIDrawCrownPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 				)
 				rl.DrawLineEx(
 					rl.Vector2{checkX+5, checkY+6},
-					rl.Vector2{checkX+18, checkY-8},
+					rl.Vector2{checkX+16, checkY-6},
 					2,
 					UI_COLOR_GOLD,
 				)
 			} else {
 				UIDrawTexture(
 					renderer.sprites.crownIcon,
-					rl.Rectangle{rect.x+10, rect.y+50, 16, 16},
+					rl.Rectangle{rect.x+46, rect.y+27, 14, 14},
 					prerequisiteMet ? rl.WHITE : iconTint,
 				)
 				rl.DrawTextEx(
 					UIFont(),
 					fmt.ctprintf("%d", cost),
-					rl.Vector2{rect.x+30, rect.y+47},
+					rl.Vector2{rect.x+64, rect.y+25},
 					UI_CROWN_COST_SIZE,
 					1,
 					costColor,
@@ -3714,8 +3825,12 @@ UIDrawCrownPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 }
 
 UIDrawCrownTooltip :: proc(renderer: ^WorldRenderer, tech: CrownTech, mouse: rl.Vector2) {
-	tooltipWidth: f32 = 500
-	tooltipHeight: f32 = 96
+	name := CrownTechName(tech)
+	description := CrownTechDescription(tech)
+	nameWidth := rl.MeasureTextEx(UIFont(), name, UI_CROWN_NAME_SIZE, 1).x
+	descriptionWidth := rl.MeasureTextEx(UIFont(), description, 15, 1).x
+	tooltipWidth := clamp(max(nameWidth+52+86, descriptionWidth+24), 280, 520)
+	tooltipHeight: f32 = 78
 	tooltipX := clamp(mouse.x+18, UI_MARGIN, f32(rl.GetScreenWidth())-tooltipWidth-UI_MARGIN)
 	tooltipY := clamp(mouse.y+18, UI_MARGIN, f32(rl.GetScreenHeight())-tooltipHeight-UI_MARGIN)
 	tooltip := rl.Rectangle{tooltipX, tooltipY, tooltipWidth, tooltipHeight}
@@ -3723,22 +3838,40 @@ UIDrawCrownTooltip :: proc(renderer: ^WorldRenderer, tech: CrownTech, mouse: rl.
 	rl.DrawRectangleLinesEx(tooltip, 2, UI_COLOR_BORDER)
 	UIDrawTexture(
 		renderer.sprites.techIcon[tech],
-		rl.Rectangle{tooltip.x+10, tooltip.y+8, UI_CROWN_ICON_SIZE, UI_CROWN_ICON_SIZE},
+		rl.Rectangle{tooltip.x+12, tooltip.y+10, UI_CROWN_ICON_SIZE, UI_CROWN_ICON_SIZE},
 		rl.WHITE,
 	)
 	rl.DrawTextEx(
 		UIFont(),
-		CrownTechName(tech),
+		name,
 		rl.Vector2{tooltip.x+52, tooltip.y+10},
 		UI_CROWN_NAME_SIZE,
 		1,
 		UI_COLOR_GOLD,
 	)
+
+	costText := fmt.ctprintf("%d", CrownTechCost(tech))
+	costWidth := rl.MeasureTextEx(UIFont(), costText, 16, 1).x
+	costX := tooltip.x+tooltip.width-12-costWidth
 	rl.DrawTextEx(
 		UIFont(),
-		CrownTechDescription(tech),
-		rl.Vector2{tooltip.x+10, tooltip.y+50},
-		14,
+		costText,
+		rl.Vector2{costX, tooltip.y+11},
+		16,
+		1,
+		UI_COLOR_GOLD,
+	)
+	UIDrawTexture(
+		renderer.sprites.crownIcon,
+		rl.Rectangle{costX-18, tooltip.y+12, 14, 14},
+		rl.WHITE,
+	)
+
+	rl.DrawTextEx(
+		UIFont(),
+		description,
+		rl.Vector2{tooltip.x+12, tooltip.y+48},
+		15,
 		1,
 		UI_COLOR_TEXT,
 	)
