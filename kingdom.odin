@@ -252,6 +252,7 @@ Town :: struct {
 	milestonesEarned: int,
 	milestonesChosen: int,
 	milestonePending: bool,
+	milestoneOptions: [TOWN_MILESTONE_TIER_COUNT]u8, // chosen option per earned milestone
 	conversions: [MAX_CONVERSION_JOBS]ConversionJob,
 	conversionCount: int,
 	attackOrders: [KINGDOM_SLOTS][TOWN_CAPACITY]bool,
@@ -959,6 +960,7 @@ TownChooseMilestone :: proc(w: ^World, kingdomSlot, townSlot, option: int) -> bo
 	town.unlockedBuildings |= choice.unlocks
 	town.unlockedUnits |= choice.units
 	TownAreaExpand(w, kingdomSlot, townSlot, TOWN_AREA_EXPANSION)
+	town.milestoneOptions[town.milestonesChosen] = u8(option)
 	town.milestonesChosen += 1
 	town.milestonePending = town.milestonesEarned > town.milestonesChosen
 	return true

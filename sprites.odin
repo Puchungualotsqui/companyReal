@@ -2421,6 +2421,137 @@ DrawCrownTechIcon :: proc(tech: CrownTech) -> Art {
 	return art
 }
 
+// One 16x16 emblem per town specialization path.
+DrawTownPathIcon :: proc(path: TownPath) -> Art {
+	art := ArtInit(16, 16)
+	switch path {
+	case .Rangers:
+		ArtLine(&art, 5, 1, 2, 5, C_OUTLINE)
+		ArtLine(&art, 2, 5, 2, 10, C_OUTLINE)
+		ArtLine(&art, 2, 10, 5, 14, C_OUTLINE)
+		ArtLine(&art, 4, 2, 3, 5, C_WOOD)
+		ArtLine(&art, 3, 5, 3, 10, C_WOOD)
+		ArtLine(&art, 3, 10, 4, 13, C_WOOD)
+		ArtLine(&art, 5, 2, 5, 13, C_STONE_LIGHT)
+		ArtLine(&art, 4, 8, 13, 8, C_WOOD_LIGHT)
+		ArtTriangle(&art, 13, 6, 15, 8, 13, 10, C_OUTLINE)
+		ArtTriangle(&art, 13, 7, 14, 8, 13, 9, C_STONE_LIGHT)
+		ArtLine(&art, 4, 6, 6, 8, C_LEAF)
+		ArtLine(&art, 4, 10, 6, 8, C_LEAF)
+	case .Mystics:
+		ArtPolygon(&art, []Point{{8, 1}, {13, 6}, {8, 15}, {3, 6}}, C_OUTLINE)
+		ArtPolygon(&art, []Point{{8, 2}, {12, 6}, {8, 13}, {4, 6}}, C_ARCANE_DARK)
+		ArtPolygon(&art, []Point{{8, 4}, {10, 7}, {8, 11}, {6, 7}}, C_ARCANE)
+		ArtPixel(&art, 8, 5, C_ARCANE_LIGHT)
+		ArtPixel(&art, 8, 6, C_ARCANE_GLOW)
+		ArtPixel(&art, 2, 2, C_ARCANE_GLOW)
+		ArtPixel(&art, 14, 3, C_ARCANE_LIGHT)
+		ArtPixel(&art, 13, 12, C_ARCANE_GLOW)
+	case .Beasts:
+		ArtEllipse(&art, 8, 11, 4, 3, C_OUTLINE)
+		ArtEllipse(&art, 8, 11, 3, 2, C_WOOD_DARK)
+		ArtEllipse(&art, 3, 5, 2, 2, C_OUTLINE)
+		ArtEllipse(&art, 3, 5, 1, 1, C_WOOD_DARK)
+		ArtEllipse(&art, 7, 2, 2, 2, C_OUTLINE)
+		ArtEllipse(&art, 7, 2, 1, 1, C_WOOD_DARK)
+		ArtEllipse(&art, 10, 2, 2, 2, C_OUTLINE)
+		ArtEllipse(&art, 10, 2, 1, 1, C_WOOD_DARK)
+		ArtEllipse(&art, 13, 5, 2, 2, C_OUTLINE)
+		ArtEllipse(&art, 13, 5, 1, 1, C_WOOD_DARK)
+		ArtPixel(&art, 8, 12, C_WOOD_LIGHT)
+		ArtPixel(&art, 6, 10, C_STONE_LIGHT)
+		ArtPixel(&art, 10, 10, C_STONE_LIGHT)
+	case .Siege:
+		ArtRect(&art, 1, 10, 14, 2, C_OUTLINE)
+		ArtRect(&art, 2, 10, 12, 1, C_WOOD)
+		ArtCircle(&art, 4, 13, 2, C_OUTLINE)
+		ArtCircle(&art, 4, 13, 1, C_WOOD_DARK)
+		ArtCircle(&art, 11, 13, 2, C_OUTLINE)
+		ArtCircle(&art, 11, 13, 1, C_WOOD_DARK)
+		ArtLine(&art, 4, 10, 9, 5, C_OUTLINE)
+		ArtLine(&art, 5, 10, 10, 5, C_WOOD_LIGHT)
+		ArtTriangle(&art, 8, 5, 12, 2, 12, 6, C_OUTLINE)
+		ArtTriangle(&art, 9, 5, 11, 3, 11, 5, C_WOOD)
+		ArtCircle(&art, 13, 3, 2, C_OUTLINE)
+		ArtCircle(&art, 13, 3, 1, C_STONE_LIGHT)
+	case .Tide:
+		ArtEllipse(&art, 8, 9, 6, 4, C_OUTLINE)
+		ArtEllipse(&art, 8, 9, 5, 3, C_LEAF_DARK)
+		ArtLine(&art, 3, 9, 13, 9, C_LEAF_DARKEST)
+		ArtLine(&art, 8, 6, 8, 12, C_LEAF_DARKEST)
+		ArtPixel(&art, 5, 7, C_LEAF_LIGHT)
+		ArtPixel(&art, 11, 7, C_LEAF_LIGHT)
+		ArtPixel(&art, 5, 11, C_LEAF)
+		ArtPixel(&art, 11, 11, C_LEAF)
+		ArtCircle(&art, 14, 10, 2, C_OUTLINE)
+		ArtCircle(&art, 14, 10, 1, C_LEAF)
+		ArtPixel(&art, 15, 9, C_OUTLINE)
+		ArtRect(&art, 2, 12, 2, 1, C_LEAF_DARK)
+		ArtRect(&art, 12, 13, 2, 1, C_LEAF_DARK)
+	case .Shadows:
+		ArtLine(&art, 6, 12, 14, 4, C_OUTLINE)
+		ArtLine(&art, 7, 12, 14, 5, C_OUTLINE)
+		ArtLine(&art, 7, 11, 13, 5, C_IRON_LIGHT)
+		ArtPixel(&art, 14, 3, C_IRON)
+		ArtLine(&art, 4, 10, 8, 14, C_OUTLINE)
+		ArtLine(&art, 5, 10, 8, 13, C_GOLD)
+		ArtLine(&art, 5, 13, 2, 15, C_OUTLINE)
+		ArtLine(&art, 6, 13, 3, 15, C_WOOD)
+		ArtCircle(&art, 2, 14, 1, C_GOLD)
+	case .Bastion:
+		ArtPolygon(&art, []Point{{8, 1}, {14, 3}, {13, 9}, {8, 15}, {3, 9}, {2, 3}}, C_OUTLINE)
+		ArtPolygon(&art, []Point{{8, 2}, {13, 4}, {12, 9}, {8, 13}, {4, 9}, {3, 4}}, C_STONE_DARK)
+		ArtPolygon(&art, []Point{{8, 3}, {12, 4}, {11, 8}, {8, 11}, {5, 8}, {4, 4}}, C_STONE)
+		ArtLine(&art, 8, 4, 8, 10, C_GOLD_DARK)
+		ArtLine(&art, 5, 6, 11, 6, C_GOLD_DARK)
+		ArtCircle(&art, 8, 7, 2, C_GOLD)
+		ArtPixel(&art, 8, 7, C_GOLD_LIGHT)
+	case .Logistics:
+		ArtRect(&art, 2, 6, 10, 6, C_OUTLINE)
+		ArtRect(&art, 3, 7, 8, 4, C_WOOD)
+		ArtRect(&art, 3, 7, 8, 1, C_WOOD_LIGHT)
+		ArtLine(&art, 4, 9, 10, 9, C_WOOD_DARK)
+		ArtCircle(&art, 4, 13, 2, C_OUTLINE)
+		ArtCircle(&art, 4, 13, 1, C_WOOD_DARK)
+		ArtCircle(&art, 10, 13, 2, C_OUTLINE)
+		ArtCircle(&art, 10, 13, 1, C_WOOD_DARK)
+		ArtLine(&art, 12, 7, 15, 5, C_OUTLINE)
+		ArtLine(&art, 12, 8, 15, 6, C_WOOD_LIGHT)
+		ArtLine(&art, 2, 2, 10, 2, C_GOLD_DARK)
+		ArtLine(&art, 10, 2, 8, 1, C_GOLD_DARK)
+		ArtLine(&art, 10, 2, 8, 3, C_GOLD_DARK)
+	case .Conquest:
+		ArtLine(&art, 2, 14, 13, 3, C_OUTLINE)
+		ArtLine(&art, 3, 14, 14, 3, C_OUTLINE)
+		ArtLine(&art, 3, 13, 13, 3, C_IRON_LIGHT)
+		ArtLine(&art, 13, 14, 2, 3, C_OUTLINE)
+		ArtLine(&art, 12, 14, 1, 3, C_OUTLINE)
+		ArtLine(&art, 12, 13, 3, 4, C_IRON)
+		ArtLine(&art, 2, 10, 5, 13, C_GOLD)
+		ArtLine(&art, 13, 10, 10, 13, C_GOLD)
+		ArtPixel(&art, 2, 14, C_GOLD_LIGHT)
+		ArtPixel(&art, 13, 14, C_GOLD_LIGHT)
+	case .Dominion:
+		ArtRect(&art, 3, 4, 10, 3, C_OUTLINE)
+		ArtRect(&art, 4, 5, 8, 1, C_GOLD)
+		ArtTriangle(&art, 3, 4, 4, 1, 6, 4, C_OUTLINE)
+		ArtTriangle(&art, 12, 4, 11, 1, 9, 4, C_OUTLINE)
+		ArtTriangle(&art, 6, 4, 8, 0, 10, 4, C_OUTLINE)
+		ArtTriangle(&art, 4, 4, 4, 2, 5, 4, C_GOLD)
+		ArtTriangle(&art, 11, 4, 11, 2, 10, 4, C_GOLD)
+		ArtTriangle(&art, 7, 4, 8, 1, 9, 4, C_GOLD)
+		ArtPixel(&art, 7, 6, C_EFFECT_BAD)
+		ArtPixel(&art, 8, 6, C_STONE_LIGHT)
+		ArtPixel(&art, 9, 6, C_LEAF_LIGHT)
+		ArtRect(&art, 5, 8, 6, 7, C_OUTLINE)
+		ArtRect(&art, 6, 9, 4, 6, C_STONE_DARK)
+		ArtRect(&art, 6, 9, 4, 1, C_STONE)
+		ArtRect(&art, 7, 12, 2, 3, C_OUTLINE)
+		ArtRect(&art, 8, 13, 1, 2, C_GOLD_DARK)
+	}
+	return art
+}
+
 @(private = "file")
 DrawWoodLogIcon :: proc(art: ^Art, x, y: int) {
 	ArtRect(art, x, y, 13, 5, C_OUTLINE)
@@ -2452,6 +2583,7 @@ SpriteSet :: struct {
 	woodIcon:        rl.Texture2D,
 	crownIcon:       rl.Texture2D,
 	techIcon:        [CrownTech]rl.Texture2D,
+	pathIcon:        [TownPath]rl.Texture2D,
 	boat:            rl.Texture2D,
 }
 
@@ -2563,6 +2695,9 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 	for tech in CrownTech {
 		set.techIcon[tech] = ArtTakeTexture(DrawCrownTechIcon(tech))
 	}
+	for path in TownPath {
+		set.pathIcon[path] = ArtTakeTexture(DrawTownPathIcon(path))
+	}
 	return set
 }
 
@@ -2642,6 +2777,9 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 	if set.crownIcon.id != 0 do rl.UnloadTexture(set.crownIcon)
 	for tech in CrownTech {
 		if set.techIcon[tech].id != 0 do rl.UnloadTexture(set.techIcon[tech])
+	}
+	for path in TownPath {
+		if set.pathIcon[path].id != 0 do rl.UnloadTexture(set.pathIcon[path])
 	}
 	if set.boat.id != 0 do rl.UnloadTexture(set.boat)
 }

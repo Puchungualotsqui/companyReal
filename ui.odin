@@ -23,6 +23,7 @@ UITownTab :: enum {
 	Town,
 	Orders,
 	Works,
+	Eras,
 }
 
 // Command modes arm the map for the next click. Inspect is the normal mode.
@@ -88,10 +89,12 @@ UI_SECTION_HEADER : f32 : 26
 UI_ROWS_TOP : f32 : 330
 UI_ROW_HEIGHT : f32 : 36
 UI_CONSTRUCTION_ROW_HEIGHT : f32 : 28
+UI_ERAS_ROW_H : f32 : 60
+UI_ERAS_ROW_GAP : f32 : 4
 UI_BUTTON : f32 : 20
 UI_TEXT_BUTTON_H : f32 : 26
 
-UI_TOWN_TABS := [3]cstring{"TOWN", "ORDERS", "WORKS"}
+UI_TOWN_TABS := [4]cstring{"TOWN", "ORDERS", "WORKS", "ERAS"}
 
 UI_EFFECT_ROW_H : f32 : 30
 
@@ -426,6 +429,32 @@ UITownPathName :: proc(path: TownPath) -> cstring {
 		return "Conquest"
 	case .Dominion:
 		return "Dominion"
+	}
+	unreachable()
+}
+
+UITownPathDescription :: proc(path: TownPath) -> cstring {
+	switch path {
+	case .Rangers:
+		return "Archers and field builders of the greenwood."
+	case .Mystics:
+		return "Mages and cannons guided by arcane lore."
+	case .Beasts:
+		return "Giant handlers and towering watchtowers."
+	case .Siege:
+		return "Catapults, cannons and siege workshops."
+	case .Tide:
+		return "Turtle riders, pens and ocean bridges."
+	case .Shadows:
+		return "Rogues, hidden guilds and watchtowers."
+	case .Bastion:
+		return "Veteran builders raise walls and towers."
+	case .Logistics:
+		return "Explorers, roads and river bridges."
+	case .Conquest:
+		return "Knights and catapults break the walls."
+	case .Dominion:
+		return "Mages and giants claim the horizon."
 	}
 	unreachable()
 }
@@ -851,6 +880,8 @@ UIPanelHeight :: proc(w: ^World, ui: ^UIState) -> f32 {
 				return UIOrdersPanelHeight(UITownOrderCount(w, kingdom, town))
 			case .Works:
 				return UIConstructionsPanelHeight(TownConstructionCount(w, kingdom, town))
+			case .Eras:
+				return UIErasPanelHeight()
 			}
 		}
 		return UI_GROWTH_Y+UI_GROWTH_H+UI_PAD
@@ -901,6 +932,12 @@ UIOrdersPanelHeight :: proc(orders: int) -> f32 {
 
 UIConstructionsPanelHeight :: proc(sites: int) -> f32 {
 	return UI_ROWS_TOP+UI_SECTION_HEADER+f32(max(sites, 1))*UI_CONSTRUCTION_ROW_HEIGHT+UI_PAD
+}
+
+UIErasPanelHeight :: proc() -> f32 {
+	return UI_ROWS_TOP+UI_SECTION_HEADER+
+		f32(TOWN_MILESTONE_TIER_COUNT)*UI_ERAS_ROW_H+
+		f32(TOWN_MILESTONE_TIER_COUNT-1)*UI_ERAS_ROW_GAP+UI_PAD
 }
 
 UIOrderCancelRect :: proc(panel: rl.Rectangle, index: int) -> rl.Rectangle {
@@ -1326,6 +1363,8 @@ UIPanelClick :: proc(w: ^World, view: ^WorldView, panel: rl.Rectangle, mouse: rl
 			UIOrdersClick(w, ui, panel, mouse)
 		case .Works:
 			// Construction sites are automatic; the tab is read-only.
+		case .Eras:
+			// Milestone choices are read-only once made.
 		}
 		return
 	}
@@ -1808,12 +1847,20 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 	case .None:
 	}
 	if WorldTownExists(w, kingdom, town) {
-		UIText(
-			fmt.ctprintf("%s  -  %s", NameKingdomCString(w, kingdom), NameTownCString(w, kingdom, town)),
-			titleX,
-			panel.y+48,
-			UI_COLOR_DIM,
+		subtitle := fmt.ctprintf(
+			"%s  -  %s",
+			NameKingdomCString(w, kingdom),
+			NameTownCString(w, kingdom, town),
 		)
+		UIText(subtitle, titleX, panel.y+48, UI_COLOR_DIM)
+		if UISelectionTownHall(w, ui.selection) && UICanControlKingdom(w, kingdom) {
+			villagers := fmt.ctprintf("%d villagers", TownUnitCount(w, kingdom, town, .Villager))
+			subtitleWidth := rl.MeasureTextEx(UIFont(), subtitle, UI_TEXT_SIZE, 1).x
+			villagersWidth := rl.MeasureTextEx(UIFont(), villagers, UI_TEXT_SIZE, 1).x
+			if titleX+subtitleWidth+16+villagersWidth <= panel.x+panel.width-UI_PAD {
+				UITextRight(villagers, panel.x+panel.width-UI_PAD, panel.y+48, UI_COLOR_DIM)
+			}
+		}
 	}
 
 	switch ui.selection.kind {
@@ -1874,6 +1921,8 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 				UIDrawOrdersTab(w, renderer, panel, kingdom, town)
 			case .Works:
 				UIDrawConstructionsTab(w, renderer, panel, kingdom, town)
+			case .Eras:
+				UIDrawErasTab(w, renderer, panel, kingdom, town)
 			}
 		}
 	}
@@ -1935,15 +1984,6 @@ UIDrawTownTabs :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle) {
 	rl.DrawRectangleRec(
 		rl.Rectangle{panel.x+UI_PAD, panel.y+UI_TOWN_DIVIDER, panel.width-2*UI_PAD, 1},
 		UI_COLOR_DIVIDER,
-	)
-
-	kingdom, town := UISelectionTown(w, ui.selection)
-	villagers := TownUnitCount(w, kingdom, town, .Villager)
-	UITextRight(
-		fmt.ctprintf("%d villagers", villagers),
-		panel.x+panel.width-UI_PAD,
-		panel.y+UI_TABS_Y,
-		UI_COLOR_DIM,
 	)
 
 	mouse := rl.GetMousePosition()
@@ -2428,6 +2468,220 @@ UIDrawConstructionsTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Re
 		}
 		rl.DrawRectangleLinesEx(bar, 1, UI_COLOR_BORDER_INNER)
 		row += 1
+	}
+}
+
+UIEraNumeral :: proc(tier: int) -> cstring {
+	switch tier {
+	case 0:
+		return "I"
+	case 1:
+		return "II"
+	case 2:
+		return "III"
+	case 3:
+		return "IV"
+	case 4:
+		return "V"
+	}
+	return "?"
+}
+
+UIEraReward :: struct {
+	texture:     rl.Texture2D,
+	name:        cstring,
+	description: cstring,
+}
+
+UIDrawEraRewardTooltip :: proc(item: UIEraReward, mouse: rl.Vector2) {
+	width: f32 = 330
+	height: f32 = 66
+	x := clamp(mouse.x+16, UI_MARGIN, f32(rl.GetScreenWidth())-width-UI_MARGIN)
+	y := clamp(mouse.y+16, UI_MARGIN, f32(rl.GetScreenHeight())-height-UI_MARGIN)
+	box := rl.Rectangle{x, y, width, height}
+	rl.DrawRectangleRec(box, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(box, 2, UI_COLOR_BORDER)
+	if item.texture.id != 0 {
+		source := rl.Rectangle{0, 0, f32(item.texture.width), f32(item.texture.height)}
+		rl.DrawTexturePro(item.texture, source, rl.Rectangle{x+10, y+10, 20, 20}, rl.Vector2{0, 0}, 0, rl.WHITE)
+	}
+	rl.DrawTextEx(UIFont(), item.name, rl.Vector2{x+38, y+9}, 15, 1, UI_COLOR_GOLD)
+	rl.DrawTextEx(UIFont(), item.description, rl.Vector2{x+10, y+38}, 13, 1, UI_COLOR_TEXT)
+}
+
+UIDrawEraRewards :: proc(renderer: ^WorldRenderer, row: rl.Rectangle, faction: int, option: MilestoneOption) {
+	items: [8]UIEraReward
+	count := 0
+	for kind in UnitKind {
+		if !(kind in option.units) do continue
+		items[count] = {renderer.sprites.unit[faction][kind], UIUnitName(kind), UIUnitDescription(kind)}
+		count += 1
+	}
+	for kind in BuildingKind {
+		if !(kind in option.unlocks) do continue
+		items[count] = {
+			renderer.sprites.building[faction][kind],
+			UIBuildingName(kind),
+			UIBuildingDescription(kind),
+		}
+		count += 1
+	}
+
+	mouse := rl.GetMousePosition()
+	hovered := -1
+	x := row.x+48
+	right := row.x+row.width-8
+	y := row.y+42
+	for i in 0..<count {
+		nameWidth := rl.MeasureTextEx(UIFont(), items[i].name, 11, 1).x
+		itemWidth := 14+4+nameWidth
+		if x+itemWidth > right {
+			more := fmt.ctprintf("+%d", count-i)
+			rl.DrawTextEx(UIFont(), more, rl.Vector2{x, y+1}, 11, 1, UI_COLOR_DIM)
+			break
+		}
+		chip := rl.Rectangle{x-3, y-2, itemWidth+6, 18}
+		if rl.CheckCollisionPointRec(mouse, chip) {
+			rl.DrawRectangleRec(chip, UI_COLOR_BUTTON_HOVER)
+			hovered = i
+		}
+		if items[i].texture.id != 0 {
+			source := rl.Rectangle{0, 0, f32(items[i].texture.width), f32(items[i].texture.height)}
+			rl.DrawTexturePro(
+				items[i].texture,
+				source,
+				rl.Rectangle{x, y, 14, 14},
+				rl.Vector2{0, 0},
+				0,
+				rl.WHITE,
+			)
+		}
+		rl.DrawTextEx(UIFont(), items[i].name, rl.Vector2{x+18, y+1}, 11, 1, UI_COLOR_DIM)
+		x += itemWidth+10
+	}
+
+	if hovered >= 0 do UIDrawEraRewardTooltip(items[hovered], mouse)
+}
+
+UIDrawErasTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, kingdom, town: int) {
+	if !WorldTownExists(w, kingdom, town) do return
+	t := &w.kingdoms[kingdom].towns[town]
+	top := panel.y+UI_ROWS_TOP
+
+	UIText("MILESTONE REWARDS", panel.x+UI_PAD, top, UI_COLOR_DIM)
+	UITextRight(
+		fmt.ctprintf("%d / %d chosen", t.milestonesChosen, TOWN_MILESTONE_TIER_COUNT),
+		panel.x+panel.width-UI_PAD,
+		top,
+		UI_COLOR_DIM,
+	)
+
+	faction := FactionSpriteIndex(kingdom)
+	for tier in 0..<TOWN_MILESTONE_TIER_COUNT {
+		rowY := top+UI_SECTION_HEADER+f32(tier)*(UI_ERAS_ROW_H+UI_ERAS_ROW_GAP)
+		row := rl.Rectangle{
+			panel.x+UI_PAD,
+			rowY,
+			panel.width-2*UI_PAD,
+			UI_ERAS_ROW_H,
+		}
+		chosen := tier < t.milestonesChosen
+		pending := tier < t.milestonesEarned && !chosen
+
+		rl.DrawRectangleRec(row, chosen ? UI_COLOR_BUTTON : UI_COLOR_BUTTON_OFF)
+		rl.DrawRectangleLinesEx(row, 1, chosen ? UI_COLOR_BORDER_INNER : UI_COLOR_DIVIDER)
+		if chosen {
+			rl.DrawRectangleRec(
+				rl.Rectangle{row.x+2, row.y+2, 3, row.height-4},
+				UI_COLOR_GOLD,
+			)
+		}
+
+		iconBox := rl.Rectangle{row.x+9, row.y+8, 32, 32}
+		if chosen {
+			option := TOWN_ERA_REWARDS[tier][int(t.milestoneOptions[tier])]
+			texture := renderer.sprites.pathIcon[option.path]
+			if texture.id != 0 {
+				source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+				rl.DrawTexturePro(texture, source, iconBox, rl.Vector2{0, 0}, 0, rl.WHITE)
+			}
+			rl.DrawTextEx(
+				UITitleFont(),
+				UITownPathName(option.path),
+				rl.Vector2{row.x+48, row.y+4},
+				16,
+				1,
+				UI_COLOR_GOLD,
+			)
+			rl.DrawTextEx(
+				UIFont(),
+				UITownPathDescription(option.path),
+				rl.Vector2{row.x+48, row.y+23},
+				12,
+				1,
+				UI_COLOR_TEXT,
+			)
+			UIDrawEraRewards(renderer, row, faction, option)
+		} else {
+			numeral := UIEraNumeral(tier)
+			rl.DrawRectangleRec(iconBox, UI_COLOR_BG)
+			rl.DrawRectangleLinesEx(iconBox, 1, pending ? UI_COLOR_GOLD : UI_COLOR_DIVIDER)
+			numeralWidth := rl.MeasureTextEx(UITitleFont(), numeral, 16, 1).x
+			numeralHeight := rl.MeasureTextEx(UITitleFont(), numeral, 16, 1).y
+			rl.DrawTextEx(
+				UITitleFont(),
+				numeral,
+				rl.Vector2{
+					iconBox.x+(iconBox.width-numeralWidth)*0.5,
+					iconBox.y+(iconBox.height-numeralHeight)*0.5,
+				},
+				16,
+				1,
+				pending ? UI_COLOR_GOLD : UI_COLOR_DIM,
+			)
+
+			title := fmt.ctprintf("MILESTONE %s", numeral)
+			description: cstring
+			if pending {
+				title = "CHOOSE A PATH"
+				description = "A milestone reward is waiting to be chosen."
+			} else if tier == t.milestonesEarned {
+				description = fmt.ctprintf(
+					"Reach %d citizens.  %d now.",
+					TOWN_ERAS[tier+1].threshold,
+					t.citizens,
+				)
+			} else {
+				description = fmt.ctprintf("Reach %d citizens to unlock.", TOWN_ERAS[tier+1].threshold)
+			}
+			rl.DrawTextEx(
+				UITitleFont(),
+				title,
+				rl.Vector2{row.x+48, row.y+4},
+				16,
+				1,
+				pending ? UI_COLOR_GOLD : UI_COLOR_DISABLED_TEXT,
+			)
+			rl.DrawTextEx(
+				UIFont(),
+				description,
+				rl.Vector2{row.x+48, row.y+23},
+				12,
+				1,
+				pending ? UI_COLOR_TEXT : UI_COLOR_DIM,
+			)
+		}
+
+		eraText := fmt.ctprintf("ERA %s", UIEraNumeral(tier))
+		eraWidth := rl.MeasureTextEx(UIFont(), eraText, 11, 1).x
+		rl.DrawTextEx(
+			UIFont(),
+			eraText,
+			rl.Vector2{row.x+row.width-8-eraWidth, row.y+6},
+			11,
+			1,
+			chosen || pending ? UI_COLOR_GOLD : UI_COLOR_DIM,
+		)
 	}
 }
 
@@ -4111,7 +4365,19 @@ UIDrawMilestone :: proc(w: ^World, renderer: ^WorldRenderer, kingdom, town: int)
 		option, ok := TownMilestoneOption(w, kingdom, town, optionIndex)
 		if !ok do continue
 
-		UITitle(UITownPathName(option.path), card.x+UI_PAD, card.y+8, UI_COLOR_GOLD)
+		texture := renderer.sprites.pathIcon[option.path]
+		if texture.id != 0 {
+			source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
+			rl.DrawTexturePro(
+				texture,
+				source,
+				rl.Rectangle{card.x+UI_PAD, card.y+8, 32, 32},
+				rl.Vector2{0, 0},
+				0,
+				rl.WHITE,
+			)
+		}
+		UITitle(UITownPathName(option.path), card.x+UI_PAD+40, card.y+8, UI_COLOR_GOLD)
 		row := 0
 		for kind in UnitKind {
 			if !(kind in option.units) || (kind in sharedUnits) do continue

@@ -1,8 +1,8 @@
 # Things to do
 - Description to enrich the world of the buildings and units. Some descriptions already overflow by accident the inspection windows. It should resize automatically, so we can translate to other languages later.
-- New tab in towns to see the specialiaztion/milestones selected
 - Debug/stress world with a command argument to test the whole game with a lot of buildings and units already, etc.
 - Add more BuildingOrder types
+- Add some biome that actually makes something in the world
 
 # Ideas
 - Weather and enviroment events
