@@ -660,6 +660,7 @@ WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 		if UnitHiddenInside(w, target.slot) do return
 		impactX := w.units.x[target.slot]
 		impactY := w.units.y[target.slot]
+		UnitAttackBurst(w, unitSlot, impactX, impactY)
 		if areaRadius > 0 {
 			WarriorAreaUnitDamage(w, unitSlot, state, impactX, impactY, areaRadius, damage)
 		} else {
@@ -683,6 +684,7 @@ WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
 			)
 		}
 		impactX, impactY, _ := WarriorBuildingNearestPoint(w, unit.x, unit.y, target.slot)
+		UnitAttackBurst(w, unitSlot, impactX, impactY)
 		BuildingHitBurst(w, target.slot, impactX, impactY)
 		w.buildings[target.slot].health -= damage
 		if w.buildings[target.slot].health <= 0 {

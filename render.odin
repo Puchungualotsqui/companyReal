@@ -758,17 +758,16 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 					continue
 				}
 
-				bob: f32 = 0
-				switch state in w.units[unitSlot].state {
-				case StatePacific:
-					if state != .Sleeping && !(kind == .WaterCollector && state == .Working) {
-						bob = math.sin(f32(unitSlot)*1.7+bobTime*2.4)*0.03
-					}
-				case StateWarrior, StateConverting:
-					bob = math.sin(f32(unitSlot)*1.7+bobTime*2.4)*0.03
-				}
+				pose := UnitAnimationPoseFor(w, unitSlot, kind, bobTime)
 
 				faction := FactionSpriteIndex(w.units[unitSlot].kingdome)
+				texture := renderer.sprites.unit[faction][kind]
+				if pose.moving {
+					frame := math.sin(w.units[unitSlot].walkPhase) < 0 ? 1 : 0
+					if renderer.sprites.unitWalk[faction][kind][frame].id != 0 {
+						texture = renderer.sprites.unitWalk[faction][kind][frame]
+					}
+				}
 				flipX := false
 				if w.units[unitSlot].pathReady {
 					deltaX := WorldShortestWrappedDelta(
@@ -777,15 +776,17 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 					)
 					flipX = deltaX < -0.5
 				}
+				width := scale*pose.stretchX
+				height := scale*pose.stretchY
 				append(&renderer.items, RenderItem{
-					baseY = unitY+0.5,
+					baseY = unitY+pose.swayY+0.5,
 					dest = rl.Rectangle{
-						x = offsetX+unitX-scale*0.5,
-						y = offsetY+unitY+0.5-scale+bob-jump,
-						width = scale,
-						height = scale,
+						x = offsetX+unitX-width*0.5+pose.swayX,
+						y = offsetY+unitY+0.5-height+pose.bob+pose.swayY-jump,
+						width = width,
+						height = height,
 					},
-					texture = renderer.sprites.unit[faction][kind],
+					texture = texture,
 					flipX = flipX,
 				})
 			}

@@ -364,6 +364,10 @@ Unit :: struct {
 	pathIndex: int,
 	pathReady, pathFound: bool,
 	jumpStarted: f32,
+	walkPhase: f32, // Advances with rendered movement; drives the walk cycle
+	animX, animY: f32, // Last interpolated position used for stride and footsteps
+	actionStarted: f32, // Start time of the current attack or work swing
+	actionDirX, actionDirY: f32, // Normalised direction of the current action
 }
 
 UnitEffects :: enum {
@@ -970,6 +974,9 @@ UnitTypeInit :: proc(w: ^World, unitSlot: int, type: UnitType) {
 	unit.pathReady = false
 	unit.pathFound = false
 	unit.jumpStarted = -WALL_JUMP_SECONDS
+	unit.actionStarted = -1e9
+	unit.actionDirX = 0
+	unit.actionDirY = 0
 }
 
 UnitSetType :: proc(w: ^World, unitSlot: int, kind: UnitKind) {

@@ -368,6 +368,7 @@ CombatBuilderDefend :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 	if target < 0 do return false
 
 	unit.cooldown = UnitDefaultCooldown(unit.type)
+	UnitAttackBurst(w, unitSlot, w.units[target].x, w.units[target].y)
 	UnitApplyDamage(w, target, UnitDefaultDamage(unit.type), unit.x, unit.y, .Melee)
 	return true
 }

@@ -39,6 +39,7 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 		FogUpdate(w)
 		w.simulationAccumulator -= TOWN_SIMULATION_STEP
 	}
+	WorldUnitAnimationUpdate(w, deltaTime)
 	WorldCheckGameEnd(w)
 }
 

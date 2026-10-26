@@ -1113,6 +1113,32 @@ DrawUnitSprite :: proc(kind: UnitKind, accent: rl.Color) -> Art {
 	return art
 }
 
+// Two-frame leg shift keeps the walk cycle readable at pixel scale without a
+// full sprite sheet. Robed and wheeled units rely on the procedural bob alone.
+UnitKindHasWalkFrames :: proc(kind: UnitKind) -> bool {
+	switch kind {
+	case .Catapult, .Turtle:
+		return false
+	case .Villager, .Builder, .CombatBuilder, .WaterCollector, .Farmer, .Knight, .Archer, .Mage, .Giant, .Rogue, .Explorer:
+		return true
+	}
+	unreachable()
+}
+
+UnitWalkFrame :: proc(base: Art, shift: int) -> Art {
+	frame := ArtInit(base.width, base.height)
+	for y in 0..<base.height {
+		for x in 0..<base.width {
+			color := rl.GetImageColor(base.image, i32(x), i32(y))
+			if color.a == 0 do continue
+			pixelX := x
+			if y >= 12 && y <= 14 && !SameColor(color, C_SHADOW) do pixelX = x+shift
+			ArtPixel(&frame, pixelX, y, color)
+		}
+	}
+	return frame
+}
+
 UnitShadow :: proc(art: ^Art) {
 	ArtEllipse(art, 8, 14, 4, 2, C_SHADOW)
 }
@@ -1706,6 +1732,7 @@ DrawEffectIcon :: proc(effect: UnitEffects) -> Art {
 SpriteSet :: struct {
 	building:     [SPRITE_FACTION_COUNT][BuildingKind]rl.Texture2D,
 	unit:         [SPRITE_FACTION_COUNT][UnitKind]rl.Texture2D,
+	unitWalk:     [SPRITE_FACTION_COUNT][UnitKind][2]rl.Texture2D,
 	decoration:   [DecorationKind]rl.Texture2D,
 	construction: [SPRITE_FACTION_COUNT]rl.Texture2D,
 	bloodSplat:   [BLOOD_SPLAT_VARIANTS]rl.Texture2D,
@@ -1740,6 +1767,14 @@ SpriteSetInit :: proc(w: ^World) -> SpriteSet {
 		for kind in ALL_UNIT_KINDS {
 			art := DrawUnitSprite(kind, accent)
 			set.unit[faction][kind] = ArtToTexture(art)
+			if UnitKindHasWalkFrames(kind) {
+				for frame in 0..<2 {
+					shift := frame == 0 ? -1 : 1
+					walkArt := UnitWalkFrame(art, shift)
+					set.unitWalk[faction][kind][frame] = ArtToTexture(walkArt)
+					rl.UnloadImage(walkArt.image)
+				}
+			}
 			rl.UnloadImage(art.image)
 		}
 		art := DrawConstructionSprite(accent)
@@ -1796,6 +1831,11 @@ SpriteSetDeinit :: proc(set: ^SpriteSet) {
 		for kind in ALL_UNIT_KINDS {
 			if set.unit[faction][kind].id != 0 {
 				rl.UnloadTexture(set.unit[faction][kind])
+			}
+			for frame in 0..<2 {
+				if set.unitWalk[faction][kind][frame].id != 0 {
+					rl.UnloadTexture(set.unitWalk[faction][kind][frame])
+				}
 			}
 		}
 		if set.construction[faction].id != 0 {

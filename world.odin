@@ -177,6 +177,12 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.units.town[i] = townSlot
 	w.units.homeSlot[i] = -1
 	w.units.sleepInside[i] = false
+	w.units.walkPhase = 0
+	w.units.animX = x
+	w.units.animY = y
+	w.units.actionStarted = -1e9
+	w.units.actionDirX = 0
+	w.units.actionDirY = 0
 	// UnitTypeInit requires the slot to be marked used.
 	w.unitUsed[i] = true
 	UnitTypeInit(w, i, type)

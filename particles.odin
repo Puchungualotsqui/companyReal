@@ -23,9 +23,13 @@ ParticleKind :: enum {
 	StoneChip,
 	Leaf,
 	Ash,
+	Arrow,
+	MagicMote,
+	Boulder,
+	Splash,
 }
 
-ALL_PARTICLE_KINDS := [12]ParticleKind {
+ALL_PARTICLE_KINDS := [16]ParticleKind {
 	.Blood,
 	.Gib,
 	.Bone,
@@ -38,6 +42,10 @@ ALL_PARTICLE_KINDS := [12]ParticleKind {
 	.StoneChip,
 	.Leaf,
 	.Ash,
+	.Arrow,
+	.MagicMote,
+	.Boulder,
+	.Splash,
 }
 
 Particle :: struct {
@@ -192,19 +200,19 @@ WorldParticleUpdate :: proc(w: ^World, deltaTime: f32) {
 				BloodDropLand(w, x, y, w.particles.variant[i], true)
 				ParticleRemove(w, i)
 				continue
-			case .Ember, .Spark:
+			case .Ember, .Spark, .MagicMote, .Splash:
 				ParticleRemove(w, i)
 				continue
 			case .Smoke:
 				z = 0
-			case .Dust, .Ash, .Leaf:
+			case .Dust, .Ash, .Leaf, .Arrow:
 				z = 0
 				w.particles.vx[i] = 0
 				w.particles.vy[i] = 0
 				w.particles.vz[i] = 0
 				w.particles.spin[i] = 0
 				w.particles.settled[i] = true
-			case .Gib, .Bone, .Gore, .WoodChip, .StoneChip:
+			case .Gib, .Bone, .Gore, .WoodChip, .StoneChip, .Boulder:
 				bounceVz := -w.particles.vz[i]*w.particles.bounce[i]
 				if bounceVz > 1.2 {
 					z = 0
@@ -290,7 +298,7 @@ ParticleDraw :: proc(
 		#partial switch kind {
 		case .Smoke, .Dust:
 			fade = clamp(w.particles.life[i]/w.particles.maxLife[i], 0, 1)
-		case .Ember, .Spark:
+		case .Ember, .Spark, .MagicMote, .Splash, .Arrow, .Boulder:
 			fade = clamp(w.particles.life[i]/0.3, 0, 1)
 		case:
 			fade = clamp(w.particles.life[i]/1.5, 0, 1)
@@ -419,6 +427,39 @@ CreateParticleKindTexture :: proc(kind: ParticleKind) -> rl.Texture2D {
 		ArtRect(&art, 1, 1, 2, 2, rl.Color{54, 52, 52, 255})
 		ArtPixel(&art, 1, 1, rl.Color{94, 90, 88, 255})
 		ArtPixel(&art, 2, 2, rl.Color{32, 30, 30, 255})
+		return ArtTakeTexture(art)
+	case .Arrow:
+		art := ArtInit(8, 4)
+		ArtRect(&art, 1, 1, 5, 2, C_OUTLINE)
+		ArtRect(&art, 1, 1, 5, 1, C_WOOD_LIGHT)
+		ArtRect(&art, 6, 1, 2, 1, C_IRON)
+		ArtPixel(&art, 7, 1, C_IRON_LIGHT)
+		ArtPixel(&art, 0, 0, C_WHITE)
+		ArtPixel(&art, 0, 3, C_WHITE)
+		ArtPixel(&art, 1, 0, C_WOOD_LIGHT)
+		ArtPixel(&art, 1, 3, C_WOOD_LIGHT)
+		return ArtTakeTexture(art)
+	case .MagicMote:
+		art := ArtInit(6, 6)
+		ArtEllipse(&art, 3, 3, 3, 3, C_ARCANE_DARK)
+		ArtEllipse(&art, 3, 3, 2, 2, C_ARCANE)
+		ArtEllipse(&art, 2, 2, 1, 1, C_ARCANE_GLOW)
+		ArtPixel(&art, 1, 1, C_WHITE)
+		return ArtTakeTexture(art)
+	case .Boulder:
+		art := ArtInit(7, 7)
+		ArtEllipse(&art, 3, 3, 3, 3, C_OUTLINE)
+		ArtEllipse(&art, 3, 3, 2, 2, C_STONE_DARK)
+		ArtEllipse(&art, 2, 2, 1, 1, C_STONE)
+		ArtPixel(&art, 4, 4, C_STONE_LIGHT)
+		ArtPixel(&art, 1, 4, C_STONE_DARKEST)
+		return ArtTakeTexture(art)
+	case .Splash:
+		art := ArtInit(5, 5)
+		ArtEllipse(&art, 2, 3, 2, 1, C_WATER_LIGHT)
+		ArtPixel(&art, 1, 1, C_WATER_LIGHT)
+		ArtPixel(&art, 3, 1, C_WATER_LIGHT)
+		ArtPixel(&art, 2, 0, C_WATER)
 		return ArtTakeTexture(art)
 	}
 	return {}
