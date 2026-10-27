@@ -3,6 +3,118 @@ package nn
 import "../core"
 import "core:testing"
 import "core:math"
+import "core:mem"
+import "core:thread"
+
+ForwardFailureAllocator :: struct {
+	backing: mem.Allocator,
+	allocations, frees: int,
+}
+
+ForwardFailureAllocatorProc :: proc(
+	allocatorData: rawptr, mode: mem.Allocator_Mode, size, alignment: int,
+	oldMemory: rawptr, oldSize: int, loc := #caller_location,
+) -> ([]byte, mem.Allocator_Error) {
+	state := (^ForwardFailureAllocator)(allocatorData)
+	if mode == .Alloc {
+		state.allocations += 1
+		if state.allocations == 2 { return nil, nil }
+	}
+	if mode == .Free { state.frees += 1 }
+	return state.backing.procedure(state.backing.data, mode, size, alignment, oldMemory, oldSize, loc)
+}
+
+@(test)
+ForwardParallel :: proc(t: ^testing.T) {
+	inputShape := [2]int{5, 3}
+	weightShape := [2]int{3, 5}
+	biasShape := [1]int{5}
+	outputShape := [2]int{5, 5}
+	inputData := [15]f32{0.1, -3, 7, 1, 2, 3, -5, 0.2, 6, 9, -4, 1, 3, 8, -2}
+	weightData := [15]f32{1, 0.2, -3, 4, 5, -2, 7, 0.1, 1, 2, 5, -1, 3, 0.3, 9}
+	biasData := [5]f32{0.1, -2, 3, 0.3, 5}
+	outputData, expected: [25]f32
+	input := core.Node{value = core.Tensor{inputShape[:], inputData[:]}}
+	weights := core.Node{value = core.Tensor{weightShape[:], weightData[:]}}
+	bias := core.Node{value = core.Tensor{biasShape[:], biasData[:]}}
+	output := core.Node{value = core.Tensor{outputShape[:], outputData[:]}}
+	layer := Dense{&input, &weights, &bias, &output}
+	testing.expect(t, LayerForward(&layer))
+	expected = outputData
+	for workers in ([5]int{-1, 1, 2, 4, 32}) {
+		outputData = {}
+		testing.expect(t, DenseForwardParallel(&layer, workers) && outputData == expected)
+	}
+	{
+		context.allocator = mem.nil_allocator()
+		testing.expect(t, DenseForwardParallel(&layer, 3) && outputData == expected)
+	}
+	when thread.IS_SUPPORTED {
+		state := ForwardFailureAllocator{backing = context.allocator}
+		ok: bool
+		{
+			context.allocator = mem.Allocator{procedure = ForwardFailureAllocatorProc, data = &state}
+			ok = DenseForwardParallel(&layer, 3)
+		}
+		testing.expect(t, ok && outputData == expected && state.allocations == 2 && state.frees == 1)
+	}
+	outputShape[1] = 4
+	testing.expect(t, !DenseForwardParallel(&layer, 3) && outputData == expected)
+	testing.expect(t, !DenseForwardParallel(nil, 3))
+	inputShape = {5, 0}; weightShape = {0, 5}; outputShape = {5, 5}
+	input.value.data = nil; weights.value.data = nil
+	testing.expect(t, DenseForwardParallel(&layer, 3))
+	for row in 0..<5 { for column in 0..<5 { testing.expect(t, outputData[row*5+column] == biasData[column]) } }
+	inputShape[0] = 0; outputShape[0] = 0; output.value.data = nil
+	testing.expect(t, DenseForwardParallel(&layer, 3))
+}
+
+@(test)
+ConvForwardParallel :: proc(t: ^testing.T) {
+	inputShape := [4]int{2, 3, 3, 2}
+	weightShape := [4]int{2, 2, 2, 3}
+	biasShape := [1]int{3}
+	outputShape := [4]int{2, 4, 4, 3}
+	inputData: [36]f32
+	weightData: [24]f32
+	biasData := [3]f32{0.1, -1, 0.3}
+	outputData, expected: [96]f32
+	for &value, i in inputData { value = f32(i-18)*0.1 }
+	for &value, i in weightData { value = f32(i-12)*0.2 }
+	input := core.Node{value = core.Tensor{inputShape[:], inputData[:]}}
+	weights := core.Node{value = core.Tensor{weightShape[:], weightData[:]}}
+	bias := core.Node{value = core.Tensor{biasShape[:], biasData[:]}}
+	output := core.Node{value = core.Tensor{outputShape[:], outputData[:]}}
+	layer := Conv2D{&input, &weights, &bias, &output, 1, 1}
+	testing.expect(t, Conv2DForward(&layer))
+	expected = outputData
+	for workers in ([5]int{-1, 1, 2, 3, 32}) {
+		outputData = {}
+		testing.expect(t, Conv2DForwardParallel(&layer, workers) && outputData == expected)
+	}
+	{
+		context.allocator = mem.nil_allocator()
+		testing.expect(t, Conv2DForwardParallel(&layer, 3) && outputData == expected)
+	}
+	when thread.IS_SUPPORTED {
+		state := ForwardFailureAllocator{backing = context.allocator}
+		ok: bool
+		{
+			context.allocator = mem.Allocator{procedure = ForwardFailureAllocatorProc, data = &state}
+			ok = Conv2DForwardParallel(&layer, 3)
+		}
+		testing.expect(t, ok && outputData == expected && state.allocations == 2 && state.frees == 1)
+	}
+	layer.stride = 2
+	outputShape = {2, 2, 2, 3}
+	output.value.data = outputData[:24]
+	testing.expect(t, Conv2DForward(&layer))
+	expected = outputData
+	outputData = {}
+	testing.expect(t, Conv2DForwardParallel(&layer, 3))
+	for i in 0..<24 { testing.expect(t, outputData[i] == expected[i]) }
+	testing.expect(t, !Conv2DForwardParallel(nil, 3))
+}
 
 @(test)
 DenseReluTraining :: proc(t: ^testing.T) {
@@ -285,7 +397,10 @@ Conv2DValidationAndNoMutation :: proc(t: ^testing.T) {
 		case 30: biasShape[0] = 0; bias.value.data = nil
 		case 31: gradientOnly = true; badShape[1] = 1; badShape[2] = 4; output.grad.shape = badShape[:]
 		}
-		if !gradientOnly { testing.expect(t, !Conv2DForward(&layer)) }
+		if !gradientOnly {
+			testing.expect(t, !Conv2DForward(&layer))
+			testing.expect(t, !Conv2DForwardParallel(&layer, 4))
+		}
 		testing.expect(t, !Conv2DBackward(&layer))
 		testing.expect(t, inputData == [4]f32{1, 2, 3, 4} && weightData == [1]f32{2} && biasData == [1]f32{3})
 		testing.expect(t, outputData == [4]f32{4, 5, 6, 7} && outputGrad == [4]f32{14, 15, 16, 17})
@@ -334,6 +449,7 @@ Conv2DAliasingAndLargeEmpty :: proc(t: ^testing.T) {
 	output := core.Node{value = core.Tensor{shape[:], data[1:]}, grad = core.Tensor{shape[:], outputGrad[:]}}
 	layer := Conv2D{&input, &weights, &bias, &output, 1, 0}
 	testing.expect(t, !Conv2DForward(&layer) && data == [3]f32{1, 2, 0})
+	testing.expect(t, !Conv2DForwardParallel(&layer, 4) && data == [3]f32{1, 2, 0})
 	outputData: [2]f32
 	output.value.data = outputData[:]
 	input.grad.data = data[:2]
@@ -344,6 +460,7 @@ Conv2DAliasingAndLargeEmpty :: proc(t: ^testing.T) {
 	output.value.data = nil
 	output.grad.data = nil
 	testing.expect(t, Conv2DForward(&layer) && Conv2DBackward(&layer))
+	testing.expect(t, Conv2DForwardParallel(&layer, 4))
 }
 
 @(test)
@@ -964,3 +1081,28 @@ CategoricalPolicyValidation :: proc(t: ^testing.T) {
 	testing.expect(t, !CategoricalPolicyEntropy(empty, nil, nil))
 }
 
+
+@(test)
+FlattenVectorBoundaries :: proc(t: ^testing.T) {
+	for count in 0..<12 {
+		inputShape := [3]int{1, 1, count}
+		outputShape := [2]int{1, count}
+		inputData, outputData, inputGrad, outputGrad: [13]f32
+		for i in 0..<13 {
+			inputData[i] = f32(i - 6)
+			outputData[i] = 99
+			inputGrad[i] = f32(i) * 0.25
+			outputGrad[i] = f32(i - 4) * 0.5
+		}
+		input := core.Node{value = core.Tensor{inputShape[:], inputData[1:count+1]}, grad = core.Tensor{inputShape[:], inputGrad[1:count+1]}}
+		output := core.Node{value = core.Tensor{outputShape[:], outputData[1:count+1]}, grad = core.Tensor{outputShape[:], outputGrad[1:count+1]}}
+		layer := Flatten{&input, &output}
+		testing.expect(t, FlattenForward(&layer) && FlattenBackward(&layer))
+		for i in 1..<count+1 {
+			testing.expect(t, outputData[i] == inputData[i])
+			testing.expect(t, inputGrad[i] == f32(i)*0.25 + outputGrad[i])
+		}
+		testing.expect(t, outputData[0] == 99 && outputData[count+1] == 99)
+		testing.expect(t, inputGrad[0] == 0 && inputGrad[count+1] == f32(count+1)*0.25)
+	}
+}

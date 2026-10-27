@@ -1,6 +1,8 @@
 package core
 
 import "core:testing"
+import "core:mem"
+import "core:thread"
 
 @(test)
 TensorValidation :: proc(t: ^testing.T) {
@@ -129,7 +131,59 @@ MatrixEdgeCases :: proc(t: ^testing.T) {
 	badOutShape := [2]int{3, 2}
 	testing.expect(t, !MatMul(output, a, Tensor{badInnerShape[:], badInnerData[:]}))
 	testing.expect(t, !MatMul(Tensor{badOutShape[:], outData[:]}, a, b))
+	outData = {1, 2, 3, 4, 5, 6}
+	testing.expect(t, !MatMulParallel(output, a, Tensor{badInnerShape[:], badInnerData[:]}, 4))
+	testing.expect(t, !MatMulParallel(Tensor{badOutShape[:], outData[:]}, a, b, 4))
+	testing.expect(t, outData == [6]f32{1, 2, 3, 4, 5, 6})
 }
+
+PartialFailureAllocator :: struct {
+	backing: mem.Allocator,
+	allocations, frees: int,
+}
+
+PartialFailureAllocatorProc :: proc(
+	allocatorData: rawptr, mode: mem.Allocator_Mode, size, alignment: int,
+	oldMemory: rawptr, oldSize: int, loc := #caller_location,
+) -> ([]byte, mem.Allocator_Error) {
+	state := (^PartialFailureAllocator)(allocatorData)
+	if mode == .Alloc {
+		state.allocations += 1
+		if state.allocations == 2 { return nil, nil }
+	}
+	if mode == .Free { state.frees += 1 }
+	return state.backing.procedure(state.backing.data, mode, size, alignment, oldMemory, oldSize, loc)
+}
+
+@(test)
+MatrixParallelAllocationFallback :: proc(t: ^testing.T) {
+	aShape := [2]int{3, 2}
+	bShape := [2]int{2, 2}
+	outShape := [2]int{3, 2}
+	aData := [6]f32{1, 2, 3, 4, 5, 6}
+	bData := [4]f32{1, 2, 3, 4}
+	outData: [6]f32
+	ok: bool
+	{
+		context.allocator = mem.nil_allocator()
+		ok = MatMulParallel(Tensor{outShape[:], outData[:]}, Tensor{aShape[:], aData[:]}, Tensor{bShape[:], bData[:]}, 3)
+	}
+	testing.expect(t, ok)
+	testing.expect(t, outData == [6]f32{7, 10, 15, 22, 23, 34})
+
+	when thread.IS_SUPPORTED {
+		state := PartialFailureAllocator{backing = context.allocator}
+		outData = {}
+		{
+			context.allocator = mem.Allocator{procedure = PartialFailureAllocatorProc, data = &state}
+			ok = MatMulParallel(Tensor{outShape[:], outData[:]}, Tensor{aShape[:], aData[:]}, Tensor{bShape[:], bData[:]}, 3)
+		}
+		testing.expect(t, ok)
+		testing.expect(t, outData == [6]f32{7, 10, 15, 22, 23, 34})
+		testing.expect(t, state.allocations == 2 && state.frees == 1)
+	}
+}
+
 
 @(test)
 MatrixScalarReference :: proc(t: ^testing.T) {
@@ -164,6 +218,12 @@ MatrixScalarReference :: proc(t: ^testing.T) {
 				testing.expect(t, MatMul(Tensor{outShape[:], outData}, Tensor{aShape[:], aData}, Tensor{bShape[:], bData}))
 				for value, index in outData {
 					testing.expect(t, value == expected[index])
+				}
+				workerCounts := [4]int{-1, 1, 3, 32}
+				for workers in workerCounts {
+					for &value in outData { value = 123 }
+					testing.expect(t, MatMulParallel(Tensor{outShape[:], outData}, Tensor{aShape[:], aData}, Tensor{bShape[:], bData}, workers))
+					for value, index in outData { testing.expect(t, value == expected[index]) }
 				}
 			}
 		}
@@ -418,4 +478,74 @@ GraphBuildFailures :: proc(t: ^testing.T) {
 	other.op = SumAxisOp{input = &root}
 	nodes, ok = GraphBuild(&root, order[:], stack[:])
 	testing.expect(t, !ok && nodes == nil)
+}
+
+@(test)
+ElementwiseSimdReference :: proc(t: ^testing.T) {
+	for count in 0..=13 {
+		shape := [1]int{count}
+		aStorage, bStorage, outputStorage: [15]f32
+		a, b, output := aStorage[1:count+1], bStorage[1:count+1], outputStorage[1:count+1]
+		for index in 0..<count {
+			a[index] = f32(index-6) / 3
+			b[index] = f32(index*3-8) / 7
+		}
+		originalA, originalB := aStorage, bStorage
+		outTensor, aTensor, bTensor := Tensor{shape[:], output}, Tensor{shape[:], a}, Tensor{shape[:], b}
+		testing.expect(t, Add(outTensor, aTensor, bTensor))
+		for index in 0..<count { testing.expect(t, output[index] == a[index] + b[index]) }
+		testing.expect(t, Add(aTensor, aTensor, bTensor))
+		for index in 0..<count { testing.expect(t, a[index] == originalA[index+1] + originalB[index+1]) }
+		aStorage = originalA
+		testing.expect(t, Multiply(outTensor, aTensor, bTensor))
+		for index in 0..<count { testing.expect(t, output[index] == a[index] * b[index]) }
+		testing.expect(t, Multiply(bTensor, aTensor, bTensor))
+		for index in 0..<count { testing.expect(t, b[index] == originalA[index+1] * originalB[index+1]) }
+		testing.expect(t, outputStorage[0] == 0 && outputStorage[count+1] == 0)
+	}
+}
+
+@(test)
+SumAxisSimdReference :: proc(t: ^testing.T) {
+	for inner in 1..=9 {
+		shape := [3]int{2, 5, inner}
+		outShape := [2]int{2, inner}
+		storage: [90]f32
+		output: [18]f32
+		data := storage[:2*5*inner]
+		for index in 0..<len(data) {
+			data[index] = f32((index*17)%29-14) / 3
+		}
+		testing.expect(t, SumAxis(Tensor{outShape[:], output[:2*inner]}, Tensor{shape[:], data}, 1))
+		for outer in 0..<2 {
+			for column in 0..<inner {
+				sum: f32 = 0
+				for k in 0..<5 { sum += data[outer*5*inner+k*inner+column] }
+				testing.expect(t, output[outer*inner+column] == sum)
+			}
+		}
+	}
+}
+
+@(test)
+BroadcastFastPaths :: proc(t: ^testing.T) {
+	shape := [2]int{2, 5}
+	otherShape := [3]int{1, 2, 5}
+	oneShape := [3]int{1, 1, 1}
+	a := [10]f32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	b := [10]f32{10, 9, 8, 7, 6, 5, 4, 3, 2, 1}
+	one := [1]f32{2}
+	out: [10]f32
+	output := Tensor{shape[:], out[:]}
+	left, right := Tensor{shape[:], a[:]}, Tensor{shape[:], b[:]}
+	testing.expect(t, AddBroadcast(output, left, right))
+	for value in out { testing.expect(t, value == 11) }
+	output = Tensor{otherShape[:], out[:]}
+	testing.expect(t, AddBroadcast(output, Tensor{oneShape[:], one[:]}, right))
+	for value, index in out { testing.expect(t, value == 2 + b[index]) }
+	testing.expect(t, AddBroadcast(output, left, Tensor{oneShape[:], one[:]}))
+	for value, index in out { testing.expect(t, value == a[index] + 2) }
+	original := a
+	testing.expect(t, !AddBroadcast(Tensor{shape[:], a[:]}, left, right))
+	testing.expect(t, a == original)
 }

@@ -3,6 +3,7 @@ package nn
 import "../core"
 import "core:math"
 import "core:simd"
+import "core:thread"
 
 // Dense uses [batch, inputs] values, [inputs, outputs] weights and [outputs] bias.
 // All nodes and their non-overlapping buffers are owned by the caller.
@@ -231,13 +232,19 @@ Conv2DValid :: proc(layer: ^Conv2D, gradients: bool) -> bool {
 
 Conv2DForward :: proc(layer: ^Conv2D) -> bool {
 	if !Conv2DValid(layer, false) { return false }
-	input, weights, bias, output := layer.input.value, layer.weights.value, layer.bias.value, layer.output.value
+	output := layer.output.value
 	if len(output.data) == 0 { return true }
-	n, ih, iw, ic := input.shape[0], input.shape[1], input.shape[2], input.shape[3]
+	Conv2DForwardRows(layer, 0, output.shape[0]*output.shape[1])
+	return true
+}
+
+Conv2DForwardRows :: proc(layer: ^Conv2D, firstRow, rowCount: int) {
+	input, weights, bias, output := layer.input.value, layer.weights.value, layer.bias.value, layer.output.value
+	ih, iw, ic := input.shape[1], input.shape[2], input.shape[3]
 	kh, kw, oc := weights.shape[0], weights.shape[1], weights.shape[3]
 	oh, ow := output.shape[1], output.shape[2]
-	for b in 0..<n {
-		for y in 0..<oh {
+	for b in firstRow/oh..=(firstRow+rowCount-1)/oh {
+		for y in max(0, firstRow-b*oh)..<min(oh, firstRow+rowCount-b*oh) {
 			for x in 0..<ow {
 				for o in 0..<oc {
 					sum := bias.data[o]
@@ -257,6 +264,57 @@ Conv2DForward :: proc(layer: ^Conv2D) -> bool {
 			}
 		}
 	}
+}
+
+Conv2DForwardJob :: struct {
+	layer: ^Conv2D,
+	firstRow, rowCount: int,
+	run: bool,
+}
+
+Conv2DForwardWorker :: proc(worker: ^thread.Thread) {
+	job := (^Conv2DForwardJob)(worker.data)
+	if job.run { Conv2DForwardRows(job.layer, job.firstRow, job.rowCount) }
+}
+
+// workers includes the caller and is capped at 16; creation failure falls back to serial.
+// Buffers and layer metadata must remain unchanged until the call returns.
+Conv2DForwardParallel :: proc(layer: ^Conv2D, workers: int) -> bool {
+	if !Conv2DValid(layer, false) { return false }
+	output := layer.output.value
+	if len(output.data) == 0 { return true }
+	when !thread.IS_SUPPORTED { return Conv2DForward(layer) }
+	MAX_WORKERS :: 16
+	rows := output.shape[0]*output.shape[1]
+	count := min(max(workers, 1), rows, MAX_WORKERS)
+	if count <= 1 { return Conv2DForward(layer) }
+	jobs: [MAX_WORKERS]Conv2DForwardJob
+	threads: [MAX_WORKERS-1]^thread.Thread
+	created := 0
+	defer { for i in 0..<created { thread.destroy(threads[i]) } }
+	for i in 0..<count {
+		firstRow := i*(rows/count) + min(i, rows%count)
+		rowCount := rows/count
+		if i < rows%count { rowCount += 1 }
+		jobs[i] = Conv2DForwardJob{layer, firstRow, rowCount, false}
+	}
+	for i in 0..<count-1 {
+		threads[i] = thread.create(Conv2DForwardWorker)
+		if threads[i] == nil {
+			for j in 0..<created { thread.start(threads[j]) }
+			for j in 0..<created { thread.join(threads[j]) }
+			for j in 0..<created { thread.destroy(threads[j]) }
+			created = 0
+			return Conv2DForward(layer)
+		}
+		threads[i].data = &jobs[i]
+		created += 1
+	}
+	for i in 0..<count { jobs[i].run = true }
+	for i in 0..<created { thread.start(threads[i]) }
+	job := &jobs[count-1]
+	Conv2DForwardRows(layer, job.firstRow, job.rowCount)
+	for i in 0..<created { thread.join(threads[i]) }
 	return true
 }
 
@@ -319,6 +377,21 @@ DenseValid :: proc(layer: ^Dense, gradients: bool) -> bool {
 	return true
 }
 
+
+// workers includes the caller and is capped at 16; creation failure falls back to serial.
+// As with LayerForward, output must not overlap input, weights or bias.
+// Buffers and layer metadata must remain unchanged until the call returns.
+DenseForwardParallel :: proc(layer: ^Dense, workers: int) -> bool {
+	if !DenseValid(layer, false) { return false }
+	if !core.MatMulParallel(layer.output.value, layer.input.value, layer.weights.value, workers) { return false }
+	columns := layer.bias.value.shape[0]
+	for row in 0..<layer.input.value.shape[0] {
+		for column in 0..<columns {
+			layer.output.value.data[row*columns+column] += layer.bias.value.data[column]
+		}
+	}
+	return true
+}
 
 // LayerForward requires distinct input and output value buffers.
 LayerForward :: proc(layer: Layer) -> bool {
