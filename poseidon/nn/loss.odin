@@ -149,6 +149,90 @@ BinaryCrossEntropyWithLogitsBackward :: proc(prediction: ^core.Node, target: cor
 	return true
 }
 
+// PolicyGradientInputsValid checks flattened rows along the last axis. Every logit,
+// including masked logits, and every advantage must be finite. Each selected action
+// must be legal. Masks are flattened in the same order as logits.
+PolicyGradientInputsValid :: proc(logits: core.Tensor, actions: []int, legal: []bool, advantages: []f32) -> bool {
+	if !core.TensorValid(logits) || len(logits.shape) == 0 || len(logits.data) == 0 { return false }
+	classes := logits.shape[len(logits.shape) - 1]
+	if classes <= 0 { return false }
+	rows := len(logits.data) / classes
+	if len(actions) != rows || len(advantages) != rows || len(legal) != len(logits.data) { return false }
+	for value in logits.data {
+		if math.is_nan(value) || math.is_inf(value) { return false }
+	}
+	for action, row in actions {
+		if action < 0 || action >= classes || !legal[row * classes + action] ||
+			math.is_nan(advantages[row]) || math.is_inf(advantages[row]) { return false }
+	}
+	return true
+}
+
+// PolicyGradientLoss averages -advantage * log pi(action) over rows. The last
+// axis contains actions; illegal actions are excluded from normalization.
+PolicyGradientLoss :: proc(logits: core.Tensor, actions: []int, legal: []bool, advantages: []f32) -> (f32, bool) {
+	if !PolicyGradientInputsValid(logits, actions, legal, advantages) { return 0, false }
+	classes := logits.shape[len(logits.shape) - 1]
+	total: f64
+	for action, row in actions {
+		start := row * classes
+		maximumIndex := start + action
+		for i in start..<start + classes {
+			if legal[i] && logits.data[i] > logits.data[maximumIndex] { maximumIndex = i }
+		}
+		maximum := f64(logits.data[maximumIndex])
+		sum: f64
+		for i in start..<start + classes {
+			if legal[i] && i != maximumIndex { sum += math.exp(f64(logits.data[i]) - maximum) }
+		}
+		negativeLogProbability := maximum - f64(logits.data[start + action]) + math.log1p(sum)
+		total += f64(advantages[row]) * negativeLogProbability
+	}
+	result := f32(total / f64(len(actions)))
+	if math.is_nan(result) || math.is_inf(result) { return 0, false }
+	return result, true
+}
+
+// PolicyGradientLossBackward accumulates into logits.grad. Logit values,
+// gradients, masks, actions and advantages must not overlap in memory. All
+// existing gradients must be finite, and failure leaves the gradient unchanged.
+PolicyGradientLossBackward :: proc(logits: ^core.Node, actions: []int, legal: []bool, advantages: []f32) -> bool {
+	if logits == nil || !PolicyGradientInputsValid(logits.value, actions, legal, advantages) ||
+		!core.TensorValid(logits.grad) || !core.SameShape(logits.value, logits.grad) { return false }
+	for value in logits.grad.data {
+		if math.is_nan(value) || math.is_inf(value) { return false }
+	}
+	classes := logits.value.shape[len(logits.value.shape) - 1]
+	// Preflight every result before writing any gradient, then repeat the calculation.
+	for pass in 0..<2 {
+		for action, row in actions {
+			start := row * classes
+			maximum := f64(logits.value.data[start + action])
+			for i in start..<start + classes {
+				if legal[i] { maximum = max(maximum, f64(logits.value.data[i])) }
+			}
+			sum, otherSum: f64
+			for i in start..<start + classes {
+				if legal[i] {
+					exponential := math.exp(f64(logits.value.data[i]) - maximum)
+					sum += exponential
+					if i != start + action { otherSum += exponential }
+				}
+			}
+			for i in start..<start + classes {
+				if !legal[i] { continue }
+				probability := math.exp(f64(logits.value.data[i]) - maximum) / sum
+				if i == start + action { probability = -otherSum / sum }
+				delta := f32(f64(advantages[row]) * probability / f64(len(actions)))
+				result := logits.grad.data[i] + delta
+				if math.is_nan(result) || math.is_inf(result) { return false }
+				if pass == 1 { logits.grad.data[i] = result }
+			}
+		}
+	}
+	return true
+}
+
 // Categorical targets are distributions along the last axis, within 1e-5 of unit sum.
 CategoricalLogitsValid :: proc(prediction, target: core.Tensor) -> bool {
 	if !LossInputsValid(prediction, target) || len(prediction.shape) == 0 { return false }

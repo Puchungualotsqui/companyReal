@@ -872,3 +872,95 @@ Pool2DValidationAndEmpty :: proc(t: ^testing.T) {
 	testing.expect(t, Pool2DForward(&layer) && Pool2DBackward(&layer))
 }
 
+@(test)
+CategoricalPolicyValuesAndSampling :: proc(t: ^testing.T) {
+	shape := [3]int{1, 2, 3}
+	data := [6]f32{1000, 1000, 9999, -1000, 0, 1000}
+	mask := [6]bool{true, true, false, false, true, false}
+	logits := core.Tensor{shape[:], data[:]}
+	probabilities: [6]f32
+	actions := [2]int{1, 1}
+	logs, entropy: [2]f64
+	testing.expect(t, CategoricalPolicyProbabilities(logits, mask[:], probabilities[:]))
+	testing.expect(t, probabilities == [6]f32{0.5, 0.5, 0, 0, 1, 0})
+	testing.expect(t, CategoricalPolicyLogProbs(logits, mask[:], actions[:], logs[:]))
+	testing.expect(t, CategoricalPolicyEntropy(logits, mask[:], entropy[:]))
+	testing.expect(t, math.abs(logs[0] + math.ln(f64(2))) < 1e-12 && logs[1] == 0)
+	testing.expect(t, math.abs(entropy[0] - math.ln(f64(2))) < 1e-12 && entropy[1] == 0)
+	seedA, seedB: u64 = 123, 123
+	sampleA, sampleB: [2]int
+	for _ in 0..<100 {
+		testing.expect(t, CategoricalPolicySample(logits, mask[:], &seedA, sampleA[:]))
+		testing.expect(t, CategoricalPolicySample(logits, mask[:], &seedB, sampleB[:]))
+		testing.expect(t, sampleA == sampleB && seedA == seedB && sampleA[0] < 2 && sampleA[1] == 1)
+	}
+	data = {transmute(f32)u32(0x7f7fffff), transmute(f32)u32(0xff7fffff), 0, 0, 0, 0}
+	actions[0] = 1
+	testing.expect(t, CategoricalPolicyLogProbs(logits, mask[:], actions[:], logs[:]))
+	testing.expect(t, logs[0] < -6e38 && !math.is_inf(logs[0]))
+	testing.expect(t, CategoricalPolicyEntropy(logits, mask[:], entropy[:]) && entropy[0] == 0)
+}
+
+@(test)
+CategoricalPolicyTinyTail :: proc(t: ^testing.T) {
+	shape := [2]int{2, 3}
+	data := [6]f32{0, -40, 100, 0, -40, 0}
+	mask := [6]bool{true, true, false, true, true, false}
+	logits := core.Tensor{shape[:], data[:]}
+	actions := [2]int{0, 0}
+	logs := [2]f64{7, 7}
+	entropy := [2]f64{7, 7}
+	tail := math.exp(f64(-40))
+	testing.expect(t, CategoricalPolicyLogProbs(logits, mask[:], actions[:], logs[:]))
+	testing.expect(t, math.abs(logs[0] + tail) < tail * 1e-12 && math.abs(logs[1] + tail) < tail * 1e-12)
+	testing.expect(t, CategoricalPolicyEntropy(logits, mask[:], entropy[:]))
+	testing.expect(t, math.abs(entropy[0] - 41 * tail) < tail * 1e-12)
+	logs = {7, 7}; entropy = {7, 7}
+	actions[1] = 2
+	testing.expect(t, !CategoricalPolicyLogProbs(logits, mask[:], actions[:], logs[:]) && logs == [2]f64{7, 7})
+	mask[3] = false; mask[4] = false
+	testing.expect(t, !CategoricalPolicyEntropy(logits, mask[:], entropy[:]) && entropy == [2]f64{7, 7})
+}
+
+@(test)
+CategoricalPolicyValidation :: proc(t: ^testing.T) {
+	shape := [2]int{2, 2}
+	data := [4]f32{0, 1, 2, 3}
+	mask := [4]bool{true, true, true, true}
+	logits := core.Tensor{shape[:], data[:]}
+	probabilities := [4]f32{7, 7, 7, 7}
+	actions := [2]int{0, 1}
+	logs := [2]f64{7, 7}
+	entropy := [2]f64{7, 7}
+	samples := [2]int{7, 7}
+	seed: u64 = 123
+	for bad in ([3]f32{transmute(f32)u32(0x7fc00000), transmute(f32)u32(0x7f800000), transmute(f32)u32(0xff800000)}) {
+		data[3] = bad
+		mask[3] = false
+		testing.expect(t, !CategoricalPolicyProbabilities(logits, mask[:], probabilities[:]))
+		testing.expect(t, !CategoricalPolicyLogProbs(logits, mask[:], actions[:], logs[:]))
+		testing.expect(t, !CategoricalPolicyEntropy(logits, mask[:], entropy[:]))
+		testing.expect(t, !CategoricalPolicySample(logits, mask[:], &seed, samples[:]))
+	}
+	data[3] = 3
+	mask[2] = false
+	testing.expect(t, !CategoricalPolicySample(logits, mask[:], &seed, samples[:]))
+	testing.expect(t, !CategoricalPolicyProbabilities(logits, mask[:], probabilities[:]))
+	mask[2] = true
+	for badAction in ([3]int{-1, 2, 1}) {
+		actions[1] = badAction
+		testing.expect(t, !CategoricalPolicyLogProbs(logits, mask[:], actions[:], logs[:]))
+	}
+	testing.expect(t, !CategoricalPolicyEntropy(logits, mask[:3], entropy[:]))
+	testing.expect(t, !CategoricalPolicySample(logits, mask[:], nil, samples[:]))
+	testing.expect(t, !CategoricalPolicySample(logits, mask[:], &seed, samples[:1]))
+	testing.expect(t, probabilities == [4]f32{7, 7, 7, 7} && logs == [2]f64{7, 7} && entropy == [2]f64{7, 7} && samples == [2]int{7, 7} && seed == 123)
+	zeroSeed: u64
+	testing.expect(t, !CategoricalPolicySample(logits, mask[:], &zeroSeed, samples[:]))
+	emptyShape := [2]int{0, 2}
+	empty := core.Tensor{emptyShape[:], nil}
+	testing.expect(t, CategoricalPolicyProbabilities(empty, nil, nil) && CategoricalPolicyLogProbs(empty, nil, nil, nil) && CategoricalPolicyEntropy(empty, nil, nil) && CategoricalPolicySample(empty, nil, &seed, nil) && seed == 123)
+	emptyShape = {2, 0}
+	testing.expect(t, !CategoricalPolicyEntropy(empty, nil, nil))
+}
+

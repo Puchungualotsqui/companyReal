@@ -378,6 +378,48 @@ SequentialPredict :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapaci
 	return model.layers[model.layerCount-1].output.value.data, true
 }
 
+// Predict any positive number of contiguous row-major samples into exactly one
+// caller-owned output row per input row. Spatial rows contain all H*W*C values
+// in NHWC order. A zero batchSize selects batchCapacity; otherwise it must be
+// in [1, batchCapacity]. Inputs and outputs must be disjoint from each other
+// and the entire model. Inputs must be finite; non-finite results fail.
+// No buffers are retained or heap-allocated. Inference does not advance the RNG
+// or change parameters, but overwrites model scratch, shapes, dropout mode and
+// masks, invalidating borrowed SequentialPredict results and pending backward
+// state. Argument validation leaves output and model unchanged; a later forward
+// failure may leave scratch modified and a prefix of output written. The caller
+// must not access the model concurrently or use invalid/dangling slices.
+SequentialPredictBatches :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity), inputs, outputs: []f32, batchSize: int = 0) -> bool {
+	actualBatchSize := batchSize
+	if actualBatchSize == 0 { actualBatchSize = batchCapacity }
+	if model == nil || model.self != rawptr(model) || model.layerCount <= 0 || model.layerCount > maxLayers ||
+		model.inputWidth <= 0 || model.inputWidth > maxWidth || actualBatchSize <= 0 || actualBatchSize > batchCapacity ||
+		len(inputs) == 0 || len(inputs) % model.inputWidth != 0 || !SequentialInputShapeValid(model) { return false }
+	width := model.layers[model.layerCount-1].width
+	rows := len(inputs) / model.inputWidth
+	if width <= 0 || width > maxWidth || len(outputs) % width != 0 || len(outputs) / width != rows { return false }
+	if core.BuffersOverlap(core.Tensor{data = inputs}, core.Tensor{data = outputs}) { return false }
+	modelAddress := uintptr(rawptr(model))
+	for buffer in ([2][]f32{inputs, outputs}) {
+		address := uintptr(raw_data(buffer))
+		if address >= modelAddress {
+			if address - modelAddress < uintptr(size_of(model^)) { return false }
+		} else if (modelAddress - address) / size_of(f32) < uintptr(len(buffer)) {
+			return false
+		}
+	}
+	for value in inputs { if math.is_nan(value) || math.is_inf(value) { return false } }
+	for start := 0; start < rows; {
+		count := min(actualBatchSize, rows-start)
+		result, ok := SequentialPredict(model, inputs[start*model.inputWidth:(start+count)*model.inputWidth])
+		if !ok || len(result) != count*width { return false }
+		for value in result { if math.is_nan(value) || math.is_inf(value) { return false } }
+		copy(outputs[start*width:(start+count)*width], result)
+		start += count
+	}
+	return true
+}
+
 // Returns the last layer that is neither dropout nor flatten, or nil if none exists.
 // The caller must validate the model and layer count first.
 SequentialLogitsOutputLayer :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity)) -> Layer {

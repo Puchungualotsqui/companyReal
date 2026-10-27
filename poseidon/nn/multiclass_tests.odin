@@ -106,3 +106,57 @@ MulticlassAdamDeterministic :: proc(t: ^testing.T) {
 	testing.expect(t, adamA.step == 60 && adamB.step == 60 && ma == mb && va == vb && ma != [6]f32{})
 	testing.expect(t, TestDenseStorage(&a.layers[0]).weightData == TestDenseStorage(&b.layers[0]).weightData && TestDenseStorage(&a.layers[0]).biasData == TestDenseStorage(&b.layers[0]).biasData)
 }
+
+@(test)
+PolicyTrainStepDense :: proc(t: ^testing.T) {
+	for useAdam in ([2]bool{false, true}) {
+		linear: LinearModel(1, 3, 1)
+		testing.expect(t, LinearInit(&linear))
+		linear.inputData[0] = 1
+		linear.outputGrad = {9, 9, 9}
+		linear.weightGrad = {9, 9, 9}
+		actions := [1]int{0}
+		legal := [3]bool{true, true, false}
+		advantages := [1]f32{2}
+		first, second: [6]f32
+		adam := Adam{linear.parameters[:], first[:], second[:], 0, 0.1, 0.9, 0.999, 1e-8}
+		optimizer: SequentialOptimizer = SequentialSGD{0.1}
+		if useAdam { optimizer = &adam }
+		loss, ok := PolicyTrainStep(Model{linear.layers[:]}, &linear.output, actions[:], legal[:], advantages[:], linear.nodes[:], linear.parameters[:], optimizer)
+		testing.expect(t, ok && math.abs(loss-f32(2*math.ln(f64(2)))) < 0.00001)
+		testing.expect(t, linear.outputGrad == [3]f32{-1, 1, 0} && linear.weightGrad == [3]f32{-1, 1, 0} && linear.biasGrad == [3]f32{-1, 1, 0})
+		testing.expect(t, linear.weightData[0] > 0 && linear.weightData[1] < 0 && linear.weightData[2] == 0)
+		if useAdam { testing.expect(t, adam.step == 1 && math.abs(linear.weightData[0]-0.1) < 0.00001) } else {
+			testing.expect(t, linear.weightData == [3]f32{0.1, -0.1, 0} && linear.biasData == [3]f32{0.1, -0.1, 0})
+		}
+		testing.expect(t, ModelForward(Model{linear.layers[:]}))
+		after, valid := PolicyGradientLoss(linear.output.value, actions[:], legal[:], advantages[:])
+		testing.expect(t, valid && after < loss)
+	}
+}
+
+@(test)
+PolicyTrainStepInvalid :: proc(t: ^testing.T) {
+	linear: LinearModel(1, 2, 1)
+	testing.expect(t, LinearInit(&linear))
+	linear.inputData[0] = 1
+	linear.outputData = {7, 8}
+	linear.outputGrad = {3, 4}
+	actions := [1]int{0}
+	legal := [2]bool{false, true}
+	advantages := [1]f32{1}
+	model := Model{linear.layers[:]}
+	_, ok := PolicyTrainStep(model, &linear.output, actions[:], legal[:], advantages[:], linear.nodes[:], linear.parameters[:], SequentialSGD{0.1})
+	testing.expect(t, !ok && linear.outputData == [2]f32{7, 8} && linear.outputGrad == [2]f32{3, 4})
+	legal[0] = true
+	_, ok = PolicyTrainStep(model, &linear.output, actions[:], legal[:], advantages[:], linear.nodes[:3], linear.parameters[:], SequentialSGD{0.1})
+	testing.expect(t, !ok)
+	duplicate := [2]^core.Node{&linear.weights, &linear.weights}
+	_, ok = PolicyTrainStep(model, &linear.output, actions[:], legal[:], advantages[:], linear.nodes[:], duplicate[:], SequentialSGD{0.1})
+	testing.expect(t, !ok)
+	first, second: [4]f32
+	wrong := [2]^core.Node{&linear.bias, &linear.weights}
+	adam := Adam{wrong[:], first[:], second[:], 0, 0.1, 0.9, 0.999, 1e-8}
+	_, ok = PolicyTrainStep(model, &linear.output, actions[:], legal[:], advantages[:], linear.nodes[:], linear.parameters[:], &adam)
+	testing.expect(t, !ok && adam.step == 0 && linear.outputData == [2]f32{7, 8} && linear.outputGrad == [2]f32{3, 4})
+}

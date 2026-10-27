@@ -94,6 +94,61 @@ SequentialBatchAndBorrowedOutput :: proc(t: ^testing.T) {
 }
 
 @(test)
+SequentialPredictBatchesTest :: proc(t: ^testing.T) {
+	model: Sequential(3, 2, 3)
+	ok := SequentialInit(&model, 1, 42) && SequentialAddDense(&model, 2) && SequentialAddDropout(&model, 0.5)
+	testing.expect(t, ok)
+	if !ok { return }
+	dense := TestDenseStorage(&model.layers[0])
+	dense.weightData[0], dense.weightData[1] = 2, -1
+	dense.biasData[0], dense.biasData[1] = 1, 3
+	inputs := [7]f32{-2, -1, 0, 1, 2, 3, 4}
+	expected := [14]f32{-3, 5, -1, 4, 1, 3, 3, 2, 5, 1, 7, 0, 9, -1}
+	output: [14]f32
+	state := model.randomState
+	for batchSize in ([4]int{0, 1, 2, 3}) {
+		testing.expect(t, SequentialPredictBatches(&model, inputs[:], output[:], batchSize))
+		testing.expect(t, output == expected && model.randomState == state)
+	}
+	borrowed, predicted := SequentialPredict(&model, inputs[:1])
+	testing.expect(t, predicted && borrowed[0] == -3)
+	testing.expect(t, SequentialPredictBatches(&model, inputs[1:2], output[:2]))
+	testing.expect(t, borrowed[0] == -1 && output[0] == -1)
+	before := output
+	testing.expect(t, !SequentialPredictBatches(&model, nil, output[:]))
+	testing.expect(t, !SequentialPredictBatches(&model, inputs[:], output[:13]))
+	testing.expect(t, !SequentialPredictBatches(&model, inputs[:], output[:], -1))
+	testing.expect(t, !SequentialPredictBatches(&model, inputs[:], output[:], 4))
+	testing.expect(t, !SequentialPredictBatches(&model, output[:7], output[:]))
+	testing.expect(t, !SequentialPredictBatches(&model, inputs[:1], model.inputData[:2]))
+	bad := inputs
+	bad[6] = transmute(f32)u32(0x7fc00000)
+	testing.expect(t, !SequentialPredictBatches(&model, bad[:], output[:]))
+	testing.expect(t, output == before && model.randomState == state)
+	copyModel := model
+	testing.expect(t, !SequentialPredictBatches(&copyModel, inputs[:], output[:]))
+	lateFailure := [3]f32{1, 2, 3.4e38}
+	partial := [6]f32{-9, -9, -9, -9, -9, -9}
+	testing.expect(t, !SequentialPredictBatches(&model, lateFailure[:], partial[:], 2))
+	testing.expect(t, partial == [6]f32{3, 2, 5, 1, -9, -9})
+}
+
+@(test)
+SequentialPredictBatchesSpatial :: proc(t: ^testing.T) {
+	model: Sequential(1, 4, 2)
+	ok := SequentialInitSpatial(&model, 2, 2, 1) && SequentialAddActivation(&model, .Relu)
+	testing.expect(t, ok)
+	if !ok { return }
+	inputs := [12]f32{-1, 2, -3, 4, 5, -6, 7, -8, 9, 10, -11, 12}
+	output: [12]f32
+	testing.expect(t, SequentialPredictBatches(&model, inputs[:], output[:]))
+	testing.expect(t, output == [12]f32{0, 2, 0, 4, 5, 0, 7, 0, 9, 10, 0, 12})
+	testing.expect(t, !SequentialPredictBatches(&model, inputs[:11], output[:]))
+	model.layers[0].outputShape[2] = 3
+	testing.expect(t, !SequentialPredictBatches(&model, inputs[:], output[:]))
+}
+
+@(test)
 SequentialLossesAndErrors :: proc(t: ^testing.T) {
 	model: Sequential(1, 2, 2)
 	testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 1))

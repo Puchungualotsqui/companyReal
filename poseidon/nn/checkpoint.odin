@@ -19,6 +19,7 @@ import "../core"
 // containing dropout. Inputs and outputs must not overlap any other storage.
 CHECKPOINT_MAGIC :: u64(0x3154504b434e4e50)
 CHECKPOINT_VERSION :: u64(1)
+CHECKPOINT_SPATIAL_VERSION :: u64(2)
 
 CheckpointPut64 :: proc(data: []u8, offset: ^int, value: u64) {
 	for i in 0..<8 { data[offset^+i] = u8(value >> uint(8*i)) }
@@ -59,6 +60,26 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 	size := 80
 	if len(output) < size { return 0, false }
 	parameterCount, elementCount, width := 0, 0, model.inputWidth
+	rank := len(model.input.value.shape)
+	if rank != 2 && rank != 4 { return 0, false }
+	spatial := rank == 4
+	h, w, channels := 0, 0, 0
+	version := CHECKPOINT_VERSION
+	if spatial {
+		h, w, channels = model.inputShape[1], model.inputShape[2], model.inputShape[3]
+		if h <= 0 || w <= 0 || channels <= 0 || h > maxWidth/w || h*w > maxWidth/channels || h*w*channels != width { return 0, false }
+		version = CHECKPOINT_SPATIAL_VERSION
+	}
+	for i in 0..<model.layerCount {
+		switch operation in model.layers[i].operation {
+		case Conv2D, Pool2D, Flatten: version = CHECKPOINT_SPATIAL_VERSION
+		case Dense, Relu, Sigmoid, Tanh, Softmax, Dropout, nil:
+		}
+	}
+	if version == CHECKPOINT_SPATIAL_VERSION {
+		if len(output)-size < 24 { return 0, false }
+		size += 24
+	}
 	rows := model.inputShape[0]
 	if rows <= 0 || rows > batchCapacity || !core.TensorValid(model.input.value) || !core.SameShape(model.input.value, core.Tensor{shape = model.inputShape[:len(model.input.value.shape)]}) || (!spatial && model.inputShape[1] != width) { return 0, false }
 	for i in 0..<model.layerCount {
@@ -100,10 +121,11 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 		}
 		switch &operation in item.operation {
 		case Dense:
+			if spatial { return 0, false }
 			dense: ^DenseStorage(maxWidth)
 			switch &storage in item.storage {
 			case DenseStorage(maxWidth): dense = &storage
-			case nil, DropoutStorage(maxWidth, batchCapacity): return 0, false
+			case nil, Conv2DStorage(maxWidth), DropoutStorage(maxWidth, batchCapacity): return 0, false
 			}
 			if operation.weights != &dense.weights || operation.bias != &dense.bias || dense.weightShape != ([2]int{width, item.width}) || dense.biasShape != ([1]int{item.width}) ||
 				!core.TensorValid(dense.weights.value) || !core.TensorValid(dense.bias.value) ||
@@ -122,6 +144,42 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 			elementCount += count
 			for value in dense.weights.value.data { if !AdamFinite(f64(value)) { return 0, false } }
 			for value in dense.bias.value.data { if !AdamFinite(f64(value)) { return 0, false } }
+		case Conv2D:
+			if !spatial || maxWidth > max(int)/maxWidth { return 0, false }
+			conv: ^Conv2DStorage(maxWidth)
+			switch &storage in item.storage {
+			case Conv2DStorage(maxWidth): conv = &storage
+			case nil, DenseStorage(maxWidth), DropoutStorage(maxWidth, batchCapacity): return 0, false
+			}
+			kh, kw, ic, oc := conv.weightShape[0], conv.weightShape[1], conv.weightShape[2], conv.weightShape[3]
+			if kh <= 0 || kw <= 0 || ic != channels || oc <= 0 || oc > maxWidth { return 0, false }
+			capacity := maxWidth*maxWidth
+			if kh > capacity/kw || kh*kw > capacity/channels || kh*kw*channels > capacity/oc { return 0, false }
+			oh, okh := Conv2DDimension(h, kh, operation.stride, operation.padding)
+			ow, okw := Conv2DDimension(w, kw, operation.stride, operation.padding)
+			if !okh || !okw || oh <= 0 || ow <= 0 || oh > maxWidth/ow || oh*ow > maxWidth/oc || oh*ow*oc != item.width || oh-1 > (max(int)-(kh-1))/operation.stride || ow-1 > (max(int)-(kw-1))/operation.stride { return 0, false }
+			if operation.weights != &conv.weights || operation.bias != &conv.bias || conv.biasShape != ([1]int{oc}) || !core.TensorValid(conv.weights.value) || !core.TensorValid(conv.bias.value) || !core.SameShape(conv.weights.value, core.Tensor{shape = conv.weightShape[:]}) || !core.SameShape(conv.bias.value, core.Tensor{shape = conv.biasShape[:]}) { return 0, false }
+			count := kh*kw*channels*oc
+			if count > max(int)-oc || parameterCount > max(int)-2 { return 0, false }
+			count += oc
+			if len(output)-size < 40 || count > (len(output)-size-40)/4 || elementCount > max(int)-count { return 0, false }
+			size += 40 + count*4
+			if adam != nil && (parameterCount > len(adam.parameters) || len(adam.parameters)-parameterCount < 2 || adam.parameters[parameterCount] != &conv.weights || adam.parameters[parameterCount+1] != &conv.bias) { return 0, false }
+			parameterCount += 2; elementCount += count
+			for value in conv.weights.value.data { if !AdamFinite(f64(value)) { return 0, false } }
+			for value in conv.bias.value.data { if !AdamFinite(f64(value)) { return 0, false } }
+			h, w, channels = oh, ow, oc
+		case Pool2D:
+			if !spatial || (operation.kind != .Max && operation.kind != .Average) { return 0, false }
+			kh, kw, stride := operation.kernelHeight, operation.kernelWidth, operation.stride
+			if kh <= 0 || kw <= 0 || stride <= 0 || kh > h || kw > w || kh > max(int)/kw { return 0, false }
+			oh, ow := (h-kh)/stride+1, (w-kw)/stride+1
+			if oh > maxWidth/ow || oh*ow > maxWidth/channels || oh*ow*channels != item.width || len(output)-size < 24 { return 0, false }
+			size += 24
+			h, w = oh, ow
+		case Flatten:
+			if item.width != width { return 0, false }
+			spatial = false
 		case Relu, Sigmoid, Tanh, Softmax:
 			if item.width != width { return 0, false }
 		case Dropout:
@@ -146,7 +204,14 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 		for value in adam.secondMoment { if !AdamFinite(f64(value)) || value < 0 { return 0, false } }
 	}
 	offset := 0
-	for value in ([10]u64{CHECKPOINT_MAGIC, CHECKPOINT_VERSION, u64(maxLayers), u64(maxWidth), u64(batchCapacity), u64(model.inputWidth), u64(model.layerCount), model.randomState, shuffleState, u64(adam != nil)}) { CheckpointPut64(output, &offset, value) }
+	for value in ([10]u64{CHECKPOINT_MAGIC, version, u64(maxLayers), u64(maxWidth), u64(batchCapacity), u64(model.inputWidth), u64(model.layerCount), model.randomState, shuffleState, u64(adam != nil)}) { CheckpointPut64(output, &offset, value) }
+	if version == CHECKPOINT_SPATIAL_VERSION {
+		for i in 1..=3 {
+			dim := 0
+			if len(model.input.value.shape) == 4 { dim = model.inputShape[i] }
+			CheckpointPut64(output, &offset, u64(dim))
+		}
+	}
 	width = model.inputWidth
 	for i in 0..<model.layerCount {
 		item := &model.layers[i]

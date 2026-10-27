@@ -222,6 +222,36 @@ CheckpointSpatialWithoutAdam :: proc(t: ^testing.T) {
 }
 
 @(test)
+CheckpointPoolingRoundTrip :: proc(t: ^testing.T) {
+	for kind in ([2]PoolKind{.Max, .Average}) {
+		source, restored: Sequential(3, 16, 2)
+		ok := SequentialInitSpatial(&source, 3, 3, 1) && SequentialAddPool2D(&source, kind, 2, 2, 1) && SequentialAddFlatten(&source) && SequentialAddDense(&source, 2)
+		testing.expect(t, ok)
+		if !ok { continue }
+		data, again: [512]u8
+		size, written := CheckpointWrite(&source, nil, 17, data[:])
+		testing.expect(t, written && data[8] == 2)
+		if !written { continue }
+		state: u64
+		ok = CheckpointRead(&restored, nil, &state, data[:size], nil, nil, nil)
+		testing.expect(t, ok && state == 17)
+		if !ok { continue }
+		n, encoded := CheckpointWrite(&restored, nil, state, again[:])
+		testing.expect(t, encoded && n == size)
+		if encoded && n == size { for b, i in data[:size] { testing.expect(t, b == again[i]) } }
+		input := [9]f32{1, 2, 3, 4, 5, 6, 7, 8, 9}
+		a, aok := SequentialPredict(&source, input[:])
+		b, bok := SequentialPredict(&restored, input[:])
+		testing.expect(t, aok && bok && len(a) == len(b))
+		if aok && bok && len(a) == len(b) { for value, i in a { testing.expect(t, value == b[i]) } }
+		for &byte in again { byte = 0xa5 }
+		_, written = CheckpointWrite(&source, nil, 17, again[:size-1])
+		testing.expect(t, !written)
+		for byte in again { testing.expect(t, byte == 0xa5) }
+	}
+}
+
+@(test)
 CheckpointSpatialCases :: proc(t: ^testing.T) {
 	source, restored: Sequential(6, 16, 2)
 	ok := SequentialInitSpatial(&source, 3, 3, 1, 42) && SequentialAddConv2D(&source, 2, 2, 2, 1, 0) && SequentialAddActivation(&source, .Relu) && SequentialAddDropout(&source, 0.25) && SequentialAddFlatten(&source) && SequentialAddDense(&source, 2) && SequentialAddActivation(&source, .Softmax)
