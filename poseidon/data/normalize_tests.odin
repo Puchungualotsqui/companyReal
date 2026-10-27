@@ -23,6 +23,25 @@ StandardizationTrainingAndRoundTrip :: proc(t: ^testing.T) {
 }
 
 @(test)
+StandardizationMultipleRowsAndLateFailure :: proc(t: ^testing.T) {
+	input := [12]f32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	stats := [3]StandardizationStats{{1, 2}, {2, 4}, {3, 8}}
+	output: [12]f32
+	expected := [12]f32{0, 0, 0, 1.5, 0.75, 0.375, 3, 1.5, 0.75, 4.5, 2.25, 1.125}
+	testing.expect(t, StandardizationTransform(input[:], stats[:], output[:]))
+	testing.expect(t, output == expected)
+	testing.expect(t, StandardizationTransform(output[:], stats[:], output[:], inverse = true))
+	testing.expect(t, output == input)
+
+	before := output
+	input[11] = transmute(f32)u32(0x7fc00000)
+	testing.expect(t, !StandardizationTransform(input[:], stats[:], output[:]) && output == before)
+	input[11] = 12
+	stats[2].scale = 1e-300
+	testing.expect(t, !StandardizationTransform(input[:], stats[:], output[:]) && output == before)
+}
+
+@(test)
 StandardizationHeldOutIsolation :: proc(t: ^testing.T) {
 	training := [2]f32{0, 2}
 	validation := [1]f32{100}

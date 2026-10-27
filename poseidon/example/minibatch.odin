@@ -34,8 +34,8 @@ main :: proc() {
 	}
 	fmt.printf("Initial MSE: %.6f\n", initialLoss)
 
-	// Prediction accepts at most one batch at a time.
-	predictions, predicted := nn.SequentialPredict(&model, inputs[:4])
-	assert(predicted)
-	fmt.printf("First batch predictions: %v\n", predictions)
+	// Batched inference writes all predictions into caller-owned storage.
+	predictions: [9]f32
+	assert(nn.SequentialPredictBatches(&model, inputs[:], predictions[:]))
+	fmt.printf("Predictions: %v\n", predictions)
 }

@@ -13,6 +13,7 @@ main :: proc() {
 	trainIndices, validationIndices, ok := data.SplitIndices(indices[:], 6, seed = 42)
 	assert(ok)
 
+	// Gathered slices borrow their caller-owned output storage.
 	trainInputStorage: [12]f32
 	validationInputStorage: [4]f32
 	trainTargetStorage: [6]f32

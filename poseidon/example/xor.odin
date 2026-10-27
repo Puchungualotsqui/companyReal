@@ -17,10 +17,10 @@ main :: proc() {
 	assert(nn.SequentialAddActivation(&model, .Tanh))
 	assert(nn.SequentialAddDense(&model, 1))
 
-	// The default loss is MSE. Zero epochs measures the initial loss.
+	// Defaults are MSE and a 0.1 learning rate. Zero epochs measures the initial loss.
 	initialLoss, ok := nn.SequentialFit(&model, inputs[:], targets[:], epochs = 0)
 	assert(ok)
-	loss, trained := nn.SequentialFit(&model, inputs[:], targets[:], epochs = 5000, learningRate = 0.1)
+	loss, trained := nn.SequentialFit(&model, inputs[:], targets[:], epochs = 5000)
 	assert(trained)
 	predictions, predicted := nn.SequentialPredict(&model, inputs[:])
 	assert(predicted)

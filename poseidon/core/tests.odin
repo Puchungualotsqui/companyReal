@@ -132,6 +132,45 @@ MatrixEdgeCases :: proc(t: ^testing.T) {
 }
 
 @(test)
+MatrixScalarReference :: proc(t: ^testing.T) {
+	rowsToTest := [4]int{0, 1, 2, 5}
+	innerToTest := [5]int{0, 1, 2, 3, 7}
+	columnsToTest := [11]int{0, 1, 2, 3, 4, 5, 7, 8, 9, 12, 13}
+	for rows in rowsToTest {
+		for inner in innerToTest {
+			for columns in columnsToTest {
+				aShape := [2]int{rows, inner}
+				bShape := [2]int{inner, columns}
+				outShape := [2]int{rows, columns}
+				aStorage: [35]f32
+				bStorage: [91]f32
+				outStorage, expectedStorage: [65]f32
+				aData := aStorage[:rows*inner]
+				bData := bStorage[:inner*columns]
+				outData := outStorage[:rows*columns]
+				expected := expectedStorage[:rows*columns]
+				for &value, index in aData { value = f32((index*7)%19-9) / 3 }
+				for &value, index in bData { value = f32((index*11)%23-11) / 5 }
+				for &value in outData { value = 123 }
+				for row in 0..<rows {
+					for column in 0..<columns {
+						sum: f32 = 0
+						for k in 0..<inner {
+							sum += aData[row*inner+k] * bData[k*columns+column]
+						}
+						expected[row*columns+column] = sum
+					}
+				}
+				testing.expect(t, MatMul(Tensor{outShape[:], outData}, Tensor{aShape[:], aData}, Tensor{bShape[:], bData}))
+				for value, index in outData {
+					testing.expect(t, value == expected[index])
+				}
+			}
+		}
+	}
+}
+
+@(test)
 SharedNodeAutograd :: proc(t: ^testing.T) {
 	shape := [1]int{2}
 	xData := [2]f32{2, -3}

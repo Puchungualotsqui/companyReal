@@ -2,6 +2,7 @@ package nn
 
 import "../core"
 import "core:math"
+import "core:simd"
 
 // Dense uses [batch, inputs] values, [inputs, outputs] weights and [outputs] bias.
 // All nodes and their non-overlapping buffers are owned by the caller.
@@ -51,13 +52,21 @@ FlattenValid :: proc(layer: ^Flatten, gradients: bool) -> bool {
 
 FlattenForward :: proc(layer: ^Flatten) -> bool {
 	if !FlattenValid(layer, false) { return false }
-	for value, i in layer.input.value.data { layer.output.value.data[i] = value }
+	copy(layer.output.value.data, layer.input.value.data)
 	return true
 }
 
 FlattenBackward :: proc(layer: ^Flatten) -> bool {
 	if !FlattenValid(layer, true) { return false }
-	for gradient, i in layer.output.grad.data { layer.input.grad.data[i] += gradient }
+	inputGrad, outputGrad := layer.input.grad.data, layer.output.grad.data
+	i := 0
+	for ; i <= len(inputGrad)-4; i += 4 {
+		left := #simd[4]f32{inputGrad[i], inputGrad[i+1], inputGrad[i+2], inputGrad[i+3]}
+		right := #simd[4]f32{outputGrad[i], outputGrad[i+1], outputGrad[i+2], outputGrad[i+3]}
+		sum := left + right
+		for lane in 0..<4 { inputGrad[i+lane] = simd.extract(sum, lane) }
+	}
+	for ; i < len(inputGrad); i += 1 { inputGrad[i] += outputGrad[i] }
 	return true
 }
 

@@ -1,5 +1,7 @@
 package core
 
+import "core:simd"
+
 // Axes are nonnegative; scalars have no axis to reduce.
 // This validates tensors and shapes, but not storage overlap.
 SumAxisValid :: proc(output, input: Tensor, axis: int, keepDims: bool = false) -> bool {
@@ -32,11 +34,23 @@ SumAxis :: proc(output, input: Tensor, axis: int, keepDims: bool = false) -> boo
 	}
 	inner := 1
 	for index in axis+1..<len(input.shape) { inner *= input.shape[index] }
-	for index in 0..<len(output.data) {
-		base := (index / inner) * axisSize * inner + index % inner
-		sum: f32 = 0
-		for k in 0..<axisSize { sum += input.data[base + k * inner] }
-		output.data[index] = sum
+	for outer in 0..<len(output.data)/inner {
+		column := 0
+		for ; column <= inner-4; column += 4 {
+			base := outer * axisSize * inner + column
+			sum: #simd[4]f32 = 0
+			for k in 0..<axisSize {
+				index := base + k * inner
+				sum += #simd[4]f32{input.data[index], input.data[index+1], input.data[index+2], input.data[index+3]}
+			}
+			for lane in 0..<4 { output.data[outer*inner+column+lane] = simd.extract(sum, lane) }
+		}
+		for ; column < inner; column += 1 {
+			base := outer * axisSize * inner + column
+			sum: f32 = 0
+			for k in 0..<axisSize { sum += input.data[base + k * inner] }
+			output.data[outer*inner+column] = sum
+		}
 	}
 	return true
 }

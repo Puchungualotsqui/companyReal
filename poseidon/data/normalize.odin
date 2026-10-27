@@ -52,17 +52,20 @@ StandardizationTransform :: proc(input: []f32, stats: []StandardizationStats, ou
 		if math.is_nan(stat.mean) || math.is_inf(stat.mean) || math.is_nan(stat.scale) || math.is_inf(stat.scale) || stat.scale <= 0 { return false }
 	}
 	for pass in 0..<2 {
-		for x, index in input {
-			if math.is_nan(x) || math.is_inf(x) { return false }
-			stat := stats[index % features]
-			value: f64
-			if inverse {
-				value = f64(x) * stat.scale + stat.mean
-			} else {
-				value = (f64(x) - stat.mean) / stat.scale
+		for row in 0..<len(input) / features {
+			for stat, feature in stats {
+				index := row * features + feature
+				x := input[index]
+				if math.is_nan(x) || math.is_inf(x) { return false }
+				value: f64
+				if inverse {
+					value = f64(x) * stat.scale + stat.mean
+				} else {
+					value = (f64(x) - stat.mean) / stat.scale
+				}
+				if math.is_nan(value) || math.is_inf(value) || math.abs(value) > 3.4028234663852886e38 { return false }
+				if pass == 1 { output[index] = f32(value) }
 			}
-			if math.is_nan(value) || math.is_inf(value) || math.abs(value) > 3.4028234663852886e38 { return false }
-			if pass == 1 { output[index] = f32(value) }
 		}
 	}
 	return true

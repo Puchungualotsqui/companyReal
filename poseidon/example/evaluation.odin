@@ -30,7 +30,7 @@ main :: proc() {
 	}
 	fmt.printf("Final training loss: %.6f\n", loss)
 
-	// Prediction is borrowed and valid until the next prediction or fit.
+	// Prediction is borrowed from the model; consume it before another model operation.
 	logits, predicted := nn.SequentialPredict(&model, validationInputs[:])
 	assert(predicted)
 	shape := [2]int{len(validationInputs), 1}

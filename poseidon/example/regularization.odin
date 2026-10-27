@@ -31,10 +31,7 @@ main :: proc() {
 		history = history[:], earlyStopping = &stopping, bestSnapshot = bestSnapshot[:],
 	)
 	assert(trained)
-	validationLoss, evaluated := nn.SequentialFitBatches(
-		&model, validationInputs[:], validationTargets[:], indices[:], nil,
-		epochs = 0, shuffle = false,
-	)
+	validationLoss, evaluated := nn.SequentialEvaluateBatches(&model, validationInputs[:], validationTargets[:], 4, nn.MSE{})
 	assert(evaluated)
 
 	fmt.println("L2 = 0.1; early stopping: patience = 5, min delta = 0.001")

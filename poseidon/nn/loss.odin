@@ -221,8 +221,12 @@ PolicyGradientLossBackward :: proc(logits: ^core.Node, actions: []int, legal: []
 			}
 			for i in start..<start + classes {
 				if !legal[i] { continue }
-				probability := math.exp(f64(logits.value.data[i]) - maximum) / sum
-				if i == start + action { probability = -otherSum / sum }
+				probability: f64
+				if i == start + action {
+					probability = -otherSum / sum
+				} else {
+					probability = math.exp(f64(logits.value.data[i]) - maximum) / sum
+				}
 				delta := f32(f64(advantages[row]) * probability / f64(len(actions)))
 				result := logits.grad.data[i] + delta
 				if math.is_nan(result) || math.is_inf(result) { return false }

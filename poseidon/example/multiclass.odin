@@ -24,7 +24,7 @@ main :: proc() {
 	initialLoss, ok := nn.SequentialFit(&model, inputs[:], targets[:], loss = nn.CCEWithLogits{}, epochs = 0)
 	assert(ok)
 	loss, trained := nn.SequentialFit(&model, inputs[:], targets[:], loss = nn.CCEWithLogits{}, epochs = 500, learningRate = 0.1)
-	assert(trained)
+	assert(trained && loss < initialLoss)
 	logits, predicted := nn.SequentialPredict(&model, inputs[:])
 	assert(predicted)
 
@@ -35,6 +35,7 @@ main :: proc() {
 		for candidate in 1..<3 {
 			if logits[row*3+candidate] > logits[row*3+class] { class = candidate }
 		}
+		assert(targets[row*3+class] == 1)
 		fmt.printf("(%.0f, %.0f): target %d, predicted %d, logits %v\n", inputs[row*2], inputs[row*2+1], row / 2, class, logits[row*3:row*3+3])
 	}
 }

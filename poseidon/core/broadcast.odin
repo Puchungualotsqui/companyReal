@@ -28,6 +28,15 @@ BroadcastValid :: proc(output, a, b: Tensor) -> bool {
 // AddBroadcast requires output storage that does not overlap either input.
 AddBroadcast :: proc(output, a, b: Tensor) -> bool {
 	if !BroadcastValid(output, a, b) || BuffersOverlap(output, a) || BuffersOverlap(output, b) { return false }
+	if SameShape(output, a) && SameShape(output, b) { return Add(output, a, b) }
+	if len(output.data) > 0 && len(a.data) == 1 && len(b.data) == len(output.data) {
+		for index in 0..<len(output.data) { output.data[index] = a.data[0] + b.data[index] }
+		return true
+	}
+	if len(output.data) > 0 && len(b.data) == 1 && len(a.data) == len(output.data) {
+		for index in 0..<len(output.data) { output.data[index] = a.data[index] + b.data[0] }
+		return true
+	}
 	for index in 0..<len(output.data) {
 		remaining := index
 		aOffset, bOffset := 0, 0
