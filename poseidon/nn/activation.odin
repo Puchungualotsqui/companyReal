@@ -2,6 +2,7 @@ package nn
 
 import "../core"
 import "core:math"
+import "core:thread"
 
 Relu :: struct {
 	input: ^core.Node,
@@ -114,44 +115,108 @@ ActivationValid :: proc(input, output: ^core.Node, gradients: bool) -> bool {
 	return true
 }
 
-// Softmax uses caller-owned, non-overlapping buffers and normalizes the last axis.
-SoftmaxForward :: proc(input, output: ^core.Node) -> bool {
+// Buffers must not overlap; workers includes the caller and is capped at 16.
+// Buffers and metadata must remain unchanged until the call returns.
+SoftmaxForward :: proc(input, output: ^core.Node, workers := 1) -> bool {
 	if !ActivationValid(input, output, false) || len(input.value.shape) == 0 { return false }
 	width := input.value.shape[len(input.value.shape)-1]
 	if width == 0 { return false }
 	for item in input.value.data {
 		if math.is_nan(item) || math.is_inf(item) { return false }
 	}
-	for start := 0; start < len(input.value.data); start += width {
-		maximum := input.value.data[start]
-		for item in input.value.data[start:start+width] { maximum = max(maximum, item) }
-		sum: f64
-		for index in start..<start+width {
-			exponential := math.exp(f64(input.value.data[index]) - f64(maximum))
-			output.value.data[index] = f32(exponential)
-			sum += exponential
-		}
-		for index in start..<start+width { output.value.data[index] = f32(f64(output.value.data[index]) / sum) }
-	}
+	SoftmaxExecute(input, output, width, workers, false)
 	return true
 }
 
-// Backward accumulates the vector-Jacobian product using the forward output.
-SoftmaxBackward :: proc(input, output: ^core.Node) -> bool {
+// Accumulates into input.grad; buffers and metadata follow the forward contract.
+SoftmaxBackward :: proc(input, output: ^core.Node, workers := 1) -> bool {
 	if !ActivationValid(input, output, true) || len(input.value.shape) == 0 { return false }
 	width := input.value.shape[len(input.value.shape)-1]
 	if width == 0 { return false }
 	for item in input.value.data {
 		if math.is_nan(item) || math.is_inf(item) { return false }
 	}
-	for start := 0; start < len(input.value.data); start += width {
-		dot: f64
-		for index in start..<start+width { dot += f64(output.value.data[index]) * f64(output.grad.data[index]) }
-		for index in start..<start+width {
-			input.grad.data[index] += f32(f64(output.value.data[index]) * (f64(output.grad.data[index]) - dot))
+	SoftmaxExecute(input, output, width, workers, true)
+	return true
+}
+
+SoftmaxJob :: struct {
+	input, output: ^core.Node,
+	width, firstRow, rowCount: int,
+	backward, run: bool,
+}
+
+SoftmaxRows :: proc(job: ^SoftmaxJob) {
+	for row in job.firstRow..<job.firstRow+job.rowCount {
+		start := row * job.width
+		end := start + job.width
+		if job.backward {
+			dot: f64
+			for index in start..<end { dot += f64(job.output.value.data[index]) * f64(job.output.grad.data[index]) }
+			for index in start..<end {
+				job.input.grad.data[index] += f32(f64(job.output.value.data[index]) * (f64(job.output.grad.data[index]) - dot))
+			}
+		} else {
+			maximum := job.input.value.data[start]
+			for item in job.input.value.data[start:end] { maximum = max(maximum, item) }
+			sum: f64
+			for index in start..<end {
+				exponential := math.exp(f64(job.input.value.data[index]) - f64(maximum))
+				job.output.value.data[index] = f32(exponential)
+				sum += exponential
+			}
+			for index in start..<end { job.output.value.data[index] = f32(f64(job.output.value.data[index]) / sum) }
 		}
 	}
-	return true
+}
+
+SoftmaxWorker :: proc(worker: ^thread.Thread) {
+	job := (^SoftmaxJob)(worker.data)
+	if job.run { SoftmaxRows(job) }
+}
+
+SoftmaxExecute :: proc(input, output: ^core.Node, width, workers: int, backward: bool) {
+	rows := len(input.value.data) / width
+	MAX_WORKERS :: 16
+	count := min(max(workers, 1), rows, MAX_WORKERS)
+	job := SoftmaxJob{input, output, width, 0, rows, backward, true}
+	when !thread.IS_SUPPORTED {
+		SoftmaxRows(&job)
+		return
+	}
+	if count <= 1 {
+		SoftmaxRows(&job)
+		return
+	}
+	jobs: [MAX_WORKERS]SoftmaxJob
+	threads: [MAX_WORKERS-1]^thread.Thread
+	created := 0
+	defer {
+		for i in 0..<created { thread.destroy(threads[i]) }
+	}
+	for i in 0..<count {
+		firstRow := i * (rows / count) + min(i, rows % count)
+		rowCount := rows / count
+		if i < rows % count { rowCount += 1 }
+		jobs[i] = SoftmaxJob{input, output, width, firstRow, rowCount, backward, false}
+	}
+	for i in 0..<count-1 {
+		threads[i] = thread.create(SoftmaxWorker)
+		if threads[i] == nil {
+			for j in 0..<created { thread.start(threads[j]) }
+			for j in 0..<created { thread.join(threads[j]) }
+			for j in 0..<created { thread.destroy(threads[j]) }
+			created = 0
+			SoftmaxRows(&job)
+			return
+		}
+		threads[i].data = &jobs[i]
+		created += 1
+	}
+	for i in 0..<count { jobs[i].run = true }
+	for i in 0..<created { thread.start(threads[i]) }
+	SoftmaxRows(&jobs[count-1])
+	for i in 0..<created { thread.join(threads[i]) }
 }
 
 // Categorical policy buffers (including shape, mask, actions, outputs and RNG

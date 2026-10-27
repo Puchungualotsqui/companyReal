@@ -246,7 +246,27 @@ Conv2DForwardRows :: proc(layer: ^Conv2D, firstRow, rowCount: int) {
 	for b in firstRow/oh..=(firstRow+rowCount-1)/oh {
 		for y in max(0, firstRow-b*oh)..<min(oh, firstRow+rowCount-b*oh) {
 			for x in 0..<ow {
-				for o in 0..<oc {
+				o := 0
+				for ; o <= oc-4; o += 4 {
+					sum := #simd[4]f32{bias.data[o], bias.data[o+1], bias.data[o+2], bias.data[o+3]}
+					for ky in 0..<kh {
+						sy := y*layer.stride + ky - layer.padding
+						if sy < 0 || sy >= ih { continue }
+						for kx in 0..<kw {
+							sx := x*layer.stride + kx - layer.padding
+							if sx < 0 || sx >= iw { continue }
+							for c in 0..<ic {
+								value := input.data[((b*ih+sy)*iw+sx)*ic+c]
+								wi := ((ky*kw+kx)*ic+c)*oc+o
+								values := #simd[4]f32{value, value, value, value}
+								kernel := #simd[4]f32{weights.data[wi], weights.data[wi+1], weights.data[wi+2], weights.data[wi+3]}
+								sum += values * kernel
+							}
+						}
+					}
+					for lane in 0..<4 { output.data[((b*oh+y)*ow+x)*oc+o+lane] = simd.extract(sum, lane) }
+				}
+				for ; o < oc; o += 1 {
 					sum := bias.data[o]
 					for ky in 0..<kh {
 						sy := y*layer.stride + ky - layer.padding

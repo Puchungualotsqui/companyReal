@@ -1106,3 +1106,176 @@ FlattenVectorBoundaries :: proc(t: ^testing.T) {
 		testing.expect(t, inputGrad[0] == 0 && inputGrad[count+1] == f32(count+1)*0.25)
 	}
 }
+
+@(test)
+ConvVectorAndBackwardReference :: proc(t: ^testing.T) {
+	for channels in 1..=9 {
+		inputShape := [4]int{1, 3, 3, 2}
+		weightShape := [4]int{2, 2, 2, channels}
+		biasShape := [1]int{channels}
+		outputShape := [4]int{1, 2, 2, channels}
+		inputData, inputGrad, expectedInput: [18]f32
+		weightData, weightGrad, expectedWeight: [72]f32
+		biasData, biasGrad, expectedBias: [9]f32
+		outputData, outputGrad, expectedOutput: [36]f32
+		for &v, i in inputData { v = f32(i%7-3)*0.125 }
+		for &v, i in weightData { v = f32(i%11-5)*0.125 }
+		for &v, i in biasData { v = f32(i-4)*0.125 }
+		for &v, i in outputGrad { v = f32(i%9-4)*0.125 }
+		for &v, i in inputGrad { v = f32(i%3)*0.25 }
+		for &v, i in weightGrad { v = f32(i%3)*0.25 }
+		for &v, i in biasGrad { v = f32(i%3)*0.25 }
+		expectedInput = inputGrad; expectedWeight = weightGrad; expectedBias = biasGrad
+		for y in 0..<2 { for x in 0..<2 { for o in 0..<channels {
+			index := (y*2+x)*channels+o
+			sum := biasData[o]
+			gradient := outputGrad[index]
+			expectedBias[o] += gradient
+			for ky in 0..<2 { for kx in 0..<2 {
+				sy, sx := y*2+ky-1, x*2+kx-1
+				if sy < 0 || sy >= 3 || sx < 0 || sx >= 3 { continue }
+				for c in 0..<2 {
+					ii := (sy*3+sx)*2+c
+					wi := ((ky*2+kx)*2+c)*channels+o
+					sum += inputData[ii]*weightData[wi]
+					expectedInput[ii] += gradient*weightData[wi]
+					expectedWeight[wi] += gradient*inputData[ii]
+				}
+			} }
+			expectedOutput[index] = sum
+		} } }
+		input := core.Node{value = core.Tensor{inputShape[:], inputData[:]}, grad = core.Tensor{inputShape[:], inputGrad[:]}}
+		weights := core.Node{value = core.Tensor{weightShape[:], weightData[:8*channels]}, grad = core.Tensor{weightShape[:], weightGrad[:8*channels]}}
+		bias := core.Node{value = core.Tensor{biasShape[:], biasData[:channels]}, grad = core.Tensor{biasShape[:], biasGrad[:channels]}}
+		output := core.Node{value = core.Tensor{outputShape[:], outputData[:4*channels]}, grad = core.Tensor{outputShape[:], outputGrad[:4*channels]}}
+		layer := Conv2D{&input, &weights, &bias, &output, 2, 1}
+		testing.expect(t, Conv2DForward(&layer) && outputData == expectedOutput)
+		testing.expect(t, Conv2DForwardParallel(&layer, 3) && outputData == expectedOutput)
+		testing.expect(t, Conv2DBackward(&layer))
+		testing.expect(t, inputGrad == expectedInput && weightGrad == expectedWeight && biasGrad == expectedBias)
+	}
+}
+
+@(test)
+DenseBackwardReference :: proc(t: ^testing.T) {
+	for outputs in 1..=9 {
+		inputShape := [2]int{3, 2}
+		weightShape := [2]int{2, outputs}
+		biasShape := [1]int{outputs}
+		outputShape := [2]int{3, outputs}
+		inputData := [6]f32{1, -2, 3, 0.5, -1, 2}
+		weightData, weightGrad, expectedWeight: [18]f32
+		biasData, biasGrad, expectedBias: [9]f32
+		outputData, outputGrad: [27]f32
+		inputGrad, expectedInput: [6]f32
+		for &v, i in weightData { v = f32(i%7-3)*0.125 }
+		for &v, i in outputGrad { v = f32(i%5-2)*0.25 }
+		for &v, i in inputGrad { v = f32(i)*0.125 }
+		for &v, i in weightGrad { v = f32(i)*0.125 }
+		for &v, i in biasGrad { v = f32(i)*0.125 }
+		expectedInput = inputGrad; expectedWeight = weightGrad; expectedBias = biasGrad
+		for row in 0..<3 { for column in 0..<outputs {
+			gradient := outputGrad[row*outputs+column]
+			expectedBias[column] += gradient
+			for k in 0..<2 {
+				expectedInput[row*2+k] += gradient*weightData[k*outputs+column]
+				expectedWeight[k*outputs+column] += gradient*inputData[row*2+k]
+			}
+		} }
+		input := core.Node{value = core.Tensor{inputShape[:], inputData[:]}, grad = core.Tensor{inputShape[:], inputGrad[:]}}
+		weights := core.Node{value = core.Tensor{weightShape[:], weightData[:2*outputs]}, grad = core.Tensor{weightShape[:], weightGrad[:2*outputs]}}
+		bias := core.Node{value = core.Tensor{biasShape[:], biasData[:outputs]}, grad = core.Tensor{biasShape[:], biasGrad[:outputs]}}
+		output := core.Node{value = core.Tensor{outputShape[:], outputData[:3*outputs]}, grad = core.Tensor{outputShape[:], outputGrad[:3*outputs]}}
+		layer := Dense{&input, &weights, &bias, &output}
+		testing.expect(t, LayerBackward(&layer))
+		testing.expect(t, inputGrad == expectedInput && weightGrad == expectedWeight && biasGrad == expectedBias)
+	}
+}
+
+@(test)
+DenseBackwardInputVectorsAndAlias :: proc(t: ^testing.T) {
+	for inputs in 0..=9 {
+		for alias in 0..=1 {
+			inputShape := [2]int{2, inputs}
+			weightShape := [2]int{inputs, 3}
+			biasShape := [1]int{3}
+			outputShape := [2]int{2, 3}
+			inputData, inputGrad, expectedData, expectedInput: [18]f32
+			weightData, weightGrad, expectedWeight: [27]f32
+			biasData, biasGrad, expectedBias: [3]f32
+			outputData, outputGrad: [6]f32
+			for &v, i in inputData { v = f32(i%7-3)*0.3 }
+			for &v, i in inputGrad { v = f32(i%5+1)*0.2 }
+			for &v, i in weightData { v = f32(i%11-5)*0.17 }
+			for &v, i in weightGrad { v = f32(i%3+1)*0.13 }
+			for &v, i in biasGrad { v = f32(i+1)*0.19 }
+			for &v, i in outputGrad { v = f32(i-2)*0.23 }
+			expectedData = inputData; expectedInput = inputGrad; expectedWeight = weightGrad; expectedBias = biasGrad
+			for row in 0..<2 { for column in 0..<3 {
+				g := outputGrad[row*3+column]
+				expectedBias[column] += g
+				for k in 0..<inputs {
+					ii, wi := row*inputs+k, k*3+column
+					if alias == 1 {
+						expectedData[ii] += g*weightData[wi]
+						expectedWeight[wi] += g*expectedData[ii]
+					} else {
+						expectedInput[ii] += g*weightData[wi]
+						expectedWeight[wi] += g*expectedData[ii]
+					}
+				}
+			} }
+			grad := inputGrad[:2*inputs]
+			if alias == 1 { grad = inputData[:2*inputs] }
+			input := core.Node{value = core.Tensor{inputShape[:], inputData[:2*inputs]}, grad = core.Tensor{inputShape[:], grad}}
+			weights := core.Node{value = core.Tensor{weightShape[:], weightData[:inputs*3]}, grad = core.Tensor{weightShape[:], weightGrad[:inputs*3]}}
+			bias := core.Node{value = core.Tensor{biasShape[:], biasData[:]}, grad = core.Tensor{biasShape[:], biasGrad[:]}}
+			output := core.Node{value = core.Tensor{outputShape[:], outputData[:]}, grad = core.Tensor{outputShape[:], outputGrad[:]}}
+			layer := Dense{&input, &weights, &bias, &output}
+			testing.expect(t, LayerBackward(&layer))
+			testing.expect(t, inputData == expectedData && inputGrad == expectedInput && weightGrad == expectedWeight && biasGrad == expectedBias)
+		}
+	}
+}
+
+@(test)
+ConvBackwardInputVectors :: proc(t: ^testing.T) {
+	for channels in 1..=9 {
+		inputShape := [4]int{2, 2, 3, channels}
+		weightShape := [4]int{2, 2, channels, 3}
+		biasShape := [1]int{3}
+		outputShape := [4]int{2, 3, 4, 3}
+		inputData, inputGrad, expectedInput: [108]f32
+		weightData, weightGrad, expectedWeight: [108]f32
+		biasData, biasGrad, expectedBias: [3]f32
+		outputData, outputGrad: [72]f32
+		for &v, i in inputData { v = f32(i%7-3)*0.3 }
+		for &v, i in inputGrad { v = f32(i%5+1)*0.2 }
+		for &v, i in weightData { v = f32(i%11-5)*0.17 }
+		for &v, i in weightGrad { v = f32(i%3+1)*0.13 }
+		for &v, i in biasGrad { v = f32(i+1)*0.19 }
+		for &v, i in outputGrad { v = f32(i%9-4)*0.23 }
+		expectedInput = inputGrad; expectedWeight = weightGrad; expectedBias = biasGrad
+		for b in 0..<2 { for y in 0..<3 { for x in 0..<4 { for o in 0..<3 {
+			g := outputGrad[((b*3+y)*4+x)*3+o]
+			expectedBias[o] += g
+			for ky in 0..<2 { for kx in 0..<2 {
+				sy, sx := y+ky-1, x+kx-1
+				if sy < 0 || sy >= 2 || sx < 0 || sx >= 3 { continue }
+				for c in 0..<channels {
+					ii := ((b*2+sy)*3+sx)*channels+c
+					wi := ((ky*2+kx)*channels+c)*3+o
+					expectedInput[ii] += g*weightData[wi]
+					expectedWeight[wi] += g*inputData[ii]
+				}
+			} }
+		} } } }
+		input := core.Node{value = core.Tensor{inputShape[:], inputData[:12*channels]}, grad = core.Tensor{inputShape[:], inputGrad[:12*channels]}}
+		weights := core.Node{value = core.Tensor{weightShape[:], weightData[:12*channels]}, grad = core.Tensor{weightShape[:], weightGrad[:12*channels]}}
+		bias := core.Node{value = core.Tensor{biasShape[:], biasData[:]}, grad = core.Tensor{biasShape[:], biasGrad[:]}}
+		output := core.Node{value = core.Tensor{outputShape[:], outputData[:]}, grad = core.Tensor{outputShape[:], outputGrad[:]}}
+		layer := Conv2D{&input, &weights, &bias, &output, 1, 1}
+		testing.expect(t, Conv2DBackward(&layer))
+		testing.expect(t, inputGrad == expectedInput && weightGrad == expectedWeight && biasGrad == expectedBias)
+	}
+}
