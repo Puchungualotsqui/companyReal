@@ -33,7 +33,7 @@ CheckpointRoundTripAdam :: proc(t: ^testing.T) {
 	testing.expect(t, restored.inputWidth == 2 && restored.layerCount == 6 && restored.self == rawptr(&restored))
 	testing.expect(t, restoredAdam.step == 987 && restoredAdam.learningRate == adam.learningRate && restoredAdam.beta1 == adam.beta1 && restoredAdam.beta2 == adam.beta2 && restoredAdam.epsilon == adam.epsilon)
 	testing.expect(t, first == restoredFirst && second == restoredSecond)
-	testing.expect(t, restoredParameters == [4]^core.Node{&restored.layers[0].weights, &restored.layers[0].bias, &restored.layers[2].weights, &restored.layers[2].bias})
+	testing.expect(t, restoredParameters == [4]^core.Node{&TestDenseStorage(&restored.layers[0]).weights, &TestDenseStorage(&restored.layers[0]).bias, &TestDenseStorage(&restored.layers[2]).weights, &TestDenseStorage(&restored.layers[2]).bias})
 	input := [4]f32{0.2, -0.7, 1.0, 0.4}
 	a, aok := SequentialPredict(&source, input[:])
 	b, bok := SequentialPredict(&restored, input[:])
@@ -75,8 +75,8 @@ CheckpointResumeShuffledAdam :: proc(t: ^testing.T) {
 	testing.expect(t, ok3 && la == lr && sa == sr && adamA.step == 21 && adamR.step == adamA.step)
 	testing.expect(t, ma == mr && va == vr && ma != [13]f32{} && va != [13]f32{})
 	for layer in ([2]int{0, 2}) {
-		for value, i in a.layers[layer].weights.value.data { testing.expect(t, value == restored.layers[layer].weightData[i]) }
-		for value, i in a.layers[layer].bias.value.data { testing.expect(t, value == restored.layers[layer].biasData[i]) }
+		for value, i in TestDenseStorage(&a.layers[layer]).weights.value.data { testing.expect(t, value == TestDenseStorage(&restored.layers[layer]).weightData[i]) }
+		for value, i in TestDenseStorage(&a.layers[layer]).bias.value.data { testing.expect(t, value == TestDenseStorage(&restored.layers[layer]).biasData[i]) }
 	}
 }
 
@@ -103,15 +103,15 @@ CheckpointReboundParametersAndRandomState :: proc(t: ^testing.T) {
 	testing.expect(t, SequentialInit(&source, 1) && SequentialAddDense(&source, 1))
 	weights := [1]f32{7}
 	bias := [1]f32{2}
-	source.layers[0].weights.value.data = weights[:]
-	source.layers[0].bias.value.data = bias[:]
+	TestDenseStorage(&source.layers[0]).weights.value.data = weights[:]
+	TestDenseStorage(&source.layers[0]).bias.value.data = bias[:]
 	data: [256]u8
 	size, ok := CheckpointWrite(&source, nil, 0, data[:])
 	testing.expect(t, ok)
 	if !ok { return }
 	shuffle: u64
 	testing.expect(t, CheckpointRead(&restored, nil, &shuffle, data[:size], nil, nil, nil))
-	testing.expect(t, restored.layers[0].weightData[0] == 7 && restored.layers[0].biasData[0] == 2)
+	testing.expect(t, TestDenseStorage(&restored.layers[0]).weightData[0] == 7 && TestDenseStorage(&restored.layers[0]).biasData[0] == 2)
 	position := 56
 	CheckpointPut64(data[:], &position, 0)
 	testing.expect(t, !CheckpointRead(&restored, nil, &shuffle, data[:size], nil, nil, nil))
@@ -133,7 +133,7 @@ CheckpointFailuresAreAtomic :: proc(t: ^testing.T) {
 	size, written := CheckpointWrite(&source, &adam, 42, data[:])
 	testing.expect(t, written)
 	if !written { return }
-	storage := [4]^core.Node{&destination.layers[0].bias, &destination.layers[0].bias, &destination.layers[0].bias, &destination.layers[0].bias}
+	storage := [4]^core.Node{&TestDenseStorage(&destination.layers[0]).bias, &TestDenseStorage(&destination.layers[0]).bias, &TestDenseStorage(&destination.layers[0]).bias, &TestDenseStorage(&destination.layers[0]).bias}
 	m, v: [17]f32
 	for i in 0..<17 { m[i] = 12; v[i] = 13 }
 	target := Adam{storage[:], m[:], v[:], 99, 0.25, 0.5, 0.75, 0.1}
@@ -180,7 +180,7 @@ CheckpointFailuresAreAtomic :: proc(t: ^testing.T) {
 	testing.expect(t, !CheckpointRead(&otherBatch, &target, &shuffle, data[:size], storage[:], m[:], v[:]))
 	testing.expect(t, shuffle == 1234 && target.step == 99 && target.learningRate == 0.25 && target.beta1 == 0.5 && target.beta2 == 0.75 && target.epsilon == 0.1)
 	testing.expect(t, len(target.parameters) == 4 && len(target.firstMoment) == 17 && len(target.secondMoment) == 17 && &target.parameters[0] == &storage[0] && &target.firstMoment[0] == &m[0] && &target.secondMoment[0] == &v[0])
-	for item in storage { testing.expect(t, item == &destination.layers[0].bias) }
+	for item in storage { testing.expect(t, item == &TestDenseStorage(&destination.layers[0]).bias) }
 	for value in m { testing.expect(t, value == 12) }
 	for value in v { testing.expect(t, value == 13) }
 	after: [1024]u8
@@ -197,3 +197,72 @@ CheckpointFailuresAreAtomic :: proc(t: ^testing.T) {
 	testing.expect(t, !failed && count == 0)
 	for byte in output { testing.expect(t, byte == 0xa5) }
 }
+
+@(test)
+CheckpointSpatialWithoutAdam :: proc(t: ^testing.T) {
+	for spatialInput in ([2]bool{false, true}) {
+		source, restored: Sequential(3, 16, 2)
+		ok := false
+		if spatialInput { ok = SequentialInitSpatial(&source, 2, 2, 2) } else { ok = SequentialInit(&source, 8) }
+		ok = ok && SequentialAddFlatten(&source) && SequentialAddActivation(&source, .Tanh) && SequentialAddDropout(&source, 0.5)
+		testing.expect(t, ok)
+		if !ok { continue }
+		data, again: [512]u8
+		size, written := CheckpointWrite(&source, nil, 55, data[:])
+		testing.expect(t, written && data[8] == 2)
+		if !written { continue }
+		state: u64
+		ok = CheckpointRead(&restored, nil, &state, data[:size], nil, nil, nil)
+		testing.expect(t, ok && state == 55)
+		if !ok { continue }
+		n, encoded := CheckpointWrite(&restored, nil, state, again[:])
+		testing.expect(t, encoded && n == size)
+		if encoded && n == size { for b, i in data[:size] { testing.expect(t, b == again[i]) } }
+	}
+}
+
+@(test)
+CheckpointSpatialCases :: proc(t: ^testing.T) {
+	source, restored: Sequential(6, 16, 2)
+	ok := SequentialInitSpatial(&source, 3, 3, 1, 42) && SequentialAddConv2D(&source, 2, 2, 2, 1, 0) && SequentialAddActivation(&source, .Relu) && SequentialAddDropout(&source, 0.25) && SequentialAddFlatten(&source) && SequentialAddDense(&source, 2) && SequentialAddActivation(&source, .Softmax)
+	testing.expect(t, ok)
+	if !ok { return }
+	parameters, restoredParameters: [4]^core.Node
+	params, valid := SequentialParameters(&source, parameters[:])
+	testing.expect(t, valid)
+	if !valid { return }
+	first, second, restoredFirst, restoredSecond: [28]f32
+	for i in 0..<28 { first[i] = f32(i)*0.125; second[i] = f32(i)*0.25 }
+	adam := Adam{params, first[:], second[:], 7, 0.01, 0.8, 0.99, 1e-8}
+	data, again: [4096]u8
+	size, written := CheckpointWrite(&source, &adam, 123, data[:])
+	testing.expect(t, written && data[8] == 2)
+	if !written { return }
+	state: u64 = 99
+	loadedAdam: Adam
+	for n in 0..<size {
+		testing.expect(t, !CheckpointRead(&restored, &loadedAdam, &state, data[:n], restoredParameters[:], restoredFirst[:], restoredSecond[:]))
+	}
+	testing.expect(t, state == 99 && restored.self == nil && loadedAdam.parameters == nil && restoredFirst == [28]f32{} && restoredSecond == [28]f32{})
+	testing.expect(t, !CheckpointRead(&restored, &loadedAdam, &state, data[:size+1], restoredParameters[:], restoredFirst[:], restoredSecond[:]))
+	testing.expect(t, !CheckpointRead(&restored, &loadedAdam, &state, data[:size], restoredParameters[:3], restoredFirst[:], restoredSecond[:]))
+	testing.expect(t, !CheckpointRead(&restored, &loadedAdam, &state, data[:size], restoredParameters[:], restoredFirst[:27], restoredSecond[:]))
+	// The first layer's stride is the fourth u64 after its kind and width.
+	strideOffset := 80+24+16+24
+	old := data[strideOffset]
+	data[strideOffset] = 0
+	testing.expect(t, !CheckpointRead(&restored, &loadedAdam, &state, data[:size], restoredParameters[:], restoredFirst[:], restoredSecond[:]))
+	data[strideOffset] = old
+	testing.expect(t, state == 99 && restored.self == nil)
+	ok = CheckpointRead(&restored, &loadedAdam, &state, data[:size], restoredParameters[:], restoredFirst[:], restoredSecond[:])
+	testing.expect(t, ok && state == 123 && restoredFirst == first && restoredSecond == second && loadedAdam.step == 7 && restored.randomState == source.randomState)
+	if !ok { return }
+	n, encoded := CheckpointWrite(&restored, &loadedAdam, state, again[:])
+	testing.expect(t, encoded && n == size)
+	if encoded && n == size { for b, i in data[:size] { testing.expect(t, b == again[i]) } }
+	testing.expect(t, SequentialRestoreBest(&restored, &loadedAdam, &state, data[:size]))
+	n, encoded = CheckpointWrite(&restored, &loadedAdam, state, again[:])
+	testing.expect(t, encoded && n == size)
+	if encoded && n == size { for b, i in data[:size] { testing.expect(t, b == again[i]) } }
+}
+

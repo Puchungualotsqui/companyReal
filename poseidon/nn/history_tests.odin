@@ -54,7 +54,7 @@ HistoryPostUpdateLosses :: proc(t: ^testing.T) {
 			testing.expect(t, math.abs(history[epoch].validationLoss - validationLoss) < 0.00001)
 		}
 		testing.expect(t, math.abs(result - history[3].trainingLoss) < 0.00001 && stateA == stateB)
-		testing.expect(t, full.layers[0].weightData == split.layers[0].weightData && full.layers[0].biasData == split.layers[0].biasData)
+		testing.expect(t, TestDenseStorage(&full.layers[0]).weightData == TestDenseStorage(&split.layers[0]).weightData && TestDenseStorage(&full.layers[0]).biasData == TestDenseStorage(&split.layers[0]).biasData)
 	}
 }
 
@@ -84,8 +84,8 @@ HistoryAdamOptionalEvaluationEquivalence :: proc(t: ^testing.T) {
 	lc, ok3 := SequentialFitBatches(&c, inputs[:], targets[:], ic[:], &sc, epochs = 4, optimizer = &adamC, validationInputs = validation[:], validationTargets = validation[:], history = historyC[:])
 	testing.expect(t, ok1 && ok2 && ok3 && la == lb && lb == lc && sa == sb && sb == sc && sa != 55)
 	testing.expect(t, adamA.step == 12 && adamB.step == 12 && adamC.step == 12 && ma == mb && mb == mc && va == vb && vb == vc && ma != [2]f32{})
-	testing.expect(t, a.layers[0].weightData == b.layers[0].weightData && b.layers[0].weightData == c.layers[0].weightData)
-	testing.expect(t, a.layers[0].biasData == b.layers[0].biasData && b.layers[0].biasData == c.layers[0].biasData)
+	testing.expect(t, TestDenseStorage(&a.layers[0]).weightData == TestDenseStorage(&b.layers[0]).weightData && TestDenseStorage(&b.layers[0]).weightData == TestDenseStorage(&c.layers[0]).weightData)
+	testing.expect(t, TestDenseStorage(&a.layers[0]).biasData == TestDenseStorage(&b.layers[0]).biasData && TestDenseStorage(&b.layers[0]).biasData == TestDenseStorage(&c.layers[0]).biasData)
 	for item, i in historyB {
 		testing.expect(t, !item.hasValidation && item.validationLoss == 0 && item.trainingLoss == historyC[i].trainingLoss && historyC[i].hasValidation)
 	}
@@ -101,10 +101,10 @@ HistoryBoundsAndNoEpochs :: proc(t: ^testing.T) {
 	state: u64 = 42
 	sentinel := EpochMetrics{99, 123, 456, true}
 	history := [4]EpochMetrics{sentinel, sentinel, sentinel, sentinel}
-	weight, bias := model.layers[0].weightData, model.layers[0].biasData
+	weight, bias := TestDenseStorage(&model.layers[0]).weightData, TestDenseStorage(&model.layers[0]).biasData
 	_, ok := SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, epochs = 2, history = history[1:2])
 	testing.expect(t, !ok && history == [4]EpochMetrics{sentinel, sentinel, sentinel, sentinel} && indices == [3]int{9, 9, 9} && state == 42)
-	testing.expect(t, model.layers[0].weightData == weight && model.layers[0].biasData == bias)
+	testing.expect(t, TestDenseStorage(&model.layers[0]).weightData == weight && TestDenseStorage(&model.layers[0]).biasData == bias)
 	zero, ok0 := SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, epochs = 0, validationInputs = inputs[:], validationTargets = targets[:], history = history[1:1])
 	expected, evalOk := HistoryRowLoss(&model, inputs[:], targets[:], MSE{})
 	testing.expect(t, ok0 && evalOk && math.abs(zero - expected) < 0.00001 && state == 42 && history == [4]EpochMetrics{sentinel, sentinel, sentinel, sentinel})
@@ -134,7 +134,7 @@ HistoryValidationPreflight :: proc(t: ^testing.T) {
 	state: u64 = 42
 	sentinel := EpochMetrics{99, 123, 456, true}
 	history := [2]EpochMetrics{sentinel, sentinel}
-	weight, bias := model.layers[0].weightData, model.layers[0].biasData
+	weight, bias := TestDenseStorage(&model.layers[0]).weightData, TestDenseStorage(&model.layers[0]).biasData
 	for scenario in 0..<8 {
 		vi, vt := valInputs[:], valTargets[:]
 		loss: SequentialLoss = MSE{}
@@ -150,7 +150,7 @@ HistoryValidationPreflight :: proc(t: ^testing.T) {
 		}
 		_, valid := SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, loss = loss, epochs = 2, optimizer = &adam, validationInputs = vi, validationTargets = vt, history = history[:])
 		testing.expect(t, !valid && state == 42 && indices == [3]int{7, 8, 9} && history == [2]EpochMetrics{sentinel, sentinel})
-		testing.expect(t, adam.step == 0 && first == [3]f32{} && second == [3]f32{} && model.layers[0].weightData == weight && model.layers[0].biasData == bias)
+		testing.expect(t, adam.step == 0 && first == [3]f32{} && second == [3]f32{} && TestDenseStorage(&model.layers[0]).weightData == weight && TestDenseStorage(&model.layers[0]).biasData == bias)
 	}
 }
 
@@ -181,11 +181,11 @@ HistoryCategoricalValidation :: proc(t: ^testing.T) {
         testing.expect(t, splitOk && history[epoch].epoch == epoch + 1 && history[epoch].hasValidation)
         testing.expect(t, math.abs(train - history[epoch].trainingLoss) < 0.00001 && math.abs(f32(sum / 5) - history[epoch].validationLoss) < 0.00001)
     }
-    testing.expect(t, result == history[1].trainingLoss && sa == sb && full.layers[0].weightData == split.layers[0].weightData && full.layers[0].biasData == split.layers[0].biasData)
+    testing.expect(t, result == history[1].trainingLoss && sa == sb && TestDenseStorage(&full.layers[0]).weightData == TestDenseStorage(&split.layers[0]).weightData && TestDenseStorage(&full.layers[0]).biasData == TestDenseStorage(&split.layers[0]).biasData)
     invalid := validationTargets
     invalid[14] = 2
-    beforeWeight, beforeBias := full.layers[0].weightData, full.layers[0].biasData
+    beforeWeight, beforeBias := TestDenseStorage(&full.layers[0]).weightData, TestDenseStorage(&full.layers[0]).biasData
     beforeState, beforeIndices, beforeHistory := sa, ia, history
     _, valid := SequentialFitBatches(&full, inputs[:], targets[:], ia[:], &sa, loss = CCEWithLogits{}, epochs = 2, validationInputs = validationInputs[:], validationTargets = invalid[:], history = history[:])
-    testing.expect(t, !valid && sa == beforeState && ia == beforeIndices && history == beforeHistory && full.layers[0].weightData == beforeWeight && full.layers[0].biasData == beforeBias)
+    testing.expect(t, !valid && sa == beforeState && ia == beforeIndices && history == beforeHistory && TestDenseStorage(&full.layers[0]).weightData == beforeWeight && TestDenseStorage(&full.layers[0]).biasData == beforeBias)
 }

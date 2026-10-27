@@ -32,7 +32,7 @@ DropoutSequentialInferenceAndSeededTraining :: proc(t: ^testing.T) {
 	if ok { for value, i in prediction { testing.expect(t, value == input[i]) } }
 	_, ok = SequentialPredict(&a, input[:], true)
 	_, secondOk = SequentialPredict(&b, input[:], true)
-	testing.expect(t, ok && secondOk && a.randomState == b.randomState && a.layers[0].maskData == b.layers[0].maskData)
+	testing.expect(t, ok && secondOk && a.randomState == b.randomState && TestDropoutStorage(&a.layers[0]).maskData == TestDropoutStorage(&b.layers[0]).maskData)
 }
 
 @(test)
@@ -45,7 +45,7 @@ DropoutSeededFullBatchFit :: proc(t: ^testing.T) {
 	la, oka := SequentialFit(&a, inputs[:], targets[:], epochs = 5, learningRate = 0.01)
 	lb, okb := SequentialFit(&b, inputs[:], targets[:], epochs = 5, learningRate = 0.01)
 	testing.expect(t, oka && okb && la == lb && a.randomState == b.randomState && a.randomState != initial)
-	for layer in ([2]int{0, 3}) { testing.expect(t, a.layers[layer].weightData == b.layers[layer].weightData && a.layers[layer].biasData == b.layers[layer].biasData) }
+	for layer in ([2]int{0, 3}) { testing.expect(t, TestDenseStorage(&a.layers[layer]).weightData == TestDenseStorage(&b.layers[layer]).weightData && TestDenseStorage(&a.layers[layer]).biasData == TestDenseStorage(&b.layers[layer]).biasData) }
 }
 
 @(test)
@@ -91,7 +91,7 @@ DropoutValidationHistoryAndCheckpointResume :: proc(t: ^testing.T) {
 	lr, ok4 := SequentialFitBatches(&restored, inputs[:], targets[:], ir[:], &sr, epochs = 4, optimizer = &adamR)
 	testing.expect(t, ok3 && ok4 && la == lr && sa == sr && a.randomState == restored.randomState && adamA.step == 21 && adamR.step == adamA.step && ma == mr && va == vr)
 	for layer in ([2]int{0, 3}) {
-		testing.expect(t, a.layers[layer].weightData == restored.layers[layer].weightData && a.layers[layer].biasData == restored.layers[layer].biasData)
+		testing.expect(t, TestDenseStorage(&a.layers[layer]).weightData == TestDenseStorage(&restored.layers[layer]).weightData && TestDenseStorage(&a.layers[layer]).biasData == TestDenseStorage(&restored.layers[layer]).biasData)
 	}
 }
 
@@ -128,7 +128,7 @@ DropoutEarlyStoppingRestoresRandomState :: proc(t: ^testing.T) {
 	lr, ok4 := SequentialFitBatches(&restored, inputs[:], targets[:], ir[:], &sr, epochs = 2, optimizer = &ar)
 	lp, ok5 := SequentialFitBatches(&reference, inputs[:], targets[:], ip[:], &sp, epochs = 2, optimizer = &ax)
 	testing.expect(t, ok4 && ok5 && lr == lp && sr == sp && restored.randomState == reference.randomState && ar.step == ax.step && mr == mp && vr == vp)
-	for layer in ([2]int{0, 3}) { testing.expect(t, restored.layers[layer].weightData == reference.layers[layer].weightData && restored.layers[layer].biasData == reference.layers[layer].biasData) }
+	for layer in ([2]int{0, 3}) { testing.expect(t, TestDenseStorage(&restored.layers[layer]).weightData == TestDenseStorage(&reference.layers[layer]).weightData && TestDenseStorage(&restored.layers[layer]).biasData == TestDenseStorage(&reference.layers[layer]).biasData) }
 }
 
 @(test)
@@ -146,10 +146,10 @@ DropoutTrailingLogitsRejection :: proc(t: ^testing.T) {
 		targets := [4]f32{1, 0, 0, 1}
 		indices := [2]int{8, 9}
 		state: u64 = 42
-		rng, weights, bias := model.randomState, model.layers[0].weightData, model.layers[0].biasData
+		rng, weights, bias := model.randomState, TestDenseStorage(&model.layers[0]).weightData, TestDenseStorage(&model.layers[0]).biasData
 		_, fullOk := SequentialFit(&model, inputs[:], targets[:], loss = loss, epochs = 1)
 		_, batchOk := SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, loss = loss, epochs = 1)
-		testing.expect(t, !fullOk && !batchOk && state == 42 && indices == [2]int{8, 9} && model.randomState == rng && model.layers[0].weightData == weights && model.layers[0].biasData == bias)
+		testing.expect(t, !fullOk && !batchOk && state == 42 && indices == [2]int{8, 9} && model.randomState == rng && TestDenseStorage(&model.layers[0]).weightData == weights && TestDenseStorage(&model.layers[0]).biasData == bias)
 	}
 }
 

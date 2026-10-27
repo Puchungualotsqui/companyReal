@@ -18,10 +18,10 @@ MulticlassFullBatchAndSoftmax :: proc(t: ^testing.T) {
 	full, ok1 := SequentialFit(&logits, inputs[:], targets[:], CCEWithLogits{}, epochs = 100, learningRate = 0.3)
 	batched, ok2 := SequentialFitBatches(&batches, inputs[:], targets[:], indices[:], nil, loss = CCEWithLogits{}, epochs = 100, optimizer = SequentialSGD{0.3}, shuffle = false)
 	testing.expect(t, ok0 && ok1 && ok2 && full < before && full < 0.1 && math.abs(full-batched) < 0.000001)
-	for value, i in logits.layers[0].weights.value.data { testing.expect(t, math.abs(value-batches.layers[0].weightData[i]) < 0.000001) }
-	for value, i in logits.layers[0].bias.value.data { testing.expect(t, math.abs(value-batches.layers[0].biasData[i]) < 0.000001) }
-	copy(probabilities.layers[0].weightData[:], logits.layers[0].weightData[:])
-	copy(probabilities.layers[0].biasData[:], logits.layers[0].biasData[:])
+	for value, i in TestDenseStorage(&logits.layers[0]).weights.value.data { testing.expect(t, math.abs(value-TestDenseStorage(&batches.layers[0]).weightData[i]) < 0.000001) }
+	for value, i in TestDenseStorage(&logits.layers[0]).bias.value.data { testing.expect(t, math.abs(value-TestDenseStorage(&batches.layers[0]).biasData[i]) < 0.000001) }
+	copy(TestDenseStorage(&probabilities.layers[0]).weightData[:], TestDenseStorage(&logits.layers[0]).weightData[:])
+	copy(TestDenseStorage(&probabilities.layers[0]).biasData[:], TestDenseStorage(&logits.layers[0]).biasData[:])
 	output, predicted := SequentialPredict(&probabilities, inputs[:])
 	testing.expect(t, predicted && len(output) == 9)
 	if predicted {
@@ -40,8 +40,8 @@ MulticlassFullBatchAndSoftmax :: proc(t: ^testing.T) {
 MulticlassPartialBatchEvaluation :: proc(t: ^testing.T) {
 	model: Sequential(1, 3, 2)
 	testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 3))
-	model.layers[0].weightData = [9]f32{0, 0, 0, 0, 0, 0, 0, 0, 0}
-	model.layers[0].weightData[0] = 1
+	TestDenseStorage(&model.layers[0]).weightData = [9]f32{0, 0, 0, 0, 0, 0, 0, 0, 0}
+	TestDenseStorage(&model.layers[0]).weightData[0] = 1
 	inputs := [5]f32{0, 0, 0, 0, 4}
 	targets := [15]f32{1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0}
 	indices: [5]int
@@ -57,9 +57,9 @@ MulticlassInvalidLabelsAndIncompatibleSoftmax :: proc(t: ^testing.T) {
 	testing.expect(t, SequentialInit(&model, 1, 5) && SequentialAddDense(&model, 3))
 	inputs := [3]f32{1, 2, 3}
 	targets := [9]f32{1, 0, 0, 0, 1, 0, 0, 0.5, 0.4}
-	weights, biases := model.layers[0].weightData, model.layers[0].biasData
+	weights, biases := TestDenseStorage(&model.layers[0]).weightData, TestDenseStorage(&model.layers[0]).biasData
 	_, ok := SequentialFit(&model, inputs[:], targets[:], CCEWithLogits{}, epochs = 2)
-	testing.expect(t, !ok && model.layers[0].weightData == weights && model.layers[0].biasData == biases)
+	testing.expect(t, !ok && TestDenseStorage(&model.layers[0]).weightData == weights && TestDenseStorage(&model.layers[0]).biasData == biases)
 	storage: [2]^core.Node
 	parameters, valid := SequentialParameters(&model, storage[:])
 	testing.expect(t, valid)
@@ -68,7 +68,7 @@ MulticlassInvalidLabelsAndIncompatibleSoftmax :: proc(t: ^testing.T) {
 	indices := [3]int{7, 8, 9}
 	state: u64 = 42
 	_, ok = SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, batchSize = 2, loss = CCEWithLogits{}, epochs = 2, optimizer = &adam)
-	testing.expect(t, !ok && model.layers[0].weightData == weights && model.layers[0].biasData == biases)
+	testing.expect(t, !ok && TestDenseStorage(&model.layers[0]).weightData == weights && TestDenseStorage(&model.layers[0]).biasData == biases)
 	testing.expect(t, adam.step == 0 && first == [6]f32{} && second == [6]f32{} && state == 42 && indices == [3]int{7, 8, 9})
 	targets[8] = 0.5
 	testing.expect(t, SequentialAddActivation(&model, .Softmax))
@@ -78,7 +78,7 @@ MulticlassInvalidLabelsAndIncompatibleSoftmax :: proc(t: ^testing.T) {
 		_, ok = SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, loss = loss, epochs = 1, optimizer = &adam)
 		testing.expect(t, !ok)
 	}
-	testing.expect(t, model.layers[0].weightData == weights && model.layers[0].biasData == biases && adam.step == 0 && state == 42)
+	testing.expect(t, TestDenseStorage(&model.layers[0]).weightData == weights && TestDenseStorage(&model.layers[0]).biasData == biases && adam.step == 0 && state == 42)
 }
 
 @(test)
@@ -104,5 +104,5 @@ MulticlassAdamDeterministic :: proc(t: ^testing.T) {
 	lb, ok3 := SequentialFitBatches(&b, inputs[:], targets[:], ib[:], &sb, loss = CCEWithLogits{}, epochs = 13, optimizer = &adamB)
 	testing.expect(t, ok0 && ok1 && ok2 && ok3 && la < before && la == lb && sa == sb)
 	testing.expect(t, adamA.step == 60 && adamB.step == 60 && ma == mb && va == vb && ma != [6]f32{})
-	testing.expect(t, a.layers[0].weightData == b.layers[0].weightData && a.layers[0].biasData == b.layers[0].biasData)
+	testing.expect(t, TestDenseStorage(&a.layers[0]).weightData == TestDenseStorage(&b.layers[0]).weightData && TestDenseStorage(&a.layers[0]).biasData == TestDenseStorage(&b.layers[0]).biasData)
 }

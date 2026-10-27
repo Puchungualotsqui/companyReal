@@ -48,7 +48,7 @@ EarlyRestoreReferenceAndResume :: proc(t: ^testing.T) {
 			testing.expect(t, loss == bestLoss && loss == history[0].trainingLoss)
 			for i in 0..<ran { testing.expect(t, history[i] == actualHistory[i] && history[i].epoch == i+1 && history[i].hasValidation) }
 			if stopped { testing.expect(t, history[3] == sentinel) }
-			testing.expect(t, sr == sp && sr != sa && restored.layers[0].weightData == reference.layers[0].weightData && restored.layers[0].biasData == reference.layers[0].biasData)
+			testing.expect(t, sr == sp && sr != sa && TestDenseStorage(&restored.layers[0]).weightData == TestDenseStorage(&reference.layers[0]).weightData && TestDenseStorage(&restored.layers[0]).biasData == TestDenseStorage(&reference.layers[0]).biasData)
 			if useAdam { testing.expect(t, ar.step == 3 && ar.step == ax.step && mr == mp && vr == vp && mr != [2]f32{} && vr != [2]f32{}) }
 			checkpointAdam: ^Adam
 			if useAdam { checkpointAdam = &ax }
@@ -60,8 +60,8 @@ EarlyRestoreReferenceAndResume :: proc(t: ^testing.T) {
 			lr, rr := SequentialFitBatches(&restored, inputs[:], targets[:], ir[:], &sr, epochs = 2, optimizer = or)
 			lp, rpOk := SequentialFitBatches(&reference, inputs[:], targets[:], ip[:], &sp, epochs = 2, optimizer = op)
 			testing.expect(t, rr && rpOk && lr == lp && sr == sp && restored.self == rawptr(&restored))
-			testing.expect(t, restored.layers[0].weightData == reference.layers[0].weightData && restored.layers[0].biasData == reference.layers[0].biasData)
-			if useAdam { testing.expect(t, ar.step == ax.step && ar.step == 9 && mr == mp && vr == vp && pr[0] == &restored.layers[0].weights && pr[1] == &restored.layers[0].bias) }
+			testing.expect(t, TestDenseStorage(&restored.layers[0]).weightData == TestDenseStorage(&reference.layers[0]).weightData && TestDenseStorage(&restored.layers[0]).biasData == TestDenseStorage(&reference.layers[0]).biasData)
+			if useAdam { testing.expect(t, ar.step == ax.step && ar.step == 9 && mr == mp && vr == vp && pr[0] == &TestDenseStorage(&restored.layers[0]).weights && pr[1] == &TestDenseStorage(&restored.layers[0]).bias) }
 		}
 	}
 }
@@ -85,7 +85,7 @@ EarlyRestorePreflightAndZeroEpochs :: proc(t: ^testing.T) {
 	originalResult := SequentialEarlyStoppingResult{9, 8, 7, true}
 	result := originalResult
 	stop := SequentialEarlyStopping{2, 0, &result}
-	weights, biases := model.layers[0].weightData, model.layers[0].biasData
+	weights, biases := TestDenseStorage(&model.layers[0]).weightData, TestDenseStorage(&model.layers[0]).biasData
 	snapshot: [1024]u8
 	for &b in snapshot { b = 0xa5 }
 	originalSnapshot := snapshot
@@ -95,7 +95,7 @@ EarlyRestorePreflightAndZeroEpochs :: proc(t: ^testing.T) {
 	if !written || size == 0 { return }
 	_, ok := SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, epochs = 2, optimizer = &adam, validationInputs = inputs[:], validationTargets = targets[:], history = history[:], earlyStopping = &stop, bestSnapshot = snapshot[:size-1])
 	testing.expect(t, !ok && snapshot == originalSnapshot && result == originalResult && history == [2]EpochMetrics{sentinel, sentinel} && indices == [3]int{7, 8, 9} && state == 42)
-	testing.expect(t, model.layers[0].weightData == weights && model.layers[0].biasData == biases && adam.step == 7 && first == [2]f32{1, 2} && second == [2]f32{3, 4})
+	testing.expect(t, TestDenseStorage(&model.layers[0]).weightData == weights && TestDenseStorage(&model.layers[0]).biasData == biases && adam.step == 7 && first == [2]f32{1, 2} && second == [2]f32{3, 4})
 	_, ok = SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, epochs = 2, optimizer = &adam, validationInputs = inputs[:], validationTargets = targets[:], history = history[:], bestSnapshot = snapshot[:])
 	testing.expect(t, !ok && snapshot == originalSnapshot && history == [2]EpochMetrics{sentinel, sentinel} && state == 42 && indices == [3]int{7, 8, 9} && adam.step == 7)
 	copyModel := model
@@ -104,5 +104,5 @@ EarlyRestorePreflightAndZeroEpochs :: proc(t: ^testing.T) {
 	zero, zeroOk := SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, epochs = 0, optimizer = &adam, validationInputs = inputs[:], validationTargets = targets[:], history = history[:], earlyStopping = &stop, bestSnapshot = snapshot[:0])
 	expected, evalOk := HistoryRowLoss(&model, inputs[:], targets[:], MSE{})
 	testing.expect(t, zeroOk && evalOk && math.abs(zero-expected) < 0.00001 && result == SequentialEarlyStoppingResult{} && snapshot == originalSnapshot)
-	testing.expect(t, state == 42 && indices == [3]int{0, 1, 2} && history == [2]EpochMetrics{sentinel, sentinel} && adam.step == 7 && first == [2]f32{1, 2} && second == [2]f32{3, 4} && model.layers[0].weightData == weights && model.layers[0].biasData == biases)
+	testing.expect(t, state == 42 && indices == [3]int{0, 1, 2} && history == [2]EpochMetrics{sentinel, sentinel} && adam.step == 7 && first == [2]f32{1, 2} && second == [2]f32{3, 4} && TestDenseStorage(&model.layers[0]).weightData == weights && TestDenseStorage(&model.layers[0]).biasData == biases)
 }

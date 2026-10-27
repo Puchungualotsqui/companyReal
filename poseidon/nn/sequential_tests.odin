@@ -1,5 +1,6 @@
 package nn
 
+import "../core"
 import "core:math"
 import "core:testing"
 
@@ -15,13 +16,13 @@ SequentialSeedAndInitialization :: proc(t: ^testing.T) {
 	}
 	different := false
 	for layer in ([2]int{0, 2}) {
-		limit := math.sqrt(f32(6) / f32(a.layers[layer].weightShape[0] + a.layers[layer].weightShape[1]))
-		for weight, i in a.layers[layer].weights.value.data {
-			testing.expect(t, weight == b.layers[layer].weightData[i] && math.abs(weight) <= limit)
-			if weight != c.layers[layer].weightData[i] { different = true }
+		limit := math.sqrt(f32(6) / f32(TestDenseStorage(&a.layers[layer]).weightShape[0] + TestDenseStorage(&a.layers[layer]).weightShape[1]))
+		for weight, i in TestDenseStorage(&a.layers[layer]).weights.value.data {
+			testing.expect(t, weight == TestDenseStorage(&b.layers[layer]).weightData[i] && math.abs(weight) <= limit)
+			if weight != TestDenseStorage(&c.layers[layer]).weightData[i] { different = true }
 		}
-		for bias in a.layers[layer].bias.value.data { testing.expect(t, bias == 0) }
-		for weight, i in zero.layers[layer].weights.value.data { testing.expect(t, weight == zeroAgain.layers[layer].weightData[i]) }
+		for bias in TestDenseStorage(&a.layers[layer]).bias.value.data { testing.expect(t, bias == 0) }
+		for weight, i in TestDenseStorage(&zero.layers[layer]).weights.value.data { testing.expect(t, weight == TestDenseStorage(&zeroAgain.layers[layer]).weightData[i]) }
 	}
 	testing.expect(t, different)
 	input := [2]f32{0.3, -0.5}
@@ -71,8 +72,8 @@ SequentialBoundsAndCopy :: proc(t: ^testing.T) {
 SequentialBatchAndBorrowedOutput :: proc(t: ^testing.T) {
 	model: Sequential(2, 2, 3)
 	testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 1) && SequentialAddActivation(&model, .Relu))
-	model.layers[0].weightData[0] = 2
-	model.layers[0].biasData[0] = 1
+	TestDenseStorage(&model.layers[0]).weightData[0] = 2
+	TestDenseStorage(&model.layers[0]).biasData[0] = 1
 	input := [3]f32{-1, 1, 2}
 	output, ok := SequentialPredict(&model, input[:])
 	testing.expect(t, ok && len(output) == 3)
@@ -96,7 +97,7 @@ SequentialBatchAndBorrowedOutput :: proc(t: ^testing.T) {
 SequentialLossesAndErrors :: proc(t: ^testing.T) {
 	model: Sequential(1, 2, 2)
 	testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 1))
-	model.layers[0].weightData[0] = 1
+	TestDenseStorage(&model.layers[0]).weightData[0] = 1
 	input := [2]f32{0, 2}
 	target := [2]f32{0, 1}
 	losses := [4]SequentialLoss{MSE{}, MAE{}, Huber{1}, BCEWithLogits{}}
@@ -105,7 +106,7 @@ SequentialLossesAndErrors :: proc(t: ^testing.T) {
 		value, ok := SequentialFit(&model, input[:], target[:], loss, epochs = 0)
 		testing.expect(t, ok && math.abs(value - expected[i]) < 0.00001)
 	}
-	testing.expect(t, model.layers[0].weightData[0] == 1 && model.layers[0].biasData[0] == 0)
+	testing.expect(t, TestDenseStorage(&model.layers[0]).weightData[0] == 1 && TestDenseStorage(&model.layers[0]).biasData[0] == 0)
 	_, ok := SequentialFit(&model, input[:], target[:1])
 	testing.expect(t, !ok)
 	_, ok = SequentialFit(&model, input[:], target[:], epochs = -1)
@@ -127,8 +128,8 @@ SequentialLossesAndErrors :: proc(t: ^testing.T) {
 	_, ok = SequentialFit(&model, input[:], badTarget[:], BCEWithLogits{}, epochs = 1)
 	testing.expect(t, !ok)
 	for loss in losses {
-		model.layers[0].weightData[0] = 1
-		model.layers[0].biasData[0] = 0
+		TestDenseStorage(&model.layers[0]).weightData[0] = 1
+		TestDenseStorage(&model.layers[0]).biasData[0] = 0
 		before, beforeOk := SequentialFit(&model, input[:], target[:], loss, epochs = 0)
 		after, afterOk := SequentialFit(&model, input[:], target[:], loss, epochs = 1, learningRate = 0.1)
 		testing.expect(t, beforeOk && afterOk && after < before)
@@ -146,7 +147,7 @@ SequentialRepeatedTraining :: proc(t: ^testing.T) {
 	loss1, ok2 := SequentialFit(&a, inputs[:], targets[:], epochs = 70)
 	loss2, ok3 := SequentialFit(&b, inputs[:], targets[:], epochs = 100)
 	testing.expect(t, ok1 && ok2 && ok3 && loss1 < 0.0001 && loss1 == loss2)
-	testing.expect(t, a.layers[0].weightData[0] == b.layers[0].weightData[0] && a.layers[0].biasData[0] == b.layers[0].biasData[0])
+	testing.expect(t, TestDenseStorage(&a.layers[0]).weightData[0] == TestDenseStorage(&b.layers[0]).weightData[0] && TestDenseStorage(&a.layers[0]).biasData[0] == TestDenseStorage(&b.layers[0]).biasData[0])
 }
 
 @(test)
@@ -175,7 +176,7 @@ SequentialNumericalGradient :: proc(t: ^testing.T) {
 	_, ok := SequentialFit(&model, inputs[:], targets[:], epochs = 1, learningRate = 0.01)
 	testing.expect(t, ok)
 	for layer in ([2]int{0, 2}) {
-		item := &model.layers[layer]
+		item := TestDenseStorage(&model.layers[layer])
 		for i in 0..<len(item.weights.value.data) {
 			gradient := item.weightGrad[i]
 			// Restore the pre-update parameter before taking finite differences.
@@ -184,7 +185,7 @@ SequentialNumericalGradient :: proc(t: ^testing.T) {
 		for i in 0..<len(item.bias.value.data) { item.biasData[i] += 0.01 * item.biasGrad[i] }
 	}
 	for layer in ([2]int{0, 2}) {
-		item := &model.layers[layer]
+		item := TestDenseStorage(&model.layers[layer])
 		for i in 0..<len(item.weights.value.data) {
 			original := item.weightData[i]
 			item.weightData[i] = original + 0.001
@@ -204,4 +205,59 @@ SequentialNumericalGradient :: proc(t: ^testing.T) {
 			testing.expect(t, plusOk && minusOk && math.abs(item.biasGrad[i] - (plus - minus) / 0.002) < 0.0002)
 		}
 	}
+}
+
+TestDenseStorage :: proc(item: ^SequentialLayer($maxWidth, $batchCapacity)) -> ^DenseStorage(maxWidth) {
+	return &item.storage.(DenseStorage(maxWidth))
+}
+
+TestDropoutStorage :: proc(item: ^SequentialLayer($maxWidth, $batchCapacity)) -> ^DropoutStorage(maxWidth, batchCapacity) {
+	return &item.storage.(DropoutStorage(maxWidth, batchCapacity))
+}
+
+LegacySequentialLayer :: struct($maxWidth, $batchCapacity: int) {
+	outputData, outputGrad: [maxWidth * batchCapacity]f32,
+	maskData: [maxWidth * batchCapacity]f32,
+	weightData, weightGrad: [maxWidth * maxWidth]f32,
+	biasData, biasGrad: [maxWidth]f32,
+	outputShape, weightShape: [2]int,
+	biasShape: [1]int,
+	output, weights, bias: core.Node,
+	operation: SequentialOperation,
+	layer: Layer,
+	width: int,
+}
+
+@(test)
+SequentialStorageSizeTest :: proc(t: ^testing.T) {
+	// Compare like-for-like slots when the mask or dense storage dominates.
+	testing.expect(t, size_of(DropoutStorage(8, 128)) > size_of(DenseStorage(8)))
+	testing.expect(t, size_of(SequentialLayer(8, 128)) < size_of(LegacySequentialLayer(8, 128)))
+	testing.expect(t, size_of(DenseStorage(64)) > size_of(DropoutStorage(64, 2)))
+	testing.expect(t, size_of(SequentialLayer(64, 2)) < size_of(LegacySequentialLayer(64, 2)))
+	testing.expect(t, SequentialStorageSize(3, 8, 16) == size_of(Sequential(3, 8, 16)))
+	testing.expect(t, SequentialStorageSize(4, 8, 16) > SequentialStorageSize(3, 8, 16))
+}
+
+@(test)
+SequentialStorageWiring :: proc(t: ^testing.T) {
+	model: Sequential(4, 3, 2)
+	ok := SequentialInit(&model, 2, 11) && SequentialAddDense(&model, 3) && SequentialAddActivation(&model, .Relu) && SequentialAddDropout(&model, 0.5) && SequentialAddDense(&model, 1)
+	testing.expect(t, ok)
+	if !ok { return }
+	first := TestDenseStorage(&model.layers[0])
+	last := TestDenseStorage(&model.layers[3])
+	mask := TestDropoutStorage(&model.layers[2])
+	operation := &model.layers[0].operation.(Dense)
+	dropout := &model.layers[2].operation.(Dropout)
+	parameters: [4]^core.Node
+	params, valid := SequentialParameters(&model, parameters[:])
+	testing.expect(t, valid && params[0] == &first.weights && params[1] == &first.bias && params[2] == &last.weights && params[3] == &last.bias)
+	testing.expect(t, operation.weights == &first.weights && operation.bias == &first.bias && &first.weights.value.data[0] == &first.weightData[0] && &first.weights.grad.data[0] == &first.weightGrad[0])
+	testing.expect(t, &dropout.mask[0] == &mask.maskData[0] && dropout.randomState == &model.randomState)
+	input := [4]f32{1, 2, 3, 4}
+	_, predicted := SequentialPredict(&model, input[:2], true)
+	testing.expect(t, predicted && len(dropout.mask) == 3 && &dropout.mask[0] == &mask.maskData[0])
+	_, predicted = SequentialPredict(&model, input[:], true)
+	testing.expect(t, predicted && len(dropout.mask) == 6 && &dropout.mask[0] == &mask.maskData[0] && params[0] == &first.weights)
 }

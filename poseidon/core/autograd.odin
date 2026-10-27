@@ -156,3 +156,97 @@ InputsGradValid :: proc(a, b: ^Node) -> bool {
 ElementwiseGradValid :: proc(node, a, b: ^Node) -> bool {
 	return InputsGradValid(a, b) && SameShape(node.value, a.value) && SameShape(a.value, b.value)
 }
+
+
+
+// GraphFrame is scratch storage for GraphBuild. Its initial contents are ignored.
+GraphFrame :: struct {
+	node: ^Node,
+	next: int,
+}
+
+// GraphBuild constructs an input-before-output order without evaluating nodes.
+// order must have room for every distinct node and stack for the maximum DFS
+// depth. On success, nodes aliases order; on failure, nodes is nil. Scratch may
+// be modified even on failure. The caller owns all nodes and workspace, which
+// must remain valid and must not overlap. The graph must not change during the
+// build or between building and evaluation. Reusing order invalidates prior
+// results, even if the next build fails. Scans take O(V^2) time.
+GraphBuild :: proc(output: ^Node, order: []^Node, stack: []GraphFrame) -> (nodes: []^Node, ok: bool) {
+	if output == nil || len(stack) == 0 { return nil, false }
+	count, depth := 0, 1
+	stack[0] = GraphFrame{output, 0}
+	for depth > 0 {
+		frame := &stack[depth-1]
+		inputs: [2]^Node
+		inputCount := 0
+		switch op in frame.node.op {
+		case nil:
+		case AddOp:
+			inputs = {op.a, op.b}
+			inputCount = 2
+		case MultiplyOp:
+			inputs = {op.a, op.b}
+			inputCount = 2
+		case MatMulOp:
+			inputs = {op.a, op.b}
+			inputCount = 2
+		case BroadcastAddOp:
+			inputs = {op.a, op.b}
+			inputCount = 2
+		case SumAxisOp:
+			inputs[0] = op.input
+			inputCount = 1
+		}
+		if frame.next < inputCount {
+			input := inputs[frame.next]
+			frame.next += 1
+			if input == nil { return nil, false }
+			for i in 0..<depth {
+				if stack[i].node == input { return nil, false }
+			}
+			visited := false
+			for i in 0..<count {
+				if order[i] == input {
+					visited = true
+					break
+				}
+			}
+			if visited { continue }
+			if depth == len(stack) { return nil, false }
+			stack[depth] = GraphFrame{input, 0}
+			depth += 1
+		} else {
+			if count == len(order) { return nil, false }
+			order[count] = frame.node
+			count += 1
+			depth -= 1
+		}
+	}
+	return order[:count], true
+}
+
+// GraphForward evaluates a successful GraphBuild order. The graph and order
+// must remain unchanged since the build; arbitrary lists are not validated.
+// Graph-wide buffers must be disjoint; concurrent mutation is unsupported.
+// Failure may leave earlier nodes evaluated.
+GraphForward :: proc(nodes: []^Node) -> bool {
+	for node in nodes {
+		if !Forward(node) { return false }
+	}
+	return true
+}
+
+// GraphBackward traverses a successful GraphBuild order in reverse. The graph
+// and order must remain unchanged since the build; arbitrary lists are not
+// validated. Values must match the forward pass and remain unchanged.
+// Seed outputs and clear intermediate gradients before each independent pass;
+// retain leaf gradients only when accumulation is intended. Failure may leave
+// gradients partially accumulated.
+GraphBackward :: proc(nodes: []^Node) -> bool {
+	for i := len(nodes) - 1; i >= 0; i -= 1 {
+		if !Backward(nodes[i]) { return false }
+	}
+	return true
+}
+

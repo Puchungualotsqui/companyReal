@@ -9,10 +9,10 @@ RegularizationAnalyticalSteps :: proc(t: ^testing.T) {
 	for useAdam in ([2]bool{false, true}) {
 		model: Sequential(3, 1, 1)
 		testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 1) && SequentialAddActivation(&model, .Relu) && SequentialAddDense(&model, 1))
-		model.layers[0].weightData[0] = 2
-		model.layers[0].biasData[0] = 1
-		model.layers[2].weightData[0] = 3
-		model.layers[2].biasData[0] = 1
+		TestDenseStorage(&model.layers[0]).weightData[0] = 2
+		TestDenseStorage(&model.layers[0]).biasData[0] = 1
+		TestDenseStorage(&model.layers[2]).weightData[0] = 3
+		TestDenseStorage(&model.layers[2]).biasData[0] = 1
 		// x=1 gives prediction 10, target 8: data gradients are 12, 12, 12, 4.
 		// L2 adds 1 and 1.5 to the respective weights, but nothing to biases.
 		storage: [4]^core.Node
@@ -27,7 +27,7 @@ RegularizationAnalyticalSteps :: proc(t: ^testing.T) {
 		value, ok := SequentialFitBatches(&model, input[:], target[:], indices[:], nil, epochs = 1, optimizer = optimizer, shuffle = false, l2 = 0.5)
 		testing.expect(t, ok)
 		gradients := [4]f32{13, 12, 13.5, 4}
-		actual := [4]f32{model.layers[0].weightData[0], model.layers[0].biasData[0], model.layers[2].weightData[0], model.layers[2].biasData[0]}
+		actual := [4]f32{TestDenseStorage(&model.layers[0]).weightData[0], TestDenseStorage(&model.layers[0]).biasData[0], TestDenseStorage(&model.layers[2]).weightData[0], TestDenseStorage(&model.layers[2]).biasData[0]}
 		original := [4]f32{2, 1, 3, 1}
 		for gradient, i in gradients {
 			expected := original[i] - 0.1 * gradient
@@ -37,8 +37,8 @@ RegularizationAnalyticalSteps :: proc(t: ^testing.T) {
 			}
 			testing.expect(t, math.abs(actual[i] - expected) < 0.00001)
 		}
-		testing.expect(t, math.abs(model.layers[0].weightGrad[0] - 13) < 0.00001 && math.abs(model.layers[0].biasGrad[0] - 12) < 0.00001)
-		testing.expect(t, math.abs(model.layers[2].weightGrad[0] - 13.5) < 0.00001 && math.abs(model.layers[2].biasGrad[0] - 4) < 0.00001)
+		testing.expect(t, math.abs(TestDenseStorage(&model.layers[0]).weightGrad[0] - 13) < 0.00001 && math.abs(TestDenseStorage(&model.layers[0]).biasGrad[0] - 12) < 0.00001)
+		testing.expect(t, math.abs(TestDenseStorage(&model.layers[2]).weightGrad[0] - 13.5) < 0.00001 && math.abs(TestDenseStorage(&model.layers[2]).biasGrad[0] - 4) < 0.00001)
 		prediction, predicted := SequentialPredict(&model, input[:])
 		if predicted { testing.expect(t, math.abs(value - (prediction[0] - 8) * (prediction[0] - 8)) < 0.00001) }
 		testing.expect(t, predicted)
@@ -70,7 +70,7 @@ RegularizationDisabledEquivalence :: proc(t: ^testing.T) {
 		la, ok1 := SequentialFitBatches(&a, inputs[:], targets[:], ia[:], &sa, epochs = 3, optimizer = oa, history = ha[:])
 		lb, ok2 := SequentialFitBatches(&b, inputs[:], targets[:], ib[:], &sb, epochs = 3, optimizer = ob, history = hb[:], l2 = 0, earlyStopping = nil)
 		testing.expect(t, ok1 && ok2 && la == lb && sa == sb && ia == ib && ha == hb)
-		testing.expect(t, a.layers[0].weightData == b.layers[0].weightData && a.layers[0].biasData == b.layers[0].biasData)
+		testing.expect(t, TestDenseStorage(&a.layers[0]).weightData == TestDenseStorage(&b.layers[0]).weightData && TestDenseStorage(&a.layers[0]).biasData == TestDenseStorage(&b.layers[0]).biasData)
 		testing.expect(t, ma == mb && va == vb && adamA.step == adamB.step)
 	}
 }
@@ -91,7 +91,7 @@ RegularizationInvalidPreflight :: proc(t: ^testing.T) {
 	history := [2]EpochMetrics{sentinel, sentinel}
 	result := SequentialEarlyStoppingResult{7, 6, 5, true}
 	config := SequentialEarlyStopping{1, 0, &result}
-	weight, bias := model.layers[0].weightData, model.layers[0].biasData
+	weight, bias := TestDenseStorage(&model.layers[0]).weightData, TestDenseStorage(&model.layers[0]).biasData
 	for scenario in 0..<11 {
 		lambda: f32 = 0
 		config = SequentialEarlyStopping{1, 0, &result}
@@ -112,7 +112,7 @@ RegularizationInvalidPreflight :: proc(t: ^testing.T) {
 		_, ok := SequentialFitBatches(&model, input[:], target[:], indices[:], &state, epochs = 2, optimizer = &adam, validationInputs = vi, validationTargets = vt, history = history[:], l2 = lambda, earlyStopping = &config)
 		testing.expect(t, !ok && result == SequentialEarlyStoppingResult{7, 6, 5, true})
 		testing.expect(t, indices == [1]int{99} && state == 42 && history == [2]EpochMetrics{sentinel, sentinel})
-		testing.expect(t, model.layers[0].weightData == weight && model.layers[0].biasData == bias && adam.step == 0 && first == [2]f32{} && second == [2]f32{})
+		testing.expect(t, TestDenseStorage(&model.layers[0]).weightData == weight && TestDenseStorage(&model.layers[0]).biasData == bias && adam.step == 0 && first == [2]f32{} && second == [2]f32{})
 	}
 }
 
@@ -121,8 +121,8 @@ RegularizationEarlyStopping :: proc(t: ^testing.T) {
 	for patience in ([3]int{0, 1, 2}) {
 		model: Sequential(1, 1, 1)
 		testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 1))
-		model.layers[0].weightData[0] = 0
-		model.layers[0].biasData[0] = 1
+		TestDenseStorage(&model.layers[0]).weightData[0] = 0
+		TestDenseStorage(&model.layers[0]).biasData[0] = 1
 		input, target := [1]f32{0}, [1]f32{0}
 		indices: [1]int
 		sentinel := EpochMetrics{99, 123, 456, true}
@@ -153,8 +153,8 @@ RegularizationEarlyStopping :: proc(t: ^testing.T) {
 RegularizationZeroEpochsAndCompletedRun :: proc(t: ^testing.T) {
 	model: Sequential(1, 1, 1)
 	testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 1))
-	model.layers[0].weightData[0] = 2
-	model.layers[0].biasData[0] = 1
+	TestDenseStorage(&model.layers[0]).weightData[0] = 2
+	TestDenseStorage(&model.layers[0]).biasData[0] = 1
 	input, target := [1]f32{1}, [1]f32{0}
 	indices := [1]int{9}
 	state: u64 = 42
@@ -164,7 +164,7 @@ RegularizationZeroEpochsAndCompletedRun :: proc(t: ^testing.T) {
 	config := SequentialEarlyStopping{2, 0, &result}
 	value, ok := SequentialFitBatches(&model, input[:], target[:], indices[:], &state, epochs = 0, validationInputs = input[:], validationTargets = target[:], history = history[:0], l2 = 3, earlyStopping = &config)
 	testing.expect(t, ok && value == 9 && result == SequentialEarlyStoppingResult{} && state == 42 && history == [3]EpochMetrics{sentinel, sentinel, sentinel})
-	testing.expect(t, model.layers[0].weightData[0] == 2 && model.layers[0].biasData[0] == 1)
+	testing.expect(t, TestDenseStorage(&model.layers[0]).weightData[0] == 2 && TestDenseStorage(&model.layers[0]).biasData[0] == 1)
 	value, ok = SequentialFitBatches(&model, input[:], target[:], indices[:], nil, epochs = 2, optimizer = SequentialSGD{0.1}, shuffle = false, validationInputs = input[:], validationTargets = target[:], history = history[:2], l2 = 0.5, earlyStopping = &config)
 	testing.expect(t, ok && !result.stopped && result.epochsRan == 2 && result.bestEpoch == 2 && result.bestValidationLoss == history[1].validationLoss && history[2] == sentinel)
 	prediction, predicted := SequentialPredict(&model, input[:])
@@ -176,8 +176,8 @@ RegularizationZeroEpochsAndCompletedRun :: proc(t: ^testing.T) {
 RegularizationMinDeltaStrictBoundary :: proc(t: ^testing.T) {
 	model: Sequential(1, 1, 1)
 	testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 1))
-	model.layers[0].weightData[0] = 0
-	model.layers[0].biasData[0] = 2
+	TestDenseStorage(&model.layers[0]).weightData[0] = 0
+	TestDenseStorage(&model.layers[0]).biasData[0] = 2
 	input, target := [1]f32{0}, [1]f32{0}
 	indices: [1]int
 	result: SequentialEarlyStoppingResult
@@ -193,8 +193,8 @@ SequentialL2AndEarlyStopping :: proc(t: ^testing.T) {
 	for useAdam in ([2]bool{false, true}) {
 		model: Sequential(1, 1, 1)
 		testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 1))
-		model.layers[0].weightData[0] = 2
-		model.layers[0].biasData[0] = 0
+		TestDenseStorage(&model.layers[0]).weightData[0] = 2
+		TestDenseStorage(&model.layers[0]).biasData[0] = 0
 		storage: [2]^core.Node
 		parameters, valid := SequentialParameters(&model, storage[:])
 		testing.expect(t, valid)
@@ -210,7 +210,7 @@ SequentialL2AndEarlyStopping :: proc(t: ^testing.T) {
 		value, ok := SequentialFitBatches(&model, input[:], target[:], indices[:], nil, epochs = 5, optimizer = optimizer, shuffle = false, validationInputs = input[:], validationTargets = target[:], history = history[:], l2 = 0.5, earlyStopping = &config)
 		testing.expect(t, ok && value == 0 && result.epochsRan == 3 && result.bestEpoch == 1 && result.bestValidationLoss == 0 && result.stopped)
 		testing.expect(t, history[2].epoch == 3 && history[3].epoch == 0 && history[2].trainingLoss == 0 && history[2].validationLoss == 0)
-		testing.expect(t, model.layers[0].weightData[0] < 2 && model.layers[0].biasData[0] == 0)
+		testing.expect(t, TestDenseStorage(&model.layers[0]).weightData[0] < 2 && TestDenseStorage(&model.layers[0]).biasData[0] == 0)
 		if useAdam { testing.expect(t, adam.step == 3 && first[0] > 0 && first[1] == 0) }
 		before := result
 		_, invalid := SequentialFitBatches(&model, input[:], target[:], indices[:], nil, epochs = 1, shuffle = false, l2 = math.nan_f32(), earlyStopping = &config)
@@ -224,11 +224,11 @@ SequentialL2AndEarlyStopping :: proc(t: ^testing.T) {
 SequentialL2SingleStep :: proc(t: ^testing.T) {
 	model: Sequential(1, 1, 1)
 	testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 1))
-	model.layers[0].weightData[0] = 2
-	model.layers[0].biasData[0] = 1
+	TestDenseStorage(&model.layers[0]).weightData[0] = 2
+	TestDenseStorage(&model.layers[0]).biasData[0] = 1
 	input, target := [1]f32{0}, [1]f32{1}
 	indices: [1]int
 	loss, ok := SequentialFitBatches(&model, input[:], target[:], indices[:], nil, epochs = 1, optimizer = SequentialSGD{0.1}, shuffle = false, l2 = 0.5)
-	testing.expect(t, ok && loss == 0 && math.abs(model.layers[0].weightData[0] - 1.9) < 0.000001 && model.layers[0].biasData[0] == 1)
+	testing.expect(t, ok && loss == 0 && math.abs(TestDenseStorage(&model.layers[0]).weightData[0] - 1.9) < 0.000001 && TestDenseStorage(&model.layers[0]).biasData[0] == 1)
 }
 

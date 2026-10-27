@@ -8,14 +8,14 @@ import "core:testing"
 MinibatchWeightedEvaluation :: proc(t: ^testing.T) {
 	model: Sequential(1, 1, 2)
 	testing.expect(t, SequentialInit(&model, 1) && SequentialAddDense(&model, 1))
-	model.layers[0].weightData[0] = 1
+	TestDenseStorage(&model.layers[0]).weightData[0] = 1
 	inputs := [5]f32{0, 0, 0, 0, 5}
 	targets: [5]f32
 	indices: [5]int
 	state: u64 = 123
 	value, ok := SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, epochs = 0)
 	testing.expect(t, ok && math.abs(value - 5) < 0.00001 && state == 123)
-	testing.expect(t, model.layers[0].weightData[0] == 1 && model.layers[0].biasData[0] == 0)
+	testing.expect(t, TestDenseStorage(&model.layers[0]).weightData[0] == 1 && TestDenseStorage(&model.layers[0]).biasData[0] == 0)
 	value, ok = SequentialFitBatches(&model, inputs[:], targets[:], indices[:], nil, batchSize = 1, loss = MAE{}, epochs = 0)
 	testing.expect(t, ok && math.abs(value - 1) < 0.00001)
 }
@@ -33,8 +33,8 @@ MinibatchFullBatchSGD :: proc(t: ^testing.T) {
 	newLoss, newOk := SequentialFitBatches(&b, inputs[:], targets[:], indices[:], nil, epochs = 8, optimizer = SequentialSGD{0.03}, shuffle = false)
 	testing.expect(t, oldOk && newOk && math.abs(oldLoss-newLoss) < 0.000001)
 	for layer in ([2]int{0, 2}) {
-		for v, i in a.layers[layer].weights.value.data { testing.expect(t, math.abs(v-b.layers[layer].weightData[i]) < 0.000001) }
-		for v, i in a.layers[layer].bias.value.data { testing.expect(t, math.abs(v-b.layers[layer].biasData[i]) < 0.000001) }
+		for v, i in TestDenseStorage(&a.layers[layer]).weights.value.data { testing.expect(t, math.abs(v-TestDenseStorage(&b.layers[layer]).weightData[i]) < 0.000001) }
+		for v, i in TestDenseStorage(&a.layers[layer]).bias.value.data { testing.expect(t, math.abs(v-TestDenseStorage(&b.layers[layer]).biasData[i]) < 0.000001) }
 	}
 }
 
@@ -54,8 +54,8 @@ MinibatchShuffleContinuity :: proc(t: ^testing.T) {
 	lc, okc := SequentialFitBatches(&c, inputs[:], targets[:], ic[:], &sc, epochs = 7)
 	testing.expect(t, oka && okb && okb2 && okc && sa != 0 && sa == sb && sb == sc)
 	testing.expect(t, la == lb && lb == lc)
-	testing.expect(t, a.layers[0].weightData[0] == b.layers[0].weightData[0] && b.layers[0].weightData[0] == c.layers[0].weightData[0])
-	testing.expect(t, a.layers[0].biasData[0] == b.layers[0].biasData[0] && b.layers[0].biasData[0] == c.layers[0].biasData[0])
+	testing.expect(t, TestDenseStorage(&a.layers[0]).weightData[0] == TestDenseStorage(&b.layers[0]).weightData[0] && TestDenseStorage(&b.layers[0]).weightData[0] == TestDenseStorage(&c.layers[0]).weightData[0])
+	testing.expect(t, TestDenseStorage(&a.layers[0]).biasData[0] == TestDenseStorage(&b.layers[0]).biasData[0] && TestDenseStorage(&b.layers[0]).biasData[0] == TestDenseStorage(&c.layers[0]).biasData[0])
 }
 
 @(test)
@@ -80,7 +80,7 @@ MinibatchAdamContinuity :: proc(t: ^testing.T) {
 	lb, ok3 := SequentialFitBatches(&b, inputs[:], targets[:], ib[:], &sb, epochs = 3, optimizer = &adamB)
 	testing.expect(t, ok1 && ok3 && adamA.step == 12 && adamB.step == 12 && sa == sb && la == lb)
 	testing.expect(t, ma == mb && va == vb && ma != [2]f32{} && va != [2]f32{})
-	testing.expect(t, a.layers[0].weightData[0] == b.layers[0].weightData[0] && a.layers[0].biasData[0] == b.layers[0].biasData[0])
+	testing.expect(t, TestDenseStorage(&a.layers[0]).weightData[0] == TestDenseStorage(&b.layers[0]).weightData[0] && TestDenseStorage(&a.layers[0]).biasData[0] == TestDenseStorage(&b.layers[0]).biasData[0])
 	_, ok4 := SequentialFitBatches(&b, inputs[:], targets[:], ib[:], &sb, epochs = 0, optimizer = &adamB)
 	testing.expect(t, ok4 && adamB.step == 12 && sa == sb)
 }
@@ -94,7 +94,7 @@ MinibatchValidation :: proc(t: ^testing.T) {
 	targets := [3]f32{0, 1, 0}
 	indices: [3]int
 	state: u64 = 42
-	weight := model.layers[0].weightData
+	weight := TestDenseStorage(&model.layers[0]).weightData
 	_, ok := SequentialFitBatches(&model, inputs[:], targets[:], indices[:], nil, epochs = 1)
 	testing.expect(t, !ok)
 	_, ok = SequentialFitBatches(&model, inputs[:5], targets[:], indices[:], &state)
@@ -141,5 +141,5 @@ MinibatchValidation :: proc(t: ^testing.T) {
 	testing.expect(t, !ok && adam.step == max(u64))
 	_, ok = SequentialFitBatches(&model, inputs[:], targets[:], indices[:], &state, epochs = 0, optimizer = &adam)
 	testing.expect(t, ok && adam.step == max(u64))
-	testing.expect(t, state == 42 && model.layers[0].weightData == weight && model.layers[0].biasData[0] == 0)
+	testing.expect(t, state == 42 && TestDenseStorage(&model.layers[0]).weightData == weight && TestDenseStorage(&model.layers[0]).biasData[0] == 0)
 }

@@ -47,13 +47,13 @@ CheckpointFileRoundTripAndResume :: proc(t: ^testing.T) {
 	size2, encoded2 := CheckpointWrite(&restored, &adamR, sr, actual[:])
 	testing.expect(t, encoded2 && size2 == size)
 	if encoded2 && size2 == size { for byte, i in expected[:size] { testing.expect(t, byte == actual[i]) } }
-	testing.expect(t, pr == [4]^core.Node{&restored.layers[0].weights, &restored.layers[0].bias, &restored.layers[2].weights, &restored.layers[2].bias})
+	testing.expect(t, pr == [4]^core.Node{&TestDenseStorage(&restored.layers[0]).weights, &TestDenseStorage(&restored.layers[0]).bias, &TestDenseStorage(&restored.layers[2]).weights, &TestDenseStorage(&restored.layers[2]).bias})
 	lr, ok3 := SequentialFitBatches(&restored, inputs[:], targets[:], ir[:], &sr, epochs = 4, optimizer = &adamR)
 	testing.expect(t, ok3 && la == lr && sa == sr && adamA.step == 21 && adamR.step == adamA.step)
 	testing.expect(t, ma == mr && va == vr && ma != [13]f32{} && va != [13]f32{})
 	for layer in ([2]int{0, 2}) {
-		for value, i in reference.layers[layer].weights.value.data { testing.expect(t, value == restored.layers[layer].weightData[i]) }
-		for value, i in reference.layers[layer].bias.value.data { testing.expect(t, value == restored.layers[layer].biasData[i]) }
+		for value, i in TestDenseStorage(&reference.layers[layer]).weights.value.data { testing.expect(t, value == TestDenseStorage(&restored.layers[layer]).weightData[i]) }
+		for value, i in TestDenseStorage(&reference.layers[layer]).bias.value.data { testing.expect(t, value == TestDenseStorage(&restored.layers[layer]).biasData[i]) }
 	}
 }
 
@@ -63,7 +63,7 @@ CheckpointFileExpectLoadFailure :: proc(t: ^testing.T, path: string, scratch: []
 	ok := CheckpointTestModel(&destination)
 	testing.expect(t, ok)
 	if !ok { return }
-	storage := [4]^core.Node{&destination.layers[0].bias, &destination.layers[0].bias, &destination.layers[0].bias, &destination.layers[0].bias}
+	storage := [4]^core.Node{&TestDenseStorage(&destination.layers[0]).bias, &TestDenseStorage(&destination.layers[0]).bias, &TestDenseStorage(&destination.layers[0]).bias, &TestDenseStorage(&destination.layers[0]).bias}
 	m, v: [17]f32
 	for i in 0..<17 { m[i] = 12; v[i] = 13 }
 	target := Adam{storage[:], m[:], v[:], 99, 0.25, 0.5, 0.75, 0.1}
@@ -75,7 +75,7 @@ CheckpointFileExpectLoadFailure :: proc(t: ^testing.T, path: string, scratch: []
 	testing.expect(t, !CheckpointLoadFile(&destination, &target, &shuffle, path, scratch, storage[:parameterCount], m[:firstCount], v[:secondCount]))
 	testing.expect(t, shuffle == 1234 && target.step == 99 && target.learningRate == 0.25 && target.beta1 == 0.5 && target.beta2 == 0.75 && target.epsilon == 0.1)
 	testing.expect(t, len(target.parameters) == 4 && len(target.firstMoment) == 17 && len(target.secondMoment) == 17 && &target.parameters[0] == &storage[0] && &target.firstMoment[0] == &m[0] && &target.secondMoment[0] == &v[0])
-	for item in storage { testing.expect(t, item == &destination.layers[0].bias) }
+	for item in storage { testing.expect(t, item == &TestDenseStorage(&destination.layers[0]).bias) }
 	for value in m { testing.expect(t, value == 12) }
 	for value in v { testing.expect(t, value == 13) }
 	afterSize, afterOk := CheckpointWrite(&destination, nil, shuffle, after[:])
