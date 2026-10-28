@@ -747,8 +747,7 @@ FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int) -> bool {
 		y := field.maskY
 		index := field.maskIndex
 		for budget^ > 0 && x < worldWidth {
-			mask[index] =
-				WorldTileWalkableAt(w, index, x, y, walkType, field.unitKingdom, true) ? 1 : 0
+			mask[index] = WorldTileWalkableAt(w, index, walkType, field.unitKingdom, true) ? 1 : 0
 			budget^ -= 1
 			index += 1
 			y += 1
@@ -1060,8 +1059,6 @@ WorldTileWalkable :: proc(w: ^World, x, y: int, unitType: UnitType, unitKingdom:
 	return WorldTileWalkableAt(
 		w,
 		wrappedX*worldHeight+wrappedY,
-		wrappedX,
-		wrappedY,
 		unitType,
 		unitKingdom,
 		true,
@@ -1077,8 +1074,6 @@ WorldTileWalkableBase :: proc(w: ^World, x, y: int, unitType: UnitType, unitKing
 	return WorldTileWalkableAt(
 		w,
 		wrappedX*worldHeight+wrappedY,
-		wrappedX,
-		wrappedY,
 		unitType,
 		unitKingdom,
 		false,
@@ -1089,7 +1084,7 @@ WorldTileWalkableBase :: proc(w: ^World, x, y: int, unitType: UnitType, unitKing
 // arrays in index order without paying for a modulo per lookup.
 WorldTileWalkableAt :: proc(
 	w: ^World,
-	index, x, y: int,
+	index: int,
 	unitType: UnitType,
 	unitKingdom: int,
 	checkConstruction: bool,
@@ -1112,7 +1107,7 @@ WorldTileWalkableAt :: proc(
 		case .None:
 		}
 	}
-	tile := w.ground[x][y].type
+	tile := w.groundStorage[index].type
 	if UnitValidTileType(unitType, tile) do return true
 	if TileIsDeepWater(tile) && UnitCanCrossWater(w, unitType, unitKingdom) {
 		return true
@@ -1147,7 +1142,8 @@ WorldStepCost :: proc(w: ^World, x, y: int) -> int {
 	if WorldTileHasPath(w, x, y) do return PATH_STEP_COST
 	wrappedX := WorldWrapCoordinate(x, int(w.maxX))
 	wrappedY := WorldWrapCoordinate(y, int(w.maxY))
-	cost := TILE_DEFS[w.ground[wrappedX][wrappedY].type].moveCost
+	index := wrappedX*int(w.maxY)+wrappedY
+	cost := TILE_DEFS[w.groundStorage[index].type].moveCost
 	return max(1, int(math.round(f32(PLAIN_STEP_COST)*cost)))
 }
 
@@ -1157,7 +1153,7 @@ UnitMoveSpeed :: proc(w: ^World, unitSlot: int, baseSpeed: f32) -> f32 {
 	if w.units[unitSlot].effects[.NoWater] do speed *= 0.7
 	tileX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
 	tileY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
-	tile := w.ground[tileX][tileY].type
+	tile := w.groundStorage[tileX*int(w.maxY)+tileY].type
 	if WorldTileHasPath(w, tileX, tileY) {
 		speed *= PATH_SPEED_MULTIPLIER*KingdomTechPathSpeedMultiplier(w, w.units[unitSlot].kingdome)
 	} else {

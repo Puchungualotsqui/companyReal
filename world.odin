@@ -69,7 +69,8 @@ World :: struct {
 	eventBag: bit_set[EnvironmentEventKind],
 	terrainRevision: u64,
 	scarTiles: [dynamic]i32,
-	ground: [dynamic][dynamic]Tile,
+	ground: [dynamic][]Tile, // Column views into groundStorage
+	groundStorage: []Tile, // Flat x-major tile storage
 	terrainChunkRevisions: []u64,
 	terrainChunkCountX, terrainChunkCountY: int,
 	spatial: SpatialIndex,
@@ -114,9 +115,11 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.eventMajorTimer = 450
 	w.eventCataclysmTimer = 900
 	if !FogInit(w) do return false
-	w.ground = make([dynamic][dynamic]Tile, maxX)
-	for &x in w.ground {
-		x = make([dynamic]Tile, maxY)
+	nodeCount := int(maxX)*int(maxY)
+	w.groundStorage = make([]Tile, nodeCount)
+	w.ground = make([dynamic][]Tile, maxX)
+	for x in 0..<int(maxX) {
+		w.ground[x] = w.groundStorage[x*int(maxY):(x+1)*int(maxY)]
 	}
 	w.terrainChunkCountX = (int(maxX)+TERRAIN_CHUNK_TILES-1)/TERRAIN_CHUNK_TILES
 	w.terrainChunkCountY = (int(maxY)+TERRAIN_CHUNK_TILES-1)/TERRAIN_CHUNK_TILES
@@ -129,7 +132,6 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.particleRandom = settings.seed*0x9E3779B97F4A7C15+0x9E37
 	if !SpatialIndexInit(w) do return false
 	if !WorldNavigationInit(w) do return false
-	nodeCount := int(maxX)*int(maxY)
 	w.tileBuilding = make([]int, nodeCount)
 	for i in 0..<nodeCount {
 		w.tileBuilding[i] = -1
@@ -170,9 +172,7 @@ WorldDeinit :: proc(w: ^World) {
 	WorldNavigationDeinit(w)
 	delete(w.scarTiles)
 	delete(w.terrainChunkRevisions)
-	for &x in w.ground {
-		delete(x)
-	}
+	delete(w.groundStorage)
 	delete(w.ground)
 	FogDeinit(w)
 	BloodDeinit(w)
@@ -216,6 +216,10 @@ ClimateKind :: enum u8 {
 	Volcanic,
 }
 
+WorldTileAt :: #force_inline proc(w: ^World, x, y: int) -> ^Tile {
+	return &w.groundStorage[x*int(w.maxY)+y]
+}
+
 WorldTileSet :: proc(w: ^World, x, y: int, tileType: TileType) -> bool {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
@@ -223,8 +227,9 @@ WorldTileSet :: proc(w: ^World, x, y: int, tileType: TileType) -> bool {
 
 	wrappedX := WorldWrapCoordinate(x, worldWidth)
 	wrappedY := WorldWrapCoordinate(y, worldHeight)
-	if w.ground[wrappedX][wrappedY].type != tileType {
-		w.ground[wrappedX][wrappedY].type = tileType
+	tile := WorldTileAt(w, wrappedX, wrappedY)
+	if tile.type != tileType {
+		tile.type = tileType
 		w.navigationRevision += 1
 		w.pathRevision += 1
 		w.terrainRevision += 1

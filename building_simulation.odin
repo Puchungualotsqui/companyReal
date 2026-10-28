@@ -363,9 +363,15 @@ TownBuilderStartBuilding :: proc(w: ^World, kingdomSlot, townSlot: int, building
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	kind := BuildingKindOf(buildingType)
 	if !(kind in town.unlockedBuildings) do return false
-	if town.siteFailUntil[kind] > w.simulationTime do return false
 	cost := BuildingWoodCost(kind)*KingdomTechBuildingKindCostMultiplier(w, kingdomSlot, kind)
 	if town.wood < cost do return false
+
+	if x, y, ok := TownTakePooledSite(w, kingdomSlot, townSlot, buildingType); ok {
+		town.siteFailUntil[kind] = 0
+		return TownStartConstruction(w, kingdomSlot, townSlot, kind, x, y)
+	}
+	if town.siteFailUntil[kind] > w.simulationTime do return false
+
 	x, y, found := TownFindBuildingSite(w, kingdomSlot, townSlot, buildingType)
 	if !found {
 		town.siteFailUntil[kind] = w.simulationTime+TOWN_SITE_FAIL_COOLDOWN
@@ -373,6 +379,46 @@ TownBuilderStartBuilding :: proc(w: ^World, kingdomSlot, townSlot: int, building
 	}
 	town.siteFailUntil[kind] = 0
 	return TownStartConstruction(w, kingdomSlot, townSlot, kind, x, y)
+}
+
+TownSiteUsable :: proc(
+	w: ^World,
+	kingdomSlot, townSlot, x, y: int,
+	buildingType: BuildingType,
+) -> bool {
+	width, height := BuildingTileSize(buildingType)
+	if width <= 0 || height <= 0 do return false
+	if !TownBuildingInArea(w, kingdomSlot, townSlot, x, y, buildingType) do return false
+	if !TownBuildingValid(w, kingdomSlot, x, y, buildingType) do return false
+	_, accessible := TownPlacementAccess(w, kingdomSlot, x, y, width, height)
+	if !accessible do return false
+	kind := BuildingKindOf(buildingType)
+	if CombatSiteOverlaps(w, x, y, kind) do return false
+	if TownConstructionSiteOverlaps(w, x, y, kind) do return false
+	return true
+}
+
+TownTakePooledSite :: proc(
+	w: ^World,
+	kingdomSlot, townSlot: int,
+	buildingType: BuildingType,
+) -> (int, int, bool) {
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	kind := BuildingKindOf(buildingType)
+	for index := 0; index < town.sitePoolCount; {
+		candidate := town.sitePool[index]
+		if candidate.kind != kind {
+			index += 1
+			continue
+		}
+		// Drop the entry before validating; it is stale if it no longer fits.
+		town.sitePoolCount -= 1
+		town.sitePool[index] = town.sitePool[town.sitePoolCount]
+		if TownSiteUsable(w, kingdomSlot, townSlot, candidate.x, candidate.y, buildingType) {
+			return candidate.x, candidate.y, true
+		}
+	}
+	return 0, 0, false
 }
 
 // Orders a building: the town pays for it and gets a construction site that
@@ -846,7 +892,7 @@ TownBuildingOverTile :: proc(w: ^World, kingdom, x, y: int, bType: BuildingType)
 	}
 	for tileX in x..<x+width {
 		for tileY in y..<y+height {
-			if !BuildingValidTileTypeForKingdom(w, kingdom, bType, w.ground[tileX][tileY].type) {
+			if !BuildingValidTileTypeForKingdom(w, kingdom, bType, WorldTileAt(w, tileX, tileY).type) {
 				return false
 			}
 		}
@@ -910,6 +956,10 @@ TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType
 		score += f32(min(access, 12))*0.12
 		if !found || score > bestScore {
 			bestX, bestY, bestScore, found = x, y, score, true
+		}
+		if town.sitePoolCount < TOWN_SITE_POOL_CAPACITY {
+			town.sitePool[town.sitePoolCount] = TownSiteCandidate{kind = kind, x = x, y = y}
+			town.sitePoolCount += 1
 		}
 		considered += 1
 		if considered >= TOWN_BUILDING_SITE_CANDIDATES do break
@@ -1016,7 +1066,7 @@ TownPlacementScore :: proc(w: ^World, kingdomSlot, townSlot, x, y, width, height
 	fertility: f32 = 0
 	for tileX in x..<x+width {
 		for tileY in y..<y+height {
-			fertility += TILE_DEFS[w.ground[tileX][tileY].type].food
+			fertility += TILE_DEFS[WorldTileAt(w, tileX, tileY).type].food
 		}
 	}
 	fertility /= f32(max(width*height, 1))
@@ -1035,7 +1085,7 @@ BuildingFarmlandOutput :: proc(w: ^World, buildingSlot: int) -> f32 {
 	fertility: f32 = 0
 	for tileX in x..<x+width {
 		for tileY in y..<y+height {
-			fertility += TILE_DEFS[w.ground[tileX][tileY].type].food
+			fertility += TILE_DEFS[WorldTileAt(w, tileX, tileY).type].food
 		}
 	}
 	fertility /= f32(max(width*height, 1))

@@ -208,7 +208,7 @@ WorldUnitAnimationUpdate :: proc(w: ^World, deltaTime: f32) {
 UnitFootstepTint :: proc(w: ^World, x, y: f32) -> rl.Color {
 	tileX := WorldWrapCoordinate(int(x), int(w.maxX))
 	tileY := WorldWrapCoordinate(int(y), int(w.maxY))
-	switch w.ground[tileX][tileY].type {
+	switch WorldTileAt(w, tileX, tileY).type {
 	case .Ocean, .Lake, .River:
 		return rl.Color{118, 184, 206, 150}
 	case .Ice:
@@ -230,7 +230,7 @@ UnitFootstepTint :: proc(w: ^World, x, y: f32) -> rl.Color {
 UnitTileIsWater :: proc(w: ^World, x, y: f32) -> bool {
 	tileX := WorldWrapCoordinate(int(x), int(w.maxX))
 	tileY := WorldWrapCoordinate(int(y), int(w.maxY))
-	return TileIsWater(w.ground[tileX][tileY].type)
+	return TileIsWater(WorldTileAt(w, tileX, tileY).type)
 }
 
 UnitFootstepDust :: proc(w: ^World, unitSlot: int, kind: UnitKind, x, y: f32) {

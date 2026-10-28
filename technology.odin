@@ -387,7 +387,7 @@ UnitOnWaterTile :: proc(w: ^World, unitSlot: int) -> bool {
 		case .None:
 		}
 	}
-	tile := w.ground[tileX][tileY].type
+	tile := WorldTileAt(w, tileX, tileY).type
 	return TileIsDeepWater(tile)
 }
 
@@ -414,7 +414,7 @@ TownIsCoastal :: proc(w: ^World, kingdom, townSlot: int) -> bool {
 	for x in max(minX, 0)..=min(maxX, int(w.maxX)-1) {
 		for y in max(minY, 0)..=min(maxY, int(w.maxY)-1) {
 			if !TownPointInArea(w, kingdom, townSlot, x, y) do continue
-			tile := w.ground[x][y].type
+			tile := WorldTileAt(w, x, y).type
 			if TileIsDeepWater(tile) {
 				coastal = true
 				break

@@ -89,7 +89,7 @@ FishingFlotillaFx :: proc(w: ^World, kingdom, townSlot: int) {
 	for _ in 0..<8 {
 		x := WorldWrapCoordinate(town.x+int((PRandom(w)-0.5)*28), int(w.maxX))
 		y := WorldWrapCoordinate(town.y+int((PRandom(w)-0.5)*28), int(w.maxY))
-		tile := w.ground[x][y].type
+		tile := WorldTileAt(w, x, y).type
 		if !TileIsDeepWater(tile) do continue
 		ParticleSpawn(w, Particle{
 			x = f32(x)+PRandom(w),

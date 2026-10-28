@@ -216,12 +216,20 @@ TOWN_CONSTRUCTION_CAPACITY :: 10
 // search dozens of times in the same simulation step.
 TOWN_CONSTRUCTION_STARTS_PER_TICK :: 1
 // Towns take turns planning so a large realm does not run site searches for
-// every town in the same simulation step.
-TOWN_CONSTRUCTION_ATTEMPT_INTERVAL :: 4
+// every town in the same simulation step. Measured in town updates, which are
+// themselves sliced, so the real-time cadence stays four simulation ticks.
+TOWN_CONSTRUCTION_ATTEMPT_INTERVAL :: 4/TOWN_UPDATE_SLICES
 // A town that cannot place anything waits before sampling the whole area again.
 TOWN_CONSTRUCTION_FAIL_COOLDOWN :: 2.0
 // A kind with no valid site is skipped for a while instead of resampling.
 TOWN_SITE_FAIL_COOLDOWN :: 2.0
+
+TOWN_SITE_POOL_CAPACITY :: 32
+
+TownSiteCandidate :: struct {
+	kind: BuildingKind,
+	x, y: int,
+}
 
 TownDistrict :: struct {
 	x, y:   int,
@@ -240,6 +248,8 @@ Town :: struct {
 	constructionProgress: f32,
 	constructionFailUntil: f32, // Skip all site searches until this time
 	siteFailUntil: [BuildingKind]f32, // Per-kind retry time after a failed search
+	sitePool:      [TOWN_SITE_POOL_CAPACITY]TownSiteCandidate, // Reusable valid sites
+	sitePoolCount: int,
 	constructions: [TOWN_CONSTRUCTION_CAPACITY]ConstructionSite,
 	builders, waterCollectors, farmers, villagers: int,
 	buildersBySlice:         [UNIT_UPDATE_SLICES]int, // Last sample per unit slice

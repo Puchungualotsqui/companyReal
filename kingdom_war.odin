@@ -925,7 +925,7 @@ UnitFindPatrolTarget :: proc(w: ^World, unitSlot, kingdomSlot, townSlot, radius,
 			// outside the patrol area after a chase or an escort.
 			if distance > f32(radius*radius) && distance >= townDistance do continue
 		}
-		if !UnitValidTileType(w.units[unitSlot].type, w.ground[x][y].type) do continue
+		if !UnitValidTileType(w.units[unitSlot].type, WorldTileAt(w, x, y).type) do continue
 		if WorldTileOccupied(w, x, y) do continue
 		return x, y, true
 	}
@@ -1046,7 +1046,7 @@ UnitFindEscortPosition :: proc(w: ^World, warriorSlot, targetSlot, sequence: int
 		y := WorldWrapCoordinate(targetY+offsetsY[direction], worldHeight)
 		unit := &w.units[warriorSlot]
 		if !TownPointInDefenseArea(w, unit.kingdome, unit.town, f32(x)+0.5, f32(y)+0.5) do continue
-		if !UnitValidTileType(unit.type, w.ground[x][y].type) do continue
+		if !UnitValidTileType(unit.type, WorldTileAt(w, x, y).type) do continue
 		if WorldTileOccupied(w, x, y) do continue
 		return x, y, true
 	}

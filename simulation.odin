@@ -10,6 +10,8 @@ WORLD_MAX_FRAME_DELTA :: 0.25
 // so speeds and cooldowns stay the same while per-tick CPU drops by the same
 // factor. Rendering interpolates across the full slice window.
 UNIT_UPDATE_SLICES :: 2
+// Towns use the same model for economy, growth and construction progress.
+TOWN_UPDATE_SLICES :: 2
 TOWN_ALARM_AREA_FACTOR :: 1.25
 WORLD_DAY_LENGTH_SECONDS :: 7*60.0
 
@@ -357,8 +359,9 @@ WorldWeatherUpdate :: proc(w: ^World, deltaTime: f32) {
 
 		tileX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
 		tileY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
-		climate := w.ground[tileX][tileY].climate
-		tile := w.ground[tileX][tileY].type
+		tileData := WorldTileAt(w, tileX, tileY)
+		climate := tileData.climate
+		tile := tileData.type
 		coldTile := climate == .Boreal || tile == .Tundra || tile == .Ice
 		hotTile := climate == .Arid || climate == .Volcanic || tile == .Desert || tile == .Ash
 
@@ -1414,7 +1417,14 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 	ProfilerEnd(stamp)
 }
 
+TownUpdateSliceOf :: proc(kingdomSlot, townSlot: int) -> int {
+	key := u64(kingdomSlot*TOWN_CAPACITY+townSlot)*0x9E3779B97F4A7C15
+	return int(key>>32)%TOWN_UPDATE_SLICES
+}
+
 WorldKingdomUpdate :: proc(w: ^World, deltaTime: f32) {
+	townSlice := int(w.simulationTime/TOWN_SIMULATION_STEP)%TOWN_UPDATE_SLICES
+	townDelta := deltaTime*f32(TOWN_UPDATE_SLICES)
 	stamp := ProfilerBegin("Kingdom:Towns")
 	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdomSlot] do continue
@@ -1426,7 +1436,9 @@ WorldKingdomUpdate :: proc(w: ^World, deltaTime: f32) {
 				w.kingdoms[kingdomSlot].coastalTownCount += 1
 			}
 			ProfilerEnd(coastalStamp)
-			KingdomTownUpdate(w, kingdomSlot, townSlot, deltaTime)
+			if TownUpdateSliceOf(kingdomSlot, townSlot) == townSlice {
+				KingdomTownUpdate(w, kingdomSlot, townSlot, townDelta)
+			}
 		}
 	}
 	ProfilerEnd(stamp)
@@ -1687,8 +1699,9 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 
 	if town.builders > 0 {
 		town.constructionProgress += f32(town.builders)*deltaTime
-		tick := int(w.simulationTime/TOWN_SIMULATION_STEP)
-		phase := (tick+kingdomSlot*TOWN_CAPACITY+townSlot)%TOWN_CONSTRUCTION_ATTEMPT_INTERVAL
+		updateTick := int(w.simulationTime/TOWN_SIMULATION_STEP)/TOWN_UPDATE_SLICES
+		phase := (updateTick+kingdomSlot*TOWN_CAPACITY+townSlot)%
+			TOWN_CONSTRUCTION_ATTEMPT_INTERVAL
 		if w.simulationTime >= town.constructionFailUntil &&
 			town.constructionProgress >= 3 && phase == 0 {
 			constructionStamp := ProfilerBegin("Town:Construction")
@@ -1753,7 +1766,7 @@ TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 		x := WorldWrapCoordinate(centerX+offsetX, worldWidth)
 		for offsetY in -radius..=radius {
 			y := WorldWrapCoordinate(centerY+offsetY, worldHeight)
-			tileType := w.ground[x][y].type
+			tileType := WorldTileAt(w, x, y).type
 			if TILE_DEFS[tileType].water <= 0 do continue
 			deltaX := f32(offsetX)
 			deltaY := f32(offsetY)
@@ -1783,7 +1796,7 @@ TownSpawnCitizen :: proc(w: ^World, kingdomSlot, townSlot: int, role: UnitType) 
 		x := town.x+1+offsetX
 		y := town.y+4
 		if x < 0 || y < 0 || x >= worldWidth || y >= worldHeight do continue
-		if !UnitValidTileType(role, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
+		if !UnitValidTileType(role, WorldTileAt(w, x, y).type) || WorldTileOccupied(w, x, y) do continue
 		if WorldUnitAtTile(w, x, y) do continue
 		if unitSlot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdomSlot, townSlot); ok {
 			return unitSlot
@@ -1798,7 +1811,7 @@ TownSpawnCitizen :: proc(w: ^World, kingdomSlot, townSlot: int, role: UnitType) 
 		for x in minX..=maxX {
 			for y in minY..=maxY {
 				if x >= town.x && x < town.x+4 && y >= town.y && y < town.y+4 do continue
-				if !UnitValidTileType(role, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
+				if !UnitValidTileType(role, WorldTileAt(w, x, y).type) || WorldTileOccupied(w, x, y) do continue
 				if WorldUnitAtTile(w, x, y) do continue
 				if unitSlot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdomSlot, townSlot); ok {
 					return unitSlot
@@ -1817,7 +1830,7 @@ TownSpawnCitizen :: proc(w: ^World, kingdomSlot, townSlot: int, role: UnitType) 
 	for x in minX..=maxX {
 		for y in minY..=maxY {
 			if !TownPointInArea(w, kingdomSlot, townSlot, x, y) do continue
-			if !UnitValidTileType(role, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
+			if !UnitValidTileType(role, WorldTileAt(w, x, y).type) || WorldTileOccupied(w, x, y) do continue
 			if WorldUnitAtTile(w, x, y) do continue
 			if unitSlot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdomSlot, townSlot); ok {
 				return unitSlot

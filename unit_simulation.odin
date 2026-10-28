@@ -169,7 +169,7 @@ UnitFindExplorationTarget :: proc(w: ^World, unitSlot, journey: int) -> (int, in
 
 		x := WorldWrapCoordinate(unitX+deltaX, worldWidth)
 		y := WorldWrapCoordinate(unitY+deltaY, worldHeight)
-		if !UnitValidTileType(unitType, w.ground[x][y].type) do continue
+		if !UnitValidTileType(unitType, WorldTileAt(w, x, y).type) do continue
 		if WorldTileOccupied(w, x, y) do continue
 		if isPlayer && FogTileExplored(w, x, y) do continue
 		return x, y, true
@@ -1009,7 +1009,7 @@ UnitFindRoamingTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int, 
 		if deltaX*deltaX+deltaY*deltaY > radiusSquared do continue
 		x := WorldWrapCoordinate(centerX+deltaX, worldWidth)
 		y := WorldWrapCoordinate(centerY+deltaY, worldHeight)
-		if !UnitValidTileType(unit.type, w.ground[x][y].type) do continue
+		if !UnitValidTileType(unit.type, WorldTileAt(w, x, y).type) do continue
 		if WorldTileOccupied(w, x, y) do continue
 		return x, y, true
 	}
@@ -1132,7 +1132,7 @@ UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomS
 		index := w.navigationQueue[head]
 		head += 1
 		x, y := index/worldHeight, index%worldHeight
-		if UnitValidTileType(unit.type, w.ground[x][y].type) &&
+		if UnitValidTileType(unit.type, w.groundStorage[index].type) &&
 			WorldTileWalkable(w, x, y, unit.type, unit.kingdome) && !WorldTileOccupied(w, x, y) {
 			if kingdomSlot >= 0 {
 				town := &w.kingdoms[kingdomSlot].towns[townSlot]
@@ -1144,7 +1144,7 @@ UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomS
 					if !fallbackFound do fallbackX, fallbackY, fallbackFound = x, y, true
 				}
 			} else {
-				if w.ground[x][y].type == .River do return x, y, true
+				if w.groundStorage[index].type == .River do return x, y, true
 				for direction in 0..<4 {
 					sourceX, sourceY := x, y
 					switch direction {
@@ -1155,7 +1155,7 @@ UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomS
 					}
 					sourceX = WorldWrapCoordinate(sourceX, worldWidth)
 					sourceY = WorldWrapCoordinate(sourceY, worldHeight)
-					tileType := w.ground[sourceX][sourceY].type
+					tileType := w.groundStorage[sourceX*worldHeight+sourceY].type
 					if TileIsWater(tileType) || tileType == .Marsh do return x, y, true
 				}
 			}
@@ -1213,7 +1213,7 @@ UnitFindFarmlandTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int,
 				if offsetX >= 0 && offsetX < farmWidth && offsetY >= 0 && offsetY < farmHeight do continue
 				x := WorldWrapCoordinate(farmX+offsetX, worldWidth)
 				y := WorldWrapCoordinate(farmY+offsetY, worldHeight)
-				if !UnitValidTileType(w.units[unitSlot].type, w.ground[x][y].type) do continue
+				if !UnitValidTileType(w.units[unitSlot].type, WorldTileAt(w, x, y).type) do continue
 				deltaX := WorldShortestWrappedDelta(f32(x)-unitX, f32(worldWidth))
 				deltaY := WorldShortestWrappedDelta(f32(y)-unitY, f32(worldHeight))
 				distanceSquared := deltaX*deltaX + deltaY*deltaY
@@ -1310,7 +1310,7 @@ UnitFindTownReturnPoint :: proc(w: ^World, kingdomSlot, townSlot: int, unitSlot 
 					max(max(townY-y, 0), y-(townY+3)) > radius {
 					continue
 				}
-				if !UnitValidTileType(Villager{}, w.ground[x][y].type) || WorldTileOccupied(w, x, y) do continue
+				if !UnitValidTileType(Villager{}, WorldTileAt(w, x, y).type) || WorldTileOccupied(w, x, y) do continue
 				return x, y, true
 			}
 		}
