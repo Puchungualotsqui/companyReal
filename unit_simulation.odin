@@ -198,7 +198,8 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			state^ = .Returning
 		}
 	}
-	if state^ == .Roaming && TownConstructionCount(w, kingdomSlot, townSlot) > 0 {
+	if state^ == .Roaming && w.units[unitSlot].decisionReady &&
+		TownConstructionCount(w, kingdomSlot, townSlot) > 0 {
 		if site, x, y, found := TownFindConstructionForBuilder(
 			w,
 			unitSlot,
@@ -212,7 +213,8 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			state^ = .ToConstruction
 		}
 	}
-	if state^ == .Roaming && town.wood < TownWoodGatherTarget(w, kingdomSlot, townSlot) {
+	if state^ == .Roaming && w.units[unitSlot].decisionReady &&
+		town.wood < TownWoodGatherTarget(w, kingdomSlot, townSlot) {
 		if x, y, decoration, found := UnitFindResourceTarget(w, unitSlot, builder.taskSequence); found {
 			builder.targetDecoration = decoration
 			w.units[unitSlot].pathTargetX = x
@@ -390,7 +392,7 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			}
 		} else if w.units[unitSlot].cooldown > 0 {
 			w.units[unitSlot].cooldown -= deltaTime
-		} else {
+		} else if w.units[unitSlot].decisionReady {
 			if x, y, found := UnitFindWaterTarget(w, unitSlot, collector.taskSequence); found {
 				w.units[unitSlot].pathTargetX = x
 				w.units[unitSlot].pathTargetY = y
@@ -474,13 +476,15 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	if state^ == .Roaming && !farmer.workedToday {
 		if w.units[unitSlot].cooldown > 0 {
 			w.units[unitSlot].cooldown -= deltaTime
-		} else if x, y, found := UnitFindFarmlandTarget(w, unitSlot, farmer.workDay); found {
-			w.units[unitSlot].pathTargetX = x
-			w.units[unitSlot].pathTargetY = y
-			w.units[unitSlot].pathReady = false
-			state^ = .Traveling
-		} else {
-			w.units[unitSlot].cooldown = 5
+		} else if w.units[unitSlot].decisionReady {
+			if x, y, found := UnitFindFarmlandTarget(w, unitSlot, farmer.workDay); found {
+				w.units[unitSlot].pathTargetX = x
+				w.units[unitSlot].pathTargetY = y
+				w.units[unitSlot].pathReady = false
+				state^ = .Traveling
+			} else {
+				w.units[unitSlot].cooldown = 5
+			}
 		}
 	}
 
@@ -748,25 +752,54 @@ UnitUpdatePacificSafety :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> boo
 	if state, converting := unit.state.(StateConverting); converting && state.inside do return false
 	if UnitHome(w, unitSlot) < 0 do UnitReleaseHome(w, unitSlot)
 	if unit.sleepInside && UnitInsideHome(w, unitSlot) < 0 do UnitSleepWake(w, unitSlot)
-	alarm := WorldTownExists(w, unit.kingdome, unit.town) &&
-		w.kingdoms[unit.kingdome].towns[unit.town].alarmActive
-	// The town alarm already covers the whole area. Only pay for a per-unit
-	// neighbourhood scan when the town is actually threatened.
+	alarm := false
+	threatX, threatY := 0, 0
+	if WorldTownExists(w, unit.kingdome, unit.town) {
+		town := &w.kingdoms[unit.kingdome].towns[unit.town]
+		alarm = town.alarmActive
+		threatX, threatY = town.threatX, town.threatY
+	}
+	// Only civilians close to the reported threat need their own scan. The
+	// rest of an alarmed town keeps working instead of scanning every update.
+	threatened := false
+	if alarm {
+		deltaX := WorldShortestWrappedDelta(unit.x-(f32(threatX)+0.5), f32(w.maxX))
+		deltaY := WorldShortestWrappedDelta(unit.y-(f32(threatY)+0.5), f32(w.maxY))
+		radius := f32(FLEE_THREAT_RADIUS*2)
+		threatened = deltaX*deltaX+deltaY*deltaY <= radius*radius
+	}
+	fleeing := false
+	if pacificState, pacific := unit.state.(StatePacific); pacific {
+		fleeing = pacificState == .Fleeing
+	}
+	if fleeing && !unit.decisionReady {
+		// Keep moving along the planned route; the next decision tick refreshes
+		// threats and clearance.
+		if !UnitFollowEscapePath(w, unitSlot, deltaTime) do return true
+		UnitSleepWake(w, unitSlot)
+		return false
+	}
 	enemy := -1
-	if alarm do enemy = UnitFindNearbyEnemy(w, unitSlot, FLEE_THREAT_RADIUS)
-	if !alarm && enemy < 0 {
-		if state, pacific := unit.state.(StatePacific); pacific {
-			if state == .Hiding {
+	if threatened && unit.decisionReady {
+		enemy = UnitFindNearbyEnemy(w, unitSlot, FLEE_THREAT_RADIUS)
+	}
+	if !threatened {
+		if pacificState, pacific := unit.state.(StatePacific); pacific {
+			if pacificState == .Hiding {
 				hour := WorldTimeOfDay(w)
 				if hour < 6 || hour >= 22+unit.sleepOffsetHours {
 					unit.state = StatePacific.Sleeping
 				} else {
 					UnitSleepWake(w, unitSlot)
 				}
-			} else if state == .Fleeing {
+			} else if pacificState == .Fleeing {
 				UnitSleepWake(w, unitSlot)
 			}
 		}
+		return false
+	}
+	if !unit.decisionReady {
+		// Defer the alarm reaction to the next decision tick.
 		return false
 	}
 	if _, converting := unit.state.(StateConverting); converting do UnitConversionCancel(w, unitSlot)
@@ -823,7 +856,11 @@ UnitUpdatePacificSafety :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> boo
 		state^ = .Fleeing
 		unit.pathReady = false
 	}
-	if enemy >= 0 do UnitFleeEnemy(w, unitSlot, enemy, deltaTime)
+	if enemy >= 0 {
+		UnitFleeEnemy(w, unitSlot, enemy, deltaTime)
+	} else if state^ == .Fleeing {
+		UnitFollowEscapePath(w, unitSlot, deltaTime)
+	}
 	return true
 }
 
@@ -1044,6 +1081,9 @@ COLLECTOR_SEARCH_MAX_EXPANSIONS :: 4096
 // Civilian errands are local. A capped search keeps one trapped unit from
 // running a world-sized A* while still covering any normal town approach.
 CIVILIAN_PATH_EXPANSIONS :: 4096
+// Civilians share one staggered decision clock for threat scans, construction
+// assignment and work targeting. Movement still runs every update.
+CIVILIAN_DECISION_INTERVAL :: 1.0
 
 UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomSlot := -1, townSlot := -1) -> (int, int, bool) {
 	worldWidth := int(w.maxX)

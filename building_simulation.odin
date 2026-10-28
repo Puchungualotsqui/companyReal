@@ -363,10 +363,15 @@ TownBuilderStartBuilding :: proc(w: ^World, kingdomSlot, townSlot: int, building
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	kind := BuildingKindOf(buildingType)
 	if !(kind in town.unlockedBuildings) do return false
+	if town.siteFailUntil[kind] > w.simulationTime do return false
 	cost := BuildingWoodCost(kind)*KingdomTechBuildingKindCostMultiplier(w, kingdomSlot, kind)
 	if town.wood < cost do return false
 	x, y, found := TownFindBuildingSite(w, kingdomSlot, townSlot, buildingType)
-	if !found do return false
+	if !found {
+		town.siteFailUntil[kind] = w.simulationTime+TOWN_SITE_FAIL_COOLDOWN
+		return false
+	}
+	town.siteFailUntil[kind] = 0
 	return TownStartConstruction(w, kingdomSlot, townSlot, kind, x, y)
 }
 
@@ -856,7 +861,10 @@ TownBuildingValid :: proc(w: ^World, kingdom, x, y: int, bType: BuildingType) ->
 // A full scan evaluates thousands of tiles and checks every construction/
 // combat site for each one. Sampling a few dozen candidates keeps placement
 // varied while making the search orders of magnitude cheaper.
-TOWN_BUILDING_SITE_SAMPLES :: 96
+TOWN_BUILDING_SITE_SAMPLES :: 48
+// The best of a few valid candidates is enough for a town layout; scoring all
+// of them mostly repeats placement checks in dense areas.
+TOWN_BUILDING_SITE_CANDIDATES :: 8
 
 TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType: BuildingType) -> (int, int, bool) {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
@@ -882,6 +890,7 @@ TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType
 	bestX, bestY := 0, 0
 	bestScore: f32 = -1e30
 	found := false
+	considered := 0
 	for sample in 0..<TOWN_BUILDING_SITE_SAMPLES {
 		rollX := WorldNoiseHash(sample, int(kind)+1, seed+0x51D)
 		rollY := WorldNoiseHash(sample, int(kind)+2, seed+0x51E)
@@ -902,6 +911,8 @@ TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType
 		if !found || score > bestScore {
 			bestX, bestY, bestScore, found = x, y, score, true
 		}
+		considered += 1
+		if considered >= TOWN_BUILDING_SITE_CANDIDATES do break
 	}
 	return bestX, bestY, found
 }

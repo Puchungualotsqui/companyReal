@@ -1251,15 +1251,22 @@ WorldTownAlarmUpdate :: proc(w: ^World) {
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdom].townUsed[townSlot] do continue
 			town := &w.kingdoms[kingdom].towns[townSlot]
-			town.alarmActive = TownHasNearbyEnemy(w, kingdom, townSlot)
+			town.alarmActive, town.threatX, town.threatY = TownHasNearbyEnemy(
+				w,
+				kingdom,
+				townSlot,
+			)
 		}
 	}
 }
 
-TownHasNearbyEnemy :: proc(w: ^World, kingdom, townSlot: int) -> bool {
-	if !WorldTownExists(w, kingdom, townSlot) do return false
+TownHasNearbyEnemy :: proc(
+	w: ^World,
+	kingdom, townSlot: int,
+) -> (found: bool, threatX, threatY: int) {
+	if !WorldTownExists(w, kingdom, townSlot) do return false, 0, 0
 	chunkSize := w.spatial.chunkSize
-	if chunkSize <= 0 || w.spatial.chunksX <= 0 || w.spatial.chunksY <= 0 do return false
+	if chunkSize <= 0 || w.spatial.chunksX <= 0 || w.spatial.chunksY <= 0 do return false, 0, 0
 	width, height := BuildingTileSize(TownHall{})
 
 	for circleIndex in 0..<TownAreaCircleCount(w, kingdom, townSlot) {
@@ -1281,12 +1288,14 @@ TownHasNearbyEnemy :: proc(w: ^World, kingdom, townSlot: int) -> bool {
 					dy := math.abs(WorldShortestWrappedDelta(f32(int(w.units.y[unit]))-centerY, f32(w.maxY)))
 					dx = max(0, dx-f32(width-1)*0.5)
 					dy = max(0, dy-f32(height-1)*0.5)
-					if dx*dx+dy*dy <= radius*radius do return true
+					if dx*dx+dy*dy <= radius*radius {
+						return true, int(w.units.x[unit]), int(w.units.y[unit])
+					}
 				}
 			}
 		}
 	}
-	return false
+	return false, 0, 0
 }
 
 UnitUpdateSlice :: proc(w: ^World) -> int {
@@ -1300,6 +1309,7 @@ UnitUpdateSliceOf :: proc(unitSlot: int) -> int {
 }
 
 WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
+	SpatialCacheBeginTick(w)
 	stamp := ProfilerBegin("Unit:Housing")
 	WorldHousingUpdate(w)
 	ProfilerEnd(stamp)
@@ -1327,6 +1337,16 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		if UnitUpdateSliceOf(unitSlot) != slice do continue
 		w.units.previousX[unitSlot] = w.units.x[unitSlot]
 		w.units.previousY[unitSlot] = w.units.y[unitSlot]
+		w.units.decisionTimer[unitSlot] -= unitDelta
+		w.units.decisionReady[unitSlot] = w.units.decisionTimer[unitSlot] <= 0
+		if w.units.decisionReady[unitSlot] {
+			jitter := 0.75+WorldNoiseHash(
+				unitSlot,
+				int(w.simulationTime/TOWN_SIMULATION_STEP),
+				0xD3C1,
+			)*0.5
+			w.units.decisionTimer[unitSlot] = CIVILIAN_DECISION_INTERVAL*jitter
+		}
 		unitKind := UnitKindOf(w.units[unitSlot].type)
 		profileIndex := -1
 		if profiler.enabled do profileIndex = profiler.unitKindIndex[unitKind]

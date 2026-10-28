@@ -408,16 +408,18 @@ WarriorFindNearbyHostiles :: proc(w: ^World, unitSlot: int, state: ^StateWarrior
 			chunkY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
 			chunk := chunkX*w.spatial.chunksY+chunkY
 
-			for otherSlot := w.spatial.unitHead[chunk]; otherSlot >= 0;
-				otherSlot = w.spatial.unitNext[otherSlot] {
-				if otherSlot == unitSlot do continue
-				if !WarriorCanTargetUnit(w, unitSlot, state, otherSlot) do continue
-				deltaX := WorldShortestWrappedDelta(w.units.x[otherSlot]-unitX, worldWidth)
-				deltaY := WorldShortestWrappedDelta(w.units.y[otherSlot]-unitY, worldHeight)
-				distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-				if distance < unitDistance {
-					unitDistance = distance
-					nearUnit = otherSlot
+			if SpatialChunkHasEnemy(w, chunk, unit.kingdome) {
+				for otherSlot := w.spatial.unitHead[chunk]; otherSlot >= 0;
+					otherSlot = w.spatial.unitNext[otherSlot] {
+					if otherSlot == unitSlot do continue
+					if !WarriorCanTargetUnit(w, unitSlot, state, otherSlot) do continue
+					deltaX := WorldShortestWrappedDelta(w.units.x[otherSlot]-unitX, worldWidth)
+					deltaY := WorldShortestWrappedDelta(w.units.y[otherSlot]-unitY, worldHeight)
+					distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
+					if distance < unitDistance {
+						unitDistance = distance
+						nearUnit = otherSlot
+					}
 				}
 			}
 

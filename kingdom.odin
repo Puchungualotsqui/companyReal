@@ -220,6 +220,8 @@ TOWN_CONSTRUCTION_STARTS_PER_TICK :: 1
 TOWN_CONSTRUCTION_ATTEMPT_INTERVAL :: 4
 // A town that cannot place anything waits before sampling the whole area again.
 TOWN_CONSTRUCTION_FAIL_COOLDOWN :: 2.0
+// A kind with no valid site is skipped for a while instead of resampling.
+TOWN_SITE_FAIL_COOLDOWN :: 2.0
 
 TownDistrict :: struct {
 	x, y:   int,
@@ -236,7 +238,8 @@ Town :: struct {
 	growthCooldown, growthInterval, growthRate, growthSpeed: f32,
 	growthBatch, growthBatchBonus, growthPending: int,
 	constructionProgress: f32,
-	constructionFailUntil: f32, // Skip site searches until this time
+	constructionFailUntil: f32, // Skip all site searches until this time
+	siteFailUntil: [BuildingKind]f32, // Per-kind retry time after a failed search
 	constructions: [TOWN_CONSTRUCTION_CAPACITY]ConstructionSite,
 	builders, waterCollectors, farmers, villagers: int,
 	buildersBySlice:         [UNIT_UPDATE_SLICES]int, // Last sample per unit slice
@@ -266,6 +269,7 @@ Town :: struct {
 	districtCount: int,
 	fusionCount: int,
 	alarmActive: bool,
+	threatX, threatY: int, // Position of the nearest hostile that raised the alarm
 	unlockedBuildings: bit_set[BuildingKind],
 	unlockedUnits: bit_set[UnitKind],
 	buildingCounts: [BuildingKind]int,

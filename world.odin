@@ -276,6 +276,9 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.unitUsed[i] = true
 	UnitTypeInit(w, i, type)
 	w.units[i].sleepOffsetHours = WorldNoiseHash(i, kingdomSlot+townSlot*101, u64(i)+401)-0.5
+	w.units[i].decisionTimer =
+		WorldNoiseHash(i, 7, 0xD3C1)*CIVILIAN_DECISION_INTERVAL
+	w.units[i].decisionReady = false
 	w.units[i].burning = 0
 	w.units[i].effects = [UnitEffects]bool{
 		.NoHome = false,

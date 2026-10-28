@@ -327,10 +327,12 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 	return found
 }
 
-FLEE_SEARCH_STEPS :: 6
+FLEE_SEARCH_STEPS :: 4
 FLEE_SEARCH_CAPACITY :: 1+2*FLEE_SEARCH_STEPS*(FLEE_SEARCH_STEPS+1)
 FLEE_THREAT_RADIUS :: 16
-FLEE_THREAT_CAPACITY :: 16
+// Clearance only needs the immediate threats; the explicit one plus the four
+// nearest cover every escape decision without scoring the whole neighbourhood.
+FLEE_CLEARANCE_ENEMIES :: 5
 
 UnitNearbyEnemy :: struct {
 	slot: int,
@@ -375,6 +377,7 @@ UnitCollectNearbyEnemies :: proc(w: ^World, unitSlot: int, radius: f32, enemies:
 		for oy in 0..<countY {
 			cy := WorldWrapCoordinate(firstY+oy, w.spatial.chunksY)
 			chunk := cx*w.spatial.chunksY+cy
+			if !SpatialChunkHasEnemy(w, chunk, unit.kingdome) do continue
 			for other := w.spatial.unitHead[chunk]; other >= 0; other = w.spatial.unitNext[other] {
 				if other == unitSlot || !w.unitUsed[other] || w.units[other].health <= 0 do continue
 				if !KingdomAtWar(w, unit.kingdome, w.units[other].kingdome) || UnitHiddenInside(w, other) do continue
@@ -504,7 +507,7 @@ UnitFleeEnemy :: proc(w: ^World, unitSlot, enemySlot: int, deltaTime: f32) -> bo
 		return false
 	}
 	// Include the explicit threat even if outside the local radius or crowded out.
-	threats: [FLEE_THREAT_CAPACITY+1]UnitNearbyEnemy
+	threats: [FLEE_CLEARANCE_ENEMIES]UnitNearbyEnemy
 	threats[0] = UnitNearbyEnemy{enemySlot, 0}
 	count := 1+UnitCollectNearbyEnemies(w, unitSlot, FLEE_THREAT_RADIUS, threats[1:])
 	enemies := threats[:count]
@@ -549,6 +552,33 @@ UnitFleeEnemy :: proc(w: ^World, unitSlot, enemySlot: int, deltaTime: f32) -> bo
 	}
 	if unit.pathIndex >= len(unit.path) do unit.pathReady = false
 	return true
+}
+
+// Follows an escape route between decision ticks without re-collecting threats
+// or rebuilding clearance. Returns true when the route is exhausted.
+UnitFollowEscapePath :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
+	unit := &w.units[unitSlot]
+	if !unit.pathFound || unit.pathIndex >= len(unit.path) do return true
+	remaining := UnitMoveSpeed(w, unitSlot, UnitDefaultSpeed(unit.type))*deltaTime
+	for remaining > 0 && unit.pathIndex < len(unit.path) {
+		next := unit.path[unit.pathIndex]
+		nx, ny := next/int(w.maxY), next%int(w.maxY)
+		reached, blocked, left := UnitStepTowards(
+			w,
+			unitSlot,
+			f32(nx)+0.5,
+			f32(ny)+0.5,
+			remaining,
+		)
+		if blocked {
+			unit.pathReady = false
+			return false
+		}
+		remaining = left
+		if !reached do return false
+		unit.pathIndex += 1
+	}
+	return unit.pathIndex >= len(unit.path)
 }
 
 // One breadth-first pass per target town builds a shared direction field.

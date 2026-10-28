@@ -481,6 +481,8 @@ Unit :: struct {
 	burning: f32,
 	cooldown: f32,
 	poisonRemaining: f32,
+	decisionTimer: f32, // Seconds until the next expensive AI decision
+	decisionReady: bool, // Set once per update by WorldUnitUpdate
 	type: UnitType,
 	kingdome: int,
 	town: int,

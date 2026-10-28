@@ -22,6 +22,11 @@ SpatialIndex :: struct {
 	fireNext:         [FIRE_CAPACITY]int,
 	firePrev:         [FIRE_CAPACITY]int,
 	fireChunk:        [FIRE_CAPACITY]int,
+	presentKingdoms:  []u8, // Kingdom bitmask with visible units per chunk
+	presentStamp:     []u32, // Tick the presence bitmask was computed for
+	presentRevision:  u32,
+	enemyMask:        [KINGDOMS_CAPACITY]u8,
+	enemyMaskRevision: u32,
 }
 
 SpatialIndexInit :: proc(w: ^World) -> bool {
@@ -35,6 +40,9 @@ SpatialIndexInit :: proc(w: ^World) -> bool {
 	w.spatial.buildingHead = make([]int, chunkCount)
 	w.spatial.decorationHead = make([]int, chunkCount)
 	w.spatial.fireHead = make([]int, chunkCount)
+	w.spatial.presentKingdoms = make([]u8, chunkCount)
+	w.spatial.presentStamp = make([]u32, chunkCount)
+	w.spatial.presentRevision = 1
 	for i in 0..<chunkCount {
 		w.spatial.unitHead[i] = -1
 		w.spatial.buildingHead[i] = -1
@@ -68,6 +76,8 @@ SpatialIndexDeinit :: proc(w: ^World) {
 	delete(w.spatial.buildingHead)
 	delete(w.spatial.decorationHead)
 	delete(w.spatial.fireHead)
+	delete(w.spatial.presentKingdoms)
+	delete(w.spatial.presentStamp)
 }
 
 SpatialChunkIndex :: proc(w: ^World, x, y: int) -> int {
@@ -94,6 +104,7 @@ SpatialUnitLink :: proc(w: ^World, unitSlot, chunk: int) {
 	if head >= 0 do w.spatial.unitPrev[head] = unitSlot
 	w.spatial.unitHead[chunk] = unitSlot
 	w.spatial.unitChunk[unitSlot] = chunk
+	if len(w.spatial.presentStamp) > 0 do w.spatial.presentStamp[chunk] = 0
 }
 
 SpatialUnitUnlink :: proc(w: ^World, unitSlot: int) {
@@ -110,6 +121,7 @@ SpatialUnitUnlink :: proc(w: ^World, unitSlot: int) {
 	w.spatial.unitNext[unitSlot] = -1
 	w.spatial.unitPrev[unitSlot] = -1
 	w.spatial.unitChunk[unitSlot] = -1
+	if len(w.spatial.presentStamp) > 0 do w.spatial.presentStamp[chunk] = 0
 }
 
 SpatialUnitInsert :: proc(w: ^World, unitSlot: int) {
@@ -127,6 +139,57 @@ SpatialUnitMove :: proc(w: ^World, unitSlot: int) {
 	if chunk < 0 || chunk == w.spatial.unitChunk[unitSlot] do return
 	SpatialUnitUnlink(w, unitSlot)
 	SpatialUnitLink(w, unitSlot, chunk)
+}
+
+// The presence bitmask is refreshed lazily once per simulation tick. Any unit
+// entering or leaving a chunk invalidates only that chunk.
+SpatialCacheBeginTick :: proc(w: ^World) {
+	w.spatial.presentRevision += 1
+	if w.spatial.presentRevision == 0 {
+		for &stamp in w.spatial.presentStamp do stamp = 0
+		w.spatial.presentRevision = 1
+	}
+	w.spatial.enemyMaskRevision = 0
+}
+
+SpatialChunkPresent :: proc(w: ^World, chunk: int) -> u8 {
+	if chunk < 0 || chunk >= len(w.spatial.presentKingdoms) do return 0
+	if w.spatial.presentStamp[chunk] == w.spatial.presentRevision {
+		return w.spatial.presentKingdoms[chunk]
+	}
+	mask: u8
+	for slot := w.spatial.unitHead[chunk]; slot >= 0; slot = w.spatial.unitNext[slot] {
+		if !w.unitUsed[slot] || w.units.health[slot] <= 0 do continue
+		if UnitHiddenInside(w, slot) do continue
+		kingdom := w.units.kingdome[slot]
+		if kingdom >= 0 && kingdom < KINGDOMS_CAPACITY do mask |= u8(1)<<u8(kingdom)
+	}
+	w.spatial.presentKingdoms[chunk] = mask
+	w.spatial.presentStamp[chunk] = w.spatial.presentRevision
+	return mask
+}
+
+SpatialEnemyMask :: proc(w: ^World, kingdom: int) -> u8 {
+	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY do return 0
+	if w.spatial.enemyMaskRevision != w.spatial.presentRevision {
+		for k in 0..<KINGDOMS_CAPACITY {
+			mask: u8
+			if w.kingdomUsed[k] {
+				for other in 0..<KINGDOMS_CAPACITY {
+					if other != k && w.kingdomUsed[other] && KingdomAtWar(w, k, other) {
+						mask |= u8(1)<<u8(other)
+					}
+				}
+			}
+			w.spatial.enemyMask[k] = mask
+		}
+		w.spatial.enemyMaskRevision = w.spatial.presentRevision
+	}
+	return w.spatial.enemyMask[kingdom]
+}
+
+SpatialChunkHasEnemy :: proc(w: ^World, chunk: int, kingdom: int) -> bool {
+	return SpatialChunkPresent(w, chunk) & SpatialEnemyMask(w, kingdom) != 0
 }
 
 // Buildings are linked by their top-left tile. Queries widen the chunk range
