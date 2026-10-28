@@ -115,18 +115,34 @@ WorldCameraFocus :: proc(w: ^World) -> (f32, f32) {
 }
 
 WorldViewUpdate :: proc(w: ^World, view: ^WorldView, deltaTime: f32) {
+	stamp := ProfilerBegin("View:Renderer")
 	WorldRendererUpdate(w, &view.renderer)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("View:Camera")
 	WorldCameraUpdate(w, &view.camera, deltaTime)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("View:Focus")
 	WorldFocusCameraUpdate(view, deltaTime)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("View:Milestone")
 	WorldMilestoneCameraUpdate(w, view, deltaTime)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("View:UI")
 	WorldUIUpdate(w, view, view.camera)
+	ProfilerEnd(stamp)
 }
 
 
 WorldRendererUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
+	stamp := ProfilerBegin("View:TerrainUpdate")
 	TerrainRendererUpdate(w, &renderer.terrain)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("View:BloodUpdate")
 	BloodRenderUpdate(w, renderer)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("View:FogUpdate")
 	FogRenderUpdate(w, renderer)
+	ProfilerEnd(stamp)
 }
 
 WorldRendererDeinit :: proc(renderer: ^WorldRenderer) {
@@ -212,6 +228,7 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 	lastCopyY := WorldFloor((camera.target.y+halfViewHeight)/f32(worldHeight))
 
 	rl.BeginMode2D(camera)
+	stamp := ProfilerBegin("Render:Terrain")
 	if camera.zoom >= TERRAIN_CHUNK_MIN_ZOOM {
 		TerrainRenderChunks(
 			w,
@@ -233,6 +250,8 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 			lastCopyY,
 		)
 	}
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Render:Blood")
 	BloodRenderGround(
 		w,
 		renderer,
@@ -242,8 +261,14 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 		firstCopyY,
 		lastCopyY,
 	)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Render:Hazards")
 	WorldRenderHazards(w, renderer, camera)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Render:Scars")
 	WorldRenderTerrainScars(w, camera)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Render:Sprites")
 	WorldRenderSprites(
 		w,
 		renderer,
@@ -253,19 +278,27 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 		firstCopyY,
 		lastCopyY,
 	)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Render:Fog")
 	FogRenderDraw(w, renderer, firstCopyX, lastCopyX, firstCopyY, lastCopyY)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Render:Environment")
 	WorldRenderEnvironmentEvent(w, camera)
+	ProfilerEnd(stamp)
 	rl.EndMode2D()
 
 	ambient := WorldAmbientColor(w)
 	if ambient[0] < 255 || ambient[1] < 255 || ambient[2] < 255 {
+		stamp = ProfilerBegin("Render:Ambient")
 		rl.BeginBlendMode(.MULTIPLIED)
 		rl.DrawRectangle(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight(), ambient)
 		rl.EndBlendMode()
+		ProfilerEnd(stamp)
 	}
 
 	night := WorldNightAmount(w)
 	if night > 0.02 && renderer.sprites.glow.id != 0 && len(renderer.lights) > 0 {
+		stamp = ProfilerBegin("Render:Lights")
 		glowSource := rl.Rectangle{0, 0, f32(renderer.sprites.glow.width), f32(renderer.sprites.glow.height)}
 		rl.BeginMode2D(camera)
 		rl.BeginBlendMode(.ADDITIVE)
@@ -281,9 +314,12 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 		}
 		rl.EndBlendMode()
 		rl.EndMode2D()
+		ProfilerEnd(stamp)
 	}
 
+	stamp = ProfilerBegin("Render:Weather")
 	WorldRenderWeather(w)
+	ProfilerEnd(stamp)
 }
 
 // Multiplied over the frame: white at noon, warm at dawn/dusk, deep blue at night.

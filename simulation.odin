@@ -4,6 +4,8 @@ import "core:math"
 import rl "vendor:raylib"
 
 TOWN_SIMULATION_STEP :: 0.25
+// A long render/load frame must not trigger a burst of catch-up ticks.
+WORLD_MAX_FRAME_DELTA :: 0.25
 TOWN_ALARM_AREA_FACTOR :: 1.25
 WORLD_DAY_LENGTH_SECONDS :: 7*60.0
 
@@ -1134,36 +1136,79 @@ GROWTH_MAX_SPAWN_PER_TICK :: 32
 
 WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 	if deltaTime <= 0 do return
+	stepTime := min(deltaTime, WORLD_MAX_FRAME_DELTA)
+	simStamp := ProfilerBegin("Sim")
+	defer ProfilerEnd(simStamp)
+
 	// Particles and gore run on the render clock so they stay smooth between
 	// the coarse town simulation ticks.
-	WorldParticleUpdate(w, deltaTime)
-	w.simulationAccumulator += deltaTime
+	stamp := ProfilerBegin("Sim:Particles")
+	WorldParticleUpdate(w, stepTime)
+	ProfilerEnd(stamp)
+
+	w.simulationAccumulator += stepTime
 	for w.simulationAccumulator >= TOWN_SIMULATION_STEP {
+		tickStamp := ProfilerBegin("Sim:Tick")
 		w.simulationTime += TOWN_SIMULATION_STEP
 		w.dayTime += TOWN_SIMULATION_STEP
 		if w.dayTime >= f32(WORLD_DAY_LENGTH_SECONDS) {
 			w.dayTime -= f32(WORLD_DAY_LENGTH_SECONDS)
 			w.dayNumber += 1
 		}
+		stamp = ProfilerBegin("Sim:Weather")
 		WorldWeatherUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Environment")
 		WorldEnvironmentUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Units")
 		WorldUnitUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Buildings")
 		WorldBuildingUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Aegis")
 		WorldAegisUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Fire")
 		WorldFireUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:TerrainAftermath")
 		WorldTerrainAftermathUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Lava")
 		WorldTerrainLavaUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Decorations")
 		WorldDecorationUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Blood")
 		BloodUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Controllers")
 		WorldControllersUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Kingdom")
 		WorldKingdomUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Hazards")
 		WorldHazardUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Gas")
 		WorldGasCloudUpdate(w, TOWN_SIMULATION_STEP)
+		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:Fog")
 		FogUpdate(w)
+		ProfilerEnd(stamp)
 		w.simulationAccumulator -= TOWN_SIMULATION_STEP
+		ProfilerEnd(tickStamp)
 	}
-	WorldUnitAnimationUpdate(w, deltaTime)
+	stamp = ProfilerBegin("Sim:Animation")
+	WorldUnitAnimationUpdate(w, stepTime)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:GameEnd")
 	WorldCheckGameEnd(w)
+	ProfilerEnd(stamp)
 }
 
 WorldTimeOfDay :: proc(w: ^World) -> f32 {
@@ -1236,8 +1281,13 @@ TownHasNearbyEnemy :: proc(w: ^World, kingdom, townSlot: int) -> bool {
 }
 
 WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
+	stamp := ProfilerBegin("Unit:Housing")
 	WorldHousingUpdate(w)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Unit:Alarm")
 	WorldTownAlarmUpdate(w)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Unit:Loop")
 	for unitSlot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] do continue
 		w.units.previousX[unitSlot] = w.units.x[unitSlot]
@@ -1258,53 +1308,74 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 
 	for unitSlot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] do continue
+		unitKind := UnitKindOf(w.units[unitSlot].type)
+		profileIndex := -1
+		if profiler.enabled do profileIndex = profiler.unitKindIndex[unitKind]
+		unitStart := f64(0)
+		if profileIndex >= 0 do unitStart = rl.GetTime()
 		UnitUpdateMilitaryAlarm(w, unitSlot)
-		if _, converting := w.units[unitSlot].state.(StateConverting); converting {
-			if UnitUpdatePacificSafety(w, unitSlot, deltaTime) do continue
-			UnitUpdateConverting(w, unitSlot, deltaTime)
-			continue
-		}
-		switch _ in w.units[unitSlot].type {
-		case Villager:
-			UnitUpdateVillager(w, unitSlot, deltaTime)
-		case Builder:
-			UnitUpdateBuilder(w, unitSlot, deltaTime)
-		case CombatBuilder:
-			CombatBuilderUpdate(w, unitSlot, deltaTime)
-		case WaterCollector:
-			UnitUpdateWaterCollector(w, unitSlot, deltaTime)
-		case Farmer:
-			UnitUpdateFarmer(w, unitSlot, deltaTime)
-		case Explorer:
-			UnitUpdateExplorer(w, unitSlot, deltaTime)
-		case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
-			UnitUpdateWarrior(w, unitSlot, deltaTime)
-		}
-		if w.unitUsed[unitSlot] {
-			BloodBleedTick(w, unitSlot, deltaTime)
-			if w.units.previousX[unitSlot] != w.units.x[unitSlot] ||
-				w.units.previousY[unitSlot] != w.units.y[unitSlot] {
-				UnitWaterWake(w, unitSlot)
+		converting := false
+		if _, isConverting := w.units[unitSlot].state.(StateConverting); isConverting {
+			converting = true
+			if !UnitUpdatePacificSafety(w, unitSlot, deltaTime) {
+				UnitUpdateConverting(w, unitSlot, deltaTime)
 			}
 		}
+		if !converting {
+			switch _ in w.units[unitSlot].type {
+			case Villager:
+				UnitUpdateVillager(w, unitSlot, deltaTime)
+			case Builder:
+				UnitUpdateBuilder(w, unitSlot, deltaTime)
+			case CombatBuilder:
+				CombatBuilderUpdate(w, unitSlot, deltaTime)
+			case WaterCollector:
+				UnitUpdateWaterCollector(w, unitSlot, deltaTime)
+			case Farmer:
+				UnitUpdateFarmer(w, unitSlot, deltaTime)
+			case Explorer:
+				UnitUpdateExplorer(w, unitSlot, deltaTime)
+			case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
+				UnitUpdateWarrior(w, unitSlot, deltaTime)
+			}
+			if w.unitUsed[unitSlot] {
+				BloodBleedTick(w, unitSlot, deltaTime)
+				if w.units.previousX[unitSlot] != w.units.x[unitSlot] ||
+					w.units.previousY[unitSlot] != w.units.y[unitSlot] {
+					UnitWaterWake(w, unitSlot)
+				}
+			}
+		}
+		if profileIndex < 0 do continue
+		ProfilerAdd(profileIndex, rl.GetTime()-unitStart)
 	}
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Unit:Separation")
 	WorldMeleeSeparation(w)
+	ProfilerEnd(stamp)
 }
 
 WorldKingdomUpdate :: proc(w: ^World, deltaTime: f32) {
+	stamp := ProfilerBegin("Kingdom:Towns")
 	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdomSlot] do continue
 		w.kingdoms[kingdomSlot].coastalTownCount = 0
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			coastalStamp := ProfilerBegin("Kingdom:Coastal")
 			if TownIsCoastal(w, kingdomSlot, townSlot) {
 				w.kingdoms[kingdomSlot].coastalTownCount += 1
 			}
+			ProfilerEnd(coastalStamp)
 			KingdomTownUpdate(w, kingdomSlot, townSlot, deltaTime)
 		}
 	}
+	ProfilerEnd(stamp)
 
+	stamp = ProfilerBegin("Kingdom:Housing")
 	WorldHousingUpdate(w)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Kingdom:Effects")
 	shortageEpoch := int(w.simulationTime / 5)
 	for unitSlot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] do continue
@@ -1318,8 +1389,11 @@ WorldKingdomUpdate :: proc(w: ^World, deltaTime: f32) {
 		isHoused := UnitHome(w, unitSlot) >= 0
 		UnitApplyTownEffects(w, unitSlot, isHoused, shortageEpoch, deltaTime)
 	}
+	ProfilerEnd(stamp)
 
+	stamp = ProfilerBegin("Kingdom:Conversions")
 	WorldConversionAssign(w)
+	ProfilerEnd(stamp)
 }
 
 // Keep the existing slot-order housing entitlement, but give each housed citizen
@@ -1496,8 +1570,11 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 		town.foodPotential = town.farmlandOutput*f32(workingFarmlands)/f32(town.farmlands)
 	}
 	town.foodPotential *= KingdomTechFoodMultiplier(w, kingdomSlot, townSlot)*blockadeFactor*weather.food
+	waterStamp := ProfilerBegin("Town:WaterAccess")
+	waterAccess := TownWaterAccess(w, kingdomSlot, townSlot)
+	ProfilerEnd(waterStamp)
 	town.waterPotential =
-		TownWaterCollectorOutput(TownWaterAccess(w, kingdomSlot, townSlot))*
+		TownWaterCollectorOutput(waterAccess)*
 		f32(town.waterCollectors)*KingdomTechWaterMultiplier(w, kingdomSlot, townSlot)*
 		blockadeFactor*weather.water
 
@@ -1552,15 +1629,19 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 	if town.builders > 0 {
 		town.constructionProgress += f32(town.builders)*deltaTime
 		if town.constructionProgress >= 3 {
+			constructionStamp := ProfilerBegin("Town:Construction")
 			if TownBuilderConstruct(w, kingdomSlot, townSlot, canGrow) {
 				town.constructionProgress -= 3
 			} else {
 				town.constructionProgress = min(town.constructionProgress, 3)
 			}
+			ProfilerEnd(constructionStamp)
 		}
 	}
 
+	milestoneStamp := ProfilerBegin("Town:Milestone")
 	TownMilestoneCheck(w, kingdomSlot, townSlot)
+	ProfilerEnd(milestoneStamp)
 }
 
 
@@ -1582,6 +1663,10 @@ TownWaterCollectorOutput :: proc(waterAccess: f32) -> f32 {
 		(WATER_COLLECTOR_MAX_OUTPUT-WATER_COLLECTOR_DRY_OUTPUT)*access
 }
 
+// Water farther than this cannot realistically supply a town, and scanning the
+// whole world per town made the first simulation tick extremely slow.
+TOWN_WATER_SEARCH_RADIUS :: 64
+
 TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	if town.waterAccessCached && town.waterAccessTerrainRevision == w.terrainRevision {
@@ -1594,14 +1679,17 @@ TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 
 	centerX := town.x+2
 	centerY := town.y+2
+	radius := min(TOWN_WATER_SEARCH_RADIUS, min(worldWidth, worldHeight))
 	nearestDistanceSquared: f32 = 0
 	foundWater := false
-	for x in 0..<worldWidth {
-		for y in 0..<worldHeight {
+	for offsetX in -radius..=radius {
+		x := WorldWrapCoordinate(centerX+offsetX, worldWidth)
+		for offsetY in -radius..=radius {
+			y := WorldWrapCoordinate(centerY+offsetY, worldHeight)
 			tileType := w.ground[x][y].type
 			if TILE_DEFS[tileType].water <= 0 do continue
-			deltaX := WorldShortestWrappedDelta(f32(x-centerX), f32(worldWidth))
-			deltaY := WorldShortestWrappedDelta(f32(y-centerY), f32(worldHeight))
+			deltaX := f32(offsetX)
+			deltaY := f32(offsetY)
 			distanceSquared := deltaX*deltaX + deltaY*deltaY
 			if !foundWater || distanceSquared < nearestDistanceSquared {
 				nearestDistanceSquared = distanceSquared

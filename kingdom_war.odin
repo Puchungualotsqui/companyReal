@@ -104,7 +104,10 @@ UnitUpdateWarrior :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	case WarriorGarrison:
 		patrolRadius := WARRIOR_HOME_PATROL_RADIUS
 		if kingdomSlot == NEUTRAL_KINGDOM do patrolRadius = NEUTRAL_GUARD_PATROL_RADIUS
-		if !UnitWarriorFarFromTown(w, unitSlot, kingdomSlot, townSlot) {
+		// Inside the town area the warrior is already home; patrol locally instead
+		// of building a world-sized flow field just to walk back to the hall.
+		homeRadius := max(patrolRadius*2, town.areaRadius)
+		if !UnitWarriorFarFromTown(w, unitSlot, kingdomSlot, townSlot, homeRadius) {
 			if kingdomSlot != NEUTRAL_KINGDOM && UnitWarriorEscort(w, unitSlot, state, deltaTime) do return
 			state.activity = .Moving
 			UnitWarriorPatrol(w, unitSlot, kingdomSlot, townSlot, patrolRadius, deltaTime, state)

@@ -209,6 +209,9 @@ ConstructionSite :: struct {
 }
 
 TOWN_CONSTRUCTION_CAPACITY :: 10
+// Planning one building per tick keeps large towns from running the site
+// search dozens of times in the same simulation step.
+TOWN_CONSTRUCTION_STARTS_PER_TICK :: 1
 
 TownDistrict :: struct {
 	x, y:   int,

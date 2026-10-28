@@ -185,14 +185,18 @@ AppUpdate :: proc(app: ^App, deltaTime: f32) {
 			}
 		}
 
+		worldStamp := ProfilerBegin("World")
 		WorldUpdate(app.world, deltaTime)
+		ProfilerEnd(worldStamp)
 		if app.world.gameOver && !app.resultHandled {
 			app.resultHandled = true
 			app.result = AppResultFromWorld(app.world)
 			app.overlay = .Result
 			return
 		}
+		viewStamp := ProfilerBegin("View")
 		WorldViewUpdate(app.world, &app.view, deltaTime)
+		ProfilerEnd(viewStamp)
 	}
 }
 
@@ -202,8 +206,12 @@ AppDraw :: proc(app: ^App) {
 		AppMenuDraw(app)
 	case .Playing:
 		if !app.hasGame do return
+		renderStamp := ProfilerBegin("Render")
 		WorldRender(app.world, &app.view.renderer, app.view.camera)
+		ProfilerEnd(renderStamp)
+		uiStamp := ProfilerBegin("UI")
 		WorldUIDraw(app.world, &app.view.renderer, app.view.camera, &app.view.ui)
+		ProfilerEnd(uiStamp)
 		switch app.overlay {
 		case .Result:
 			AppDrawResultOverlay(app)

@@ -16,3 +16,5 @@ shadow_test.exe
 companyReal
 companyReal.o
 *.exe
+profiler.log
+*.obj

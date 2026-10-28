@@ -1,7 +1,6 @@
 package main
 
 import "core:math"
-import "core:os"
 
 // Debug stress world: every kingdom starts fully teched, with many towns, a
 // large mixed army and a dense spread of buildings. Launched with -crazy_world.
@@ -66,13 +65,6 @@ CRAZY_WORLD_UNITS := [?]CrazyWorldUnits{
 	{.Rogue, 8},
 }
 
-CrazyWorldRequested :: proc() -> bool {
-	if len(os.args) <= 1 do return false
-	for arg in os.args[1:] {
-		if arg == CRAZY_WORLD_FLAG do return true
-	}
-	return false
-}
 
 WorldCrazyWorldPopulate :: proc(w: ^World) {
 	for kingdom in 0..<KINGDOMS_CAPACITY {

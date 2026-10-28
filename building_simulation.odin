@@ -286,7 +286,7 @@ BuildingClearUnits :: proc(w: ^World, x, y: int, buildingType: BuildingType, rel
 TownBuilderConstruct :: proc(w: ^World, kingdomSlot, townSlot: int, canGrow: bool) -> bool {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	startedAny := false
-	maxStarts := min(max(1, town.builders), TOWN_CONSTRUCTION_CAPACITY)
+	maxStarts := min(max(1, town.builders), TOWN_CONSTRUCTION_STARTS_PER_TICK)
 	for _ in 0 ..< maxStarts {
 		if TownConstructionCount(w, kingdomSlot, townSlot) >= TOWN_CONSTRUCTION_CAPACITY do break
 
@@ -833,6 +833,11 @@ TownBuildingValid :: proc(w: ^World, kingdom, x, y: int, bType: BuildingType) ->
 	return !WorldBuildingCollides(w, x, y, bType) && TownBuildingOverTile(w, kingdom, x, y, bType)
 }
 
+// A full scan evaluates thousands of tiles and checks every construction/
+// combat site for each one. Sampling a few hundred candidates keeps placement
+// varied while making the search orders of magnitude cheaper.
+TOWN_BUILDING_SITE_SAMPLES :: 192
+
 TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType: BuildingType) -> (int, int, bool) {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
 	worldWidth := int(w.maxX)
@@ -840,8 +845,6 @@ TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	buildingWidth, buildingHeight := BuildingTileSize(buildingType)
 	if buildingWidth <= 0 || buildingHeight <= 0 do return 0, 0, false
-	field, reachable := FlowFieldGet(w, kingdomSlot, townSlot, Builder{}, kingdomSlot)
-	if !reachable do return 0, 0, false
 
 	kind := BuildingKindOf(buildingType)
 	// Stable per town and building kind, without consuming the effects RNG.
@@ -852,35 +855,42 @@ TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType
 	maxX := min(worldWidth-buildingWidth, areaMaxX)
 	minY := max(0, areaMinY)
 	maxY := min(worldHeight-buildingHeight, areaMaxY)
+	if maxX < minX || maxY < minY do return 0, 0, false
+	spanX := maxX-minX+1
+	spanY := maxY-minY+1
+
 	bestX, bestY := 0, 0
 	bestScore: f32 = -1e30
 	found := false
-	for x in minX..=maxX {
-		for y in minY..=maxY {
-			distanceX := max(max(town.x-x, 0), x-(town.x+3))
-			distanceY := max(max(town.y-y, 0), y-(town.y+3))
-			if max(distanceX, distanceY) < 2 do continue
-			if !TownBuildingInArea(w, kingdomSlot, townSlot, x, y, buildingType) do continue
-			if CombatSiteOverlaps(w, x, y, kind) do continue
-			if TownConstructionSiteOverlaps(w, x, y, kind) do continue
-			if !TownBuildingValid(w, kingdomSlot, x, y, buildingType) do continue
-			access, accessible := TownPlacementAccess(w, field, kingdomSlot, x, y, buildingWidth, buildingHeight)
-			if !accessible do continue
-			score := TownPlacementScore(w, kingdomSlot, townSlot, x, y, buildingWidth, buildingHeight, kind, seed)
-			score += f32(min(access, 12))*0.12
-			if !found || score > bestScore {
-				bestX, bestY, bestScore, found = x, y, score, true
-			}
+	for sample in 0..<TOWN_BUILDING_SITE_SAMPLES {
+		rollX := WorldNoiseHash(sample, int(kind)+1, seed+0x51D)
+		rollY := WorldNoiseHash(sample, int(kind)+2, seed+0x51E)
+		x := minX+min(int(rollX*f32(spanX)), spanX-1)
+		y := minY+min(int(rollY*f32(spanY)), spanY-1)
+
+		distanceX := max(max(town.x-x, 0), x-(town.x+3))
+		distanceY := max(max(town.y-y, 0), y-(town.y+3))
+		if max(distanceX, distanceY) < 2 do continue
+		if !TownBuildingInArea(w, kingdomSlot, townSlot, x, y, buildingType) do continue
+		if !TownBuildingValid(w, kingdomSlot, x, y, buildingType) do continue
+		access, accessible := TownPlacementAccess(w, kingdomSlot, x, y, buildingWidth, buildingHeight)
+		if !accessible do continue
+		if CombatSiteOverlaps(w, x, y, kind) do continue
+		if TownConstructionSiteOverlaps(w, x, y, kind) do continue
+		score := TownPlacementScore(w, kingdomSlot, townSlot, x, y, buildingWidth, buildingHeight, kind, seed)
+		score += f32(min(access, 12))*0.12
+		if !found || score > bestScore {
+			bestX, bestY, bestScore, found = x, y, score, true
 		}
 	}
 	return bestX, bestY, found
 }
 
-// Reject isolated sites, but allow any reachable work point around the footprint.
-TownPlacementAccess :: proc(w: ^World, field: ^FlowField, kingdom, x, y, width, height: int) -> (int, bool) {
+// Reject isolated sites, but allow any walkable work point around the footprint.
+TownPlacementAccess :: proc(w: ^World, kingdom, x, y, width, height: int) -> (int, bool) {
 	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
 	for radius in 1..=6 {
-		access, walkable := 0, 0
+		access := 0
 		for tileX in x-radius ..= x+width-1+radius {
 			for tileY in y-radius ..= y+height-1+radius {
 				if tileX >= x-radius+1 && tileX <= x+width+radius-2 &&
@@ -890,12 +900,10 @@ TownPlacementAccess :: proc(w: ^World, field: ^FlowField, kingdom, x, y, width, 
 				wrappedX := WorldWrapCoordinate(tileX, worldWidth)
 				wrappedY := WorldWrapCoordinate(tileY, worldHeight)
 				if !WorldTileWalkable(w, wrappedX, wrappedY, Builder{}, kingdom) do continue
-				walkable += 1
-				reachable := field.direction[wrappedX*worldHeight+wrappedY] != .Blocked
-				if reachable do access += 1
+				access += 1
 			}
 		}
-		if walkable > 0 do return access, access > 0
+		if access > 0 do return access, true
 	}
 	return 0, false
 }
