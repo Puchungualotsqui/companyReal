@@ -114,14 +114,14 @@ from `TILE_DEFS` where possible so adding a tile is one table entry plus art.
 
 ### Climate layer
 
-A coarse `ClimateKind` grid (one cell per ~16 tiles) generated from the same
-periodic noise as the terrain:
+Each `Tile` stores its `ClimateKind`, generated from the same periodic noise as
+the terrain: `Temperate`, `Coastal`, `Arid`, `Boreal`, `Tropical`, `Steppe`,
+`Volcanic`. A coarse grid can be derived later for weather cells, but per-tile
+storage keeps phase 1 simple and avoids a second lookup.
 
-`Temperate`, `Arid`, `Boreal`, `Tropical`, `Steppe`, `Volcanic`, `Coastal`.
-
-Weather reads this grid to decide whether rain becomes snow, whether a storm
-becomes a sandstorm, and whether a flood becomes monsoon flooding. It is also a
-cheap way to give each region its own personality without per-tile storage.
+Weather reads a tile's climate to decide whether rain becomes snow, whether a
+storm becomes a sandstorm, and whether a flood becomes monsoon flooding. It is
+also a cheap way to give each region its own personality.
 
 ## Weather model
 
@@ -289,9 +289,9 @@ Weather pacing tuned to that:
 
 ## Phased delivery
 
-1. **Tile refactor.** New `TileType` roster, `TILE_DEFS`, climate grid, migration
-   of all exhaustive switches, movement/water/fire/yield properties. No weather
-   yet, but the map already plays differently.
+1. **Tile refactor (implemented).** New `TileType` roster, `TILE_DEFS`, climate
+   field, migration of all exhaustive switches, movement/water/fire/yield
+   properties. No weather yet, but the map already plays differently.
 2. **Global weather + seasons.** One weather state, rain/drought/snow, HUD chip,
    screen-space particles, yield and fire modifiers, AI aware of the forecast.
 3. **Events framework.** Severity, weighted bags, debt-based fairness, telegraphs,

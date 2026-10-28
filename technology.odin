@@ -388,7 +388,7 @@ UnitOnWaterTile :: proc(w: ^World, unitSlot: int) -> bool {
 		}
 	}
 	tile := w.ground[tileX][tileY].type
-	return tile == .Water || tile == .FreshWater
+	return TileIsDeepWater(tile)
 }
 
 UnitSeaSpeedMultiplier :: proc(w: ^World, unitSlot: int) -> f32 {
@@ -415,7 +415,7 @@ TownIsCoastal :: proc(w: ^World, kingdom, townSlot: int) -> bool {
 		for y in max(minY, 0)..=min(maxY, int(w.maxY)-1) {
 			if !TownPointInArea(w, kingdom, townSlot, x, y) do continue
 			tile := w.ground[x][y].type
-			if tile == .Water || tile == .FreshWater {
+			if TileIsDeepWater(tile) {
 				coastal = true
 				break
 			}

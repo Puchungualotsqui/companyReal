@@ -417,7 +417,18 @@ WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
 				case:
 					found = false
 				}
-			case .FertileGround:
+			case .Taiga:
+				switch {
+				case roll < 0.24:
+					kind = .Pine
+				case roll < 0.34:
+					kind = .Tree
+				case roll < 0.38:
+					kind = .Bush
+				case:
+					found = false
+				}
+			case .Plains:
 				switch {
 				case roll < 0.06:
 					kind = .Flowers
@@ -426,7 +437,7 @@ WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
 				case:
 					found = false
 				}
-			case .Ground:
+			case .Grassland:
 				switch {
 				case roll < 0.012:
 					kind = .Flowers
@@ -434,6 +445,17 @@ WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
 					kind = .Rock
 				case roll < 0.026:
 					kind = .Bush
+				case:
+					found = false
+				}
+			case .Steppe:
+				switch {
+				case roll < 0.018:
+					kind = .Bush
+				case roll < 0.026:
+					kind = .Flowers
+				case roll < 0.032:
+					kind = .Rock
 				case:
 					found = false
 				}
@@ -446,12 +468,28 @@ WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
 				case:
 					found = false
 				}
+			case .Mountain:
+				switch {
+				case roll < 0.10:
+					kind = .Rock
+				case:
+					found = false
+				}
 			case .Sand:
 				switch {
 				case roll < 0.015:
 					kind = .Rock
 				case roll < 0.030:
 					kind = .Reed
+				case:
+					found = false
+				}
+			case .Marsh:
+				switch {
+				case roll < 0.16:
+					kind = .Reed
+				case roll < 0.19:
+					kind = .Bush
 				case:
 					found = false
 				}
@@ -464,13 +502,27 @@ WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
 				case:
 					found = false
 				}
-			case .FreshWater, .River:
+			case .Tundra:
+				switch {
+				case roll < 0.030:
+					kind = .Rock
+				case:
+					found = false
+				}
+			case .Ash:
+				switch {
+				case roll < 0.045:
+					kind = .Rock
+				case:
+					found = false
+				}
+			case .Lake, .River:
 				if roll < 0.020 {
 					kind = .Reed
 				} else {
 					found = false
 				}
-			case .Water:
+			case .Ocean, .Ice, .Lava:
 				found = false
 			}
 			if !found do continue
@@ -492,9 +544,9 @@ WorldTileNearWater :: proc(w: ^World, x, y: int) -> bool {
 		neighbourX := WorldWrapCoordinate(x+offset[0], int(w.maxX))
 		neighbourY := WorldWrapCoordinate(y+offset[1], int(w.maxY))
 		switch w.ground[neighbourX][neighbourY].type {
-		case .Water, .FreshWater, .River:
+		case .Ocean, .Lake, .River:
 			return true
-		case .Ground, .FertileGround, .Sand, .Forest, .Hill, .Desert:
+		case .Ice, .Marsh, .Sand, .Grassland, .Plains, .Forest, .Taiga, .Steppe, .Hill, .Mountain, .Desert, .Tundra, .Ash, .Lava:
 		}
 	}
 	return false

@@ -4546,18 +4546,34 @@ UIDrawSurveyOverlay :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 			if !FogTileExplored(w, x, y) do continue
 			color := rl.Color{0, 0, 0, 0}
 			switch w.ground[x][y].type {
-			case .Water, .FreshWater, .River:
+			case .Ocean, .Lake, .River:
 				color = rl.Color{74, 142, 190, 54}
-			case .FertileGround:
+			case .Ice:
+				color = rl.Color{198, 228, 244, 50}
+			case .Marsh:
+				color = rl.Color{88, 152, 132, 52}
+			case .Plains:
 				color = rl.Color{112, 206, 112, 58}
-			case .Ground:
+			case .Grassland:
 				color = rl.Color{154, 188, 104, 44}
+			case .Steppe:
+				color = rl.Color{188, 190, 110, 46}
 			case .Forest:
 				color = rl.Color{78, 148, 84, 50}
+			case .Taiga:
+				color = rl.Color{64, 122, 92, 52}
 			case .Hill:
 				color = rl.Color{170, 156, 116, 44}
+			case .Mountain:
+				color = rl.Color{142, 142, 148, 52}
 			case .Desert:
 				color = rl.Color{220, 182, 108, 46}
+			case .Tundra:
+				color = rl.Color{176, 190, 184, 46}
+			case .Ash:
+				color = rl.Color{124, 108, 100, 48}
+			case .Lava:
+				color = rl.Color{226, 92, 58, 64}
 			case .Sand:
 				color = rl.Color{224, 204, 148, 38}
 			}

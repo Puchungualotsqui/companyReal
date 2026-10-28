@@ -1042,7 +1042,7 @@ UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomS
 					sourceX = WorldWrapCoordinate(sourceX, worldWidth)
 					sourceY = WorldWrapCoordinate(sourceY, worldHeight)
 					tileType := w.ground[sourceX][sourceY].type
-					if tileType == .FreshWater || tileType == .Water do return x, y, true
+					if TileIsWater(tileType) || tileType == .Marsh do return x, y, true
 				}
 			}
 		}

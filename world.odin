@@ -140,19 +140,38 @@ WorldDeinit :: proc(w: ^World) {
 }
 
 Tile :: struct {
-	type: TileType,
+	type:    TileType,
+	climate: ClimateKind,
 }
 
-TileType :: enum {
-	Water,
-	FreshWater,
+TileType :: enum u8 {
+	Ocean,
+	Lake,
 	River,
-	Ground,
-	FertileGround,
+	Ice,
+	Marsh,
 	Sand,
+	Grassland,
+	Plains,
 	Forest,
+	Taiga,
+	Steppe,
 	Hill,
+	Mountain,
 	Desert,
+	Tundra,
+	Ash,
+	Lava,
+}
+
+ClimateKind :: enum u8 {
+	Temperate,
+	Coastal,
+	Arid,
+	Boreal,
+	Tropical,
+	Steppe,
+	Volcanic,
 }
 
 WorldTileSet :: proc(w: ^World, x, y: int, tileType: TileType) -> bool {

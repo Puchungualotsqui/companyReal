@@ -12,16 +12,46 @@ TERRAIN_CHUNK_GENERATION_BUDGET :: 8
 TERRAIN_CHUNK_MIN_ZOOM : f32 : 8
 TERRAIN_SEED :: u64(0x5EED_7E44_A1)
 
-ALL_TILE_TYPES := [9]TileType{
-	.Water,
-	.FreshWater,
-	.River,
-	.Ground,
-	.FertileGround,
-	.Sand,
-	.Forest,
-	.Hill,
-	.Desert,
+// Terrain properties live in one table so a new tile is a single entry plus
+// art. Passability, fire, food and water are read by the simulation.
+TileDef :: struct {
+	name:        cstring,
+	moveCost:    f32,
+	wood:        f32,
+	food:        f32,
+	water:       f32,
+	fireRisk:    f32,
+	visionCover: f32,
+	buildable:   bool,
+	passable:    bool,
+}
+
+TILE_DEFS := [TileType]TileDef{
+	.Ocean = {"Ocean", 1.00, 0.0, 0.00, 0.0, 0.00, 0.0, false, false},
+	.Lake = {"Lake", 1.00, 0.0, 0.00, 1.0, 0.00, 0.0, false, false},
+	.River = {"River", 1.00, 0.0, 0.00, 0.9, 0.00, 0.0, false, true},
+	.Ice = {"Ice", 1.15, 0.0, 0.00, 0.4, 0.00, 0.0, false, true},
+	.Marsh = {"Marsh", 1.60, 0.3, 0.30, 0.5, 0.35, 1.2, true, true},
+	.Sand = {"Sand", 1.10, 0.0, 0.10, 0.0, 0.00, 0.0, true, true},
+	.Grassland = {"Grassland", 1.00, 0.1, 0.60, 0.0, 0.70, 0.1, true, true},
+	.Plains = {"Plains", 1.00, 0.1, 1.00, 0.0, 0.85, 0.0, true, true},
+	.Forest = {"Forest", 1.35, 1.0, 0.40, 0.0, 1.00, 1.0, true, true},
+	.Taiga = {"Taiga", 1.40, 0.8, 0.20, 0.0, 0.70, 0.9, true, true},
+	.Steppe = {"Steppe", 0.95, 0.0, 0.45, 0.0, 1.10, 0.0, true, true},
+	.Hill = {"Hill", 1.40, 0.2, 0.20, 0.0, 0.40, 0.5, true, true},
+	.Mountain = {"Mountain", 1.00, 0.0, 0.00, 0.0, 0.00, 1.4, false, false},
+	.Desert = {"Desert", 1.25, 0.0, 0.05, 0.0, 0.10, 0.0, true, true},
+	.Tundra = {"Tundra", 1.30, 0.0, 0.10, 0.0, 0.20, 0.0, true, true},
+	.Ash = {"Ash", 1.10, 0.0, 0.30, 0.0, 0.00, 0.0, true, true},
+	.Lava = {"Lava", 1.00, 0.0, 0.00, 0.0, 0.00, 0.0, false, false},
+}
+
+TileIsWater :: proc(kind: TileType) -> bool {
+	return kind == .Ocean || kind == .Lake || kind == .River
+}
+
+TileIsDeepWater :: proc(kind: TileType) -> bool {
+	return kind == .Ocean || kind == .Lake
 }
 
 TerrainChunk :: struct {
@@ -45,7 +75,7 @@ TerrainRendererInit :: proc(w: ^World) -> TerrainRenderer {
 		revision = w.terrainRevision,
 		chunks = make([dynamic]TerrainChunk, 0, TERRAIN_CHUNK_CAPACITY),
 	}
-	for kind in ALL_TILE_TYPES {
+	for kind in TileType {
 		for variant in 0..<TERRAIN_TILE_VARIANTS {
 			tile := DrawTerrainTile(kind, variant)
 			renderer.tiles[kind][variant] = tile.image
@@ -67,7 +97,7 @@ TerrainRendererDeinit :: proc(renderer: ^TerrainRenderer) {
 	rl.UnloadTexture(renderer.lowTexture)
 	TerrainChunksClear(renderer)
 	delete(renderer.chunks)
-	for kind in ALL_TILE_TYPES {
+	for kind in TileType {
 		for variant in 0..<TERRAIN_TILE_VARIANTS {
 			tile := renderer.tiles[kind][variant]
 			if tile.data != nil do rl.UnloadImage(tile)
@@ -275,24 +305,40 @@ TerrainDitherTileEdges :: proc(dst: [^]u8, w: ^World, worldX, worldY, pixelX, pi
 
 WorldTileColor :: proc(tileType: TileType) -> rl.Color {
 	switch tileType {
-	case .Water:
-		return rl.Color{48, 83, 112, 255}
-	case .FreshWater:
-		return rl.Color{69, 130, 153, 255}
+	case .Ocean:
+		return rl.Color{38, 72, 104, 255}
+	case .Lake:
+		return rl.Color{64, 124, 148, 255}
 	case .River:
 		return rl.Color{78, 133, 155, 255}
-	case .Ground:
-		return rl.Color{100, 128, 88, 255}
-	case .FertileGround:
-		return rl.Color{126, 151, 88, 255}
+	case .Ice:
+		return rl.Color{196, 224, 238, 255}
+	case .Marsh:
+		return rl.Color{74, 104, 76, 255}
 	case .Sand:
 		return rl.Color{215, 194, 140, 255}
+	case .Grassland:
+		return rl.Color{100, 128, 88, 255}
+	case .Plains:
+		return rl.Color{126, 151, 88, 255}
 	case .Forest:
 		return rl.Color{52, 100, 66, 255}
+	case .Taiga:
+		return rl.Color{42, 76, 64, 255}
+	case .Steppe:
+		return rl.Color{146, 152, 92, 255}
 	case .Hill:
 		return rl.Color{126, 131, 110, 255}
+	case .Mountain:
+		return rl.Color{104, 106, 110, 255}
 	case .Desert:
 		return rl.Color{191, 154, 95, 255}
+	case .Tundra:
+		return rl.Color{142, 150, 142, 255}
+	case .Ash:
+		return rl.Color{86, 80, 78, 255}
+	case .Lava:
+		return rl.Color{196, 78, 48, 255}
 	}
 	unreachable()
 }
@@ -325,7 +371,7 @@ DrawTerrainTile :: proc(kind: TileType, variant: int) -> Art {
 	seed := TERRAIN_SEED+u64(variant)*7919+u64(kind)*1319
 
 	switch kind {
-	case .Water, .FreshWater, .River:
+	case .Ocean, .Lake, .River:
 		wave := CShade(base, 1.11)
 		for i in 0..<2 {
 			x := int(WorldNoiseHash(i, variant, seed)*13)
@@ -341,20 +387,21 @@ DrawTerrainTile :: proc(kind: TileType, variant: int) -> Art {
 			soft,
 		)
 
-	case .Ground:
+	case .Ice:
+		crack := CShade(base, 1.18)
+		ArtLine(&art, 2, 3, 7, 8, crack)
+		ArtLine(&art, 7, 8, 12, 6, crack)
+		ArtLine(&art, 9, 1, 12, 5, highlight)
+		ArtPixel(&art, 4, 12, crack)
+		ArtPixel(&art, 11, 11, highlight)
+
+	case .Marsh:
 		TerrainSpeckles(&art, variant, seed, light, dark)
 		for i in 0..<3 {
-			x := int(WorldNoiseHash(i+31, variant, seed)*15)
-			y := int(WorldNoiseHash(variant, i+31, seed+1)*14)
-			ArtRect(&art, x, y, 1, 2, light)
-		}
-
-	case .FertileGround:
-		TerrainSpeckles(&art, variant, seed, light, dark)
-		for i in 0..<4 {
-			x := 1+int(WorldNoiseHash(i+41, variant, seed)*13)
-			y := 1+int(WorldNoiseHash(variant, i+41, seed+1)*13)
-			ArtRect(&art, x, y, 1, 2, highlight)
+			x := int(WorldNoiseHash(i+21, variant, seed)*12)
+			y := 2+int(WorldNoiseHash(variant, i+21, seed+1)*12)
+			ArtRect(&art, x, y, 3, 1, highlight)
+			ArtPixel(&art, x, y+1, dark)
 		}
 
 	case .Sand:
@@ -363,6 +410,22 @@ DrawTerrainTile :: proc(kind: TileType, variant: int) -> Art {
 			x := int(WorldNoiseHash(i+51, variant, seed)*13)
 			y := int(WorldNoiseHash(variant, i+51, seed+1)*15)
 			ArtRect(&art, x, y, 2, 1, soft)
+		}
+
+	case .Grassland:
+		TerrainSpeckles(&art, variant, seed, light, dark)
+		for i in 0..<3 {
+			x := int(WorldNoiseHash(i+31, variant, seed)*15)
+			y := int(WorldNoiseHash(variant, i+31, seed+1)*14)
+			ArtRect(&art, x, y, 1, 2, light)
+		}
+
+	case .Plains:
+		TerrainSpeckles(&art, variant, seed, light, dark)
+		for i in 0..<4 {
+			x := 1+int(WorldNoiseHash(i+41, variant, seed)*13)
+			y := 1+int(WorldNoiseHash(variant, i+41, seed+1)*13)
+			ArtRect(&art, x, y, 1, 2, highlight)
 		}
 
 	case .Forest:
@@ -376,6 +439,26 @@ DrawTerrainTile :: proc(kind: TileType, variant: int) -> Art {
 		}
 		TerrainSpeckles(&art, variant, seed, light, dark)
 
+	case .Taiga:
+		for i in 0..<5 {
+			cx := 2+int(WorldNoiseHash(i+63, variant, seed)*12)
+			cy := 3+int(WorldNoiseHash(variant, i+63, seed+1)*10)
+			ArtRect(&art, cx, cy, 1, 3, dark)
+			ArtRect(&art, cx-1, cy, 3, 1, light)
+			ArtRect(&art, cx-2, cy+1, 5, 1, light)
+			ArtPixel(&art, cx, cy-1, highlight)
+		}
+		TerrainSpeckles(&art, variant, seed, light, dark)
+
+	case .Steppe:
+		TerrainSpeckles(&art, variant, seed, light, soft)
+		for i in 0..<3 {
+			x := int(WorldNoiseHash(i+83, variant, seed)*10)
+			y := 2+int(WorldNoiseHash(variant, i+83, seed+1)*12)
+			ArtRect(&art, x, y, 3, 1, light)
+			ArtPixel(&art, x+3, y-1, soft)
+		}
+
 	case .Hill:
 		TerrainSpeckles(&art, variant, seed, light, dark)
 		for i in 0..<2 {
@@ -386,6 +469,18 @@ DrawTerrainTile :: proc(kind: TileType, variant: int) -> Art {
 			ArtPixel(&art, x+1, y, highlight)
 		}
 
+	case .Mountain:
+		TerrainSpeckles(&art, variant, seed, light, dark)
+		for i in 0..<2 {
+			x := 1+int(WorldNoiseHash(i+91, variant, seed)*10)
+			y := 2+int(WorldNoiseHash(variant, i+91, seed+1)*9)
+			ArtRect(&art, x, y, 4, 4, light)
+			ArtRect(&art, x+1, y+4, 3, 1, dark)
+			ArtPixel(&art, x+1, y, highlight)
+			ArtPixel(&art, x+2, y, highlight)
+			ArtPixel(&art, x+1, y+3, soft)
+		}
+
 	case .Desert:
 		TerrainSpeckles(&art, variant, seed, light, soft)
 		for i in 0..<2 {
@@ -394,6 +489,32 @@ DrawTerrainTile :: proc(kind: TileType, variant: int) -> Art {
 			ArtPixel(&art, x, y, light)
 			ArtPixel(&art, x+2, y+1, soft)
 		}
+
+	case .Tundra:
+		TerrainSpeckles(&art, variant, seed, light, dark)
+		for i in 0..<3 {
+			x := int(WorldNoiseHash(i+93, variant, seed)*13)
+			y := int(WorldNoiseHash(variant, i+93, seed+1)*13)
+			ArtPixel(&art, x, y, highlight)
+			ArtPixel(&art, x+1, y+1, dark)
+		}
+
+	case .Ash:
+		TerrainSpeckles(&art, variant, seed, light, dark)
+		for i in 0..<2 {
+			x := int(WorldNoiseHash(i+95, variant, seed)*13)
+			y := int(WorldNoiseHash(variant, i+95, seed+1)*13)
+			ArtPixel(&art, x, y, rl.Color{196, 112, 58, 170})
+		}
+		ArtRect(&art, 3, 11, 4, 1, dark)
+
+	case .Lava:
+		vein := CShade(base, 1.55)
+		ArtLine(&art, 0, 5, 7, 8, vein)
+		ArtLine(&art, 7, 8, 13, 4, vein)
+		ArtLine(&art, 4, 0, 8, 7, highlight)
+		ArtPixel(&art, 10, 12, vein)
+		ArtPixel(&art, 2, 13, highlight)
 	}
 	return art
 }
@@ -574,11 +695,8 @@ WorldHazardSpawnCircle :: proc(
 				continue
 			}
 			if kind == .Flood {
-				switch w.ground[tileX][tileY].type {
-				case .Water, .FreshWater, .River:
-					continue
-				case .Ground, .FertileGround, .Sand, .Forest, .Hill, .Desert:
-				}
+				tile := w.ground[tileX][tileY].type
+				if TileIsWater(tile) || tile == .Ice do continue
 				WorldFireExtinguishAt(w, tileX, tileY)
 			}
 
@@ -735,7 +853,7 @@ WorldHazardUpdate :: proc(w: ^World, deltaTime: f32) {
 		drowning := hasHazard && hazardKind == .Flood
 		if !hasHazard {
 			tile := w.ground[tileX][tileY].type
-			drowning = tile == .Water || tile == .FreshWater
+			drowning = TileIsDeepWater(tile)
 		}
 		if drowning {
 			UnitApplyDamage(

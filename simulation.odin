@@ -472,7 +472,7 @@ TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 	for x in 0..<worldWidth {
 		for y in 0..<worldHeight {
 			tileType := w.ground[x][y].type
-			if tileType != .FreshWater && tileType != .River do continue
+			if TILE_DEFS[tileType].water <= 0 do continue
 			deltaX := WorldShortestWrappedDelta(f32(x-centerX), f32(worldWidth))
 			deltaY := WorldShortestWrappedDelta(f32(y-centerY), f32(worldHeight))
 			distanceSquared := deltaX*deltaX + deltaY*deltaY

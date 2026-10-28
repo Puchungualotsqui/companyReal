@@ -223,7 +223,7 @@ BloodAddAt :: proc(w: ^World, x, y: f32, amount: f32, radius: f32, tint: u8) {
 
 			wrappedX := WorldWrapCoordinate(tileX, worldWidth)
 			wrappedY := WorldWrapCoordinate(tileY, worldHeight)
-			if TileTypeAntiFire(w.ground[wrappedX][wrappedY].type) do continue
+			if TileIsWater(w.ground[wrappedX][wrappedY].type) do continue
 
 			distance := math.sqrt(distanceSquared)
 			falloff := 1-distance/radius
@@ -314,7 +314,7 @@ BloodUpdate :: proc(w: ^World, deltaTime: f32) {
 		for offset in offsets {
 			neighbourX := WorldWrapCoordinate(tileX+offset[0], worldWidth)
 			neighbourY := WorldWrapCoordinate(tileY+offset[1], worldHeight)
-			if TileTypeAntiFire(w.ground[neighbourX][neighbourY].type) do continue
+			if TileIsWater(w.ground[neighbourX][neighbourY].type) do continue
 			neighbourIndex := neighbourX*worldHeight+neighbourY
 			neighbourAmount := int(w.blood.amount[neighbourIndex])
 			if neighbourAmount+transfer > amount-1 do continue

@@ -419,47 +419,22 @@ BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
 BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 	switch v in bType {
 	case Bridge:
-		switch tType {
-		case .Water, .FreshWater, .River:
-			return true
-		case .Ground, .FertileGround, .Forest, .Hill, .Desert, .Sand:
-			return false
-		}
+		return TileIsWater(tType)
 
 	case Farmland:
-		switch tType {
-		case .Ground, .FertileGround:
-			return true
-		case .Water, .FreshWater, .River, .Forest, .Hill, .Desert, .Sand:
-			return false
-		}
+		return TILE_DEFS[tType].food >= 0.5
 
 	case TownHall, Home, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path, DistrictHall, Granary:
-		switch tType {
-		case .Ground, .FertileGround, .Forest, .Hill, .Desert, .Sand:
-			return true
-		case .Water, .FreshWater, .River:
-			return false
-		}
+		return TILE_DEFS[tType].buildable
 
 	case BuildingOrder:
 		switch _ in v.type {
 		case GiantMortar:
-			switch tType {
-			case .Ground, .FertileGround, .Forest, .Hill, .Desert, .Sand:
-				return true
-			case .Water, .FreshWater, .River:
-				return false
-			}
+			return TILE_DEFS[tType].buildable
 		case Harbor:
 			return tType == .Sand
 		case MagicSchool, SiegeWorkshop, AlchemistWorkshop, FireworksGuild, StarfallSpire:
-			switch tType {
-			case .Ground, .FertileGround, .Forest, .Hill, .Desert, .Sand:
-				return true
-			case .Water, .FreshWater, .River:
-				return false
-			}
+			return TILE_DEFS[tType].buildable
 		}
 	}
 	unreachable()
@@ -1064,21 +1039,13 @@ UnitDefaultTrainingTime :: proc(kind: UnitKind) -> f32 {
 }
 
 UnitValidTileType :: proc(uType: UnitType, tType: TileType) -> bool {
-	switch tType {
-	case .Water, .FreshWater:
-		switch _ in uType {
-		case Turtle:
-			return true
-		case Villager, Builder, WaterCollector, Farmer, Knight, Archer, Mage, Giant, Catapult, Rogue, Explorer:
-			return false
-		case CombatBuilder:
-			return false
-		}
-
-	case .Ground, .FertileGround, .Forest, .Hill, .Desert, .River, .Sand:
-		return true
+	switch _ in uType {
+	case Turtle:
+		return TILE_DEFS[tType].passable || TileIsWater(tType)
+	case Villager, Builder, WaterCollector, Farmer, Knight, Archer, Mage, Giant, Catapult, Rogue, Explorer, CombatBuilder:
+		return TILE_DEFS[tType].passable
 	}
-	unreachable()
+	return false
 }
 
 // Shared initialization for spawning and for in-place conversions.

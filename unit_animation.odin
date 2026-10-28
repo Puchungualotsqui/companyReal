@@ -209,14 +209,20 @@ UnitFootstepTint :: proc(w: ^World, x, y: f32) -> rl.Color {
 	tileX := WorldWrapCoordinate(int(x), int(w.maxX))
 	tileY := WorldWrapCoordinate(int(y), int(w.maxY))
 	switch w.ground[tileX][tileY].type {
-	case .Water, .FreshWater, .River:
+	case .Ocean, .Lake, .River:
 		return rl.Color{118, 184, 206, 150}
+	case .Ice:
+		return rl.Color{198, 228, 244, 160}
 	case .Sand, .Desert:
 		return rl.Color{196, 168, 112, 140}
-	case .Forest, .FertileGround:
+	case .Forest, .Taiga, .Marsh, .Plains:
 		return rl.Color{112, 92, 62, 130}
-	case .Ground, .Hill:
+	case .Grassland, .Steppe, .Hill, .Tundra, .Ash:
 		return rl.Color{142, 132, 114, 130}
+	case .Mountain:
+		return rl.Color{120, 120, 124, 130}
+	case .Lava:
+		return rl.Color{196, 96, 62, 150}
 	}
 	unreachable()
 }
@@ -224,13 +230,7 @@ UnitFootstepTint :: proc(w: ^World, x, y: f32) -> rl.Color {
 UnitTileIsWater :: proc(w: ^World, x, y: f32) -> bool {
 	tileX := WorldWrapCoordinate(int(x), int(w.maxX))
 	tileY := WorldWrapCoordinate(int(y), int(w.maxY))
-	switch w.ground[tileX][tileY].type {
-	case .Water, .FreshWater, .River:
-		return true
-	case .Ground, .FertileGround, .Sand, .Forest, .Hill, .Desert:
-		return false
-	}
-	unreachable()
+	return TileIsWater(w.ground[tileX][tileY].type)
 }
 
 UnitFootstepDust :: proc(w: ^World, unitSlot: int, kind: UnitKind, x, y: f32) {

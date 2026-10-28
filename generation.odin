@@ -142,7 +142,8 @@ WorldGenerate :: proc(w: ^World, settings: WorldGenerationSettings) {
 				max(1, worldWidth/7), max(1, worldHeight/7), settings.seed+41)
 			landScore := field[x*worldHeight+y]+(coast-0.5)*0.32+(detail-0.5)*0.13
 
-			tileType := TileType.Water
+			climate := ClimateKind.Temperate
+			tileType := TileType.Ocean
 			if landScore > settings.landThreshold {
 				moisture := WorldPeriodicNoise(x, y, worldWidth, worldHeight,
 					biomeCellsX, biomeCellsY, settings.seed+53)*0.7 +
@@ -152,19 +153,69 @@ WorldGenerate :: proc(w: ^World, settings: WorldGenerationSettings) {
 					biomeCellsX, biomeCellsY, settings.seed+83)*0.7 +
 					WorldPeriodicNoise(x, y, worldWidth, worldHeight,
 					detailCellsX, detailCellsY, settings.seed+89)*0.3
-				if height > 0.65 && landScore > settings.landThreshold+0.12 {
+				temperature := WorldPeriodicNoise(x, y, worldWidth, worldHeight,
+					max(1, worldWidth/26), max(1, worldHeight/26), settings.seed+97)*0.7 +
+					WorldPeriodicNoise(x, y, worldWidth, worldHeight,
+					max(1, worldWidth/11), max(1, worldHeight/11), settings.seed+103)*0.3
+				volcanic := WorldPeriodicNoise(x, y, worldWidth, worldHeight,
+					max(1, worldWidth/70), max(1, worldHeight/70), settings.seed+107)
+
+				if volcanic > 0.86 {
+					climate = .Volcanic
+				} else if temperature < 0.30 {
+					climate = .Boreal
+				} else if moisture < 0.30 {
+					climate = .Arid
+				} else if moisture > 0.66 {
+					climate = .Tropical
+				} else if moisture < 0.42 {
+					climate = .Steppe
+				}
+				if landScore < settings.landThreshold+0.07 &&
+					climate != .Boreal && climate != .Volcanic {
+					climate = .Coastal
+				}
+
+				switch {
+				case height > 0.80 && landScore > settings.landThreshold+0.16:
+					tileType = .Mountain
+				case height > 0.65 && landScore > settings.landThreshold+0.10:
 					tileType = .Hill
-				} else if moisture < settings.sandThreshold && landScore > settings.landThreshold+0.12 {
-					tileType = .Desert
-				} else if moisture > 0.57 {
-					tileType = .Forest
-				} else if moisture > 0.44 {
-					tileType = .FertileGround
-				} else {
-					tileType = .Ground
+				case climate == .Boreal:
+					tileType = moisture > 0.45 ? .Taiga : .Tundra
+				case climate == .Arid:
+					tileType = moisture < settings.sandThreshold*0.7 ? .Desert : .Steppe
+				case climate == .Tropical:
+					if moisture > 0.62 {
+						tileType = height < 0.5 ? .Marsh : .Forest
+					} else if moisture > 0.50 {
+						tileType = .Forest
+					} else {
+						tileType = .Plains
+					}
+				case climate == .Steppe:
+					tileType = moisture > 0.52 ? .Plains : .Steppe
+				case climate == .Volcanic:
+					tileType = moisture > 0.45 ? .Ash : .Hill
+				case climate == .Coastal:
+					if moisture > 0.55 {
+						tileType = .Marsh
+					} else if moisture > 0.40 {
+						tileType = .Plains
+					} else {
+						tileType = .Grassland
+					}
+				case:
+					if moisture > 0.57 {
+						tileType = .Forest
+					} else if moisture > 0.44 {
+						tileType = .Plains
+					} else {
+						tileType = .Grassland
+					}
 				}
 			}
-			w.ground[x][y].type = tileType
+			w.ground[x][y] = Tile{type = tileType, climate = climate}
 		}
 	}
 
@@ -202,11 +253,11 @@ WorldGenerateLakes :: proc(w: ^World, settings: WorldGenerationSettings) {
 			x := int(WorldNoiseHash(lakeIndex, attempt*2+3, lakeSeed)*f32(worldWidth))
 			y := int(WorldNoiseHash(lakeIndex, attempt*2+4, lakeSeed)*f32(worldHeight))
 			clearance := extent+settings.beachWidth+2
-			if w.ground[x][y].type == .Water ||
-				w.ground[WorldWrapCoordinate(x+clearance, worldWidth)][y].type == .Water ||
-				w.ground[WorldWrapCoordinate(x-clearance, worldWidth)][y].type == .Water ||
-				w.ground[x][WorldWrapCoordinate(y+clearance, worldHeight)].type == .Water ||
-				w.ground[x][WorldWrapCoordinate(y-clearance, worldHeight)].type == .Water {
+			if w.ground[x][y].type == .Ocean ||
+				w.ground[WorldWrapCoordinate(x+clearance, worldWidth)][y].type == .Ocean ||
+				w.ground[WorldWrapCoordinate(x-clearance, worldWidth)][y].type == .Ocean ||
+				w.ground[x][WorldWrapCoordinate(y+clearance, worldHeight)].type == .Ocean ||
+				w.ground[x][WorldWrapCoordinate(y-clearance, worldHeight)].type == .Ocean {
 				continue
 			}
 			centerX, centerY = x, y
@@ -224,9 +275,15 @@ WorldGenerateLakes :: proc(w: ^World, settings: WorldGenerationSettings) {
 				y := WorldWrapCoordinate(centerY+deltaY, worldHeight)
 				shoreNoise := WorldPeriodicNoise(x, y, worldWidth, worldHeight, 40, 40, lakeSeed+7)
 				shore := 0.75+shoreNoise*0.5
-				if w.ground[x][y].type != .Water &&
+				if w.ground[x][y].type != .Ocean && w.ground[x][y].type != .Mountain &&
+					w.ground[x][y].type != .Lava &&
 					along*along/(radiusX*radiusX)+across*across/(radiusY*radiusY) <= shore*shore {
-					w.ground[x][y].type = .FreshWater
+					if w.ground[x][y].climate == .Boreal &&
+						WorldNoiseHash(x, y, lakeSeed+13) < 0.35 {
+						w.ground[x][y].type = .Ice
+					} else {
+						w.ground[x][y].type = .Lake
+					}
 				}
 			}
 		}
@@ -261,7 +318,8 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 		for y in 0..<worldHeight {
 			index := x*worldHeight+y
 			distance[index] = -1
-			if w.ground[x][y].type == .Water || w.ground[x][y].type == .FreshWater {
+			if w.ground[x][y].type == .Ocean || w.ground[x][y].type == .Lake ||
+				w.ground[x][y].type == .Ice {
 				distance[index] = 0
 				queue[tail] = index
 				tail += 1
@@ -321,7 +379,10 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 		for _ in 0..<maxSteps {
 			x, y := current/worldHeight, current%worldHeight
 			tile := w.ground[x][y].type
-			if tile == .River || tile == .Water || tile == .FreshWater do break
+			if tile == .River || tile == .Ocean || tile == .Lake || tile == .Ice ||
+				tile == .Mountain || tile == .Lava {
+				break
+			}
 
 			w.ground[x][y].type = .River
 			visited[current] = stamp
@@ -407,14 +468,20 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 				switch w.ground[nx][ny].type {
 				case .Hill:
 					score -= 0.35
+				case .Mountain, .Lava:
+					score -= 1.0
 				case .Desert:
 					score -= 0.10
-				case .Forest:
+				case .Forest, .Taiga:
 					score += 0.05
-				case .Ground, .FertileGround, .Sand:
+				case .Marsh:
+					score += 0.30
+				case .Grassland, .Plains, .Sand, .Steppe, .Tundra, .Ash:
 					score += 0.12
-				case .Water, .FreshWater, .River:
+				case .Ocean, .Lake, .River:
 					score += 1.5
+				case .Ice:
+					score += 1.0
 				}
 				score += (WorldNoiseHash(nx, ny, riverSeed+3433)-0.5)*0.35
 				if score > bestScore {
@@ -429,7 +496,10 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 			bestX := best/worldHeight
 			bestY := best%worldHeight
 			bestTile := w.ground[bestX][bestY].type
-			if bestTile == .Water || bestTile == .FreshWater || bestTile == .River do break
+			if bestTile == .Ocean || bestTile == .Lake || bestTile == .River ||
+				bestTile == .Ice || bestTile == .Mountain || bestTile == .Lava {
+				break
+			}
 			if distance[best] == currentDistance do lateralBudget -= 1
 			headingX = bestDirX
 			headingY = bestDirY
@@ -462,8 +532,8 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 				wx := WorldWrapCoordinate(x+sideX, worldWidth)
 				wy := WorldWrapCoordinate(y+sideY, worldHeight)
 				switch w.ground[wx][wy].type {
-				case .Water, .FreshWater, .River:
-				case .Ground, .FertileGround, .Sand, .Forest, .Hill, .Desert:
+				case .Ocean, .Lake, .River, .Mountain, .Ice, .Lava:
+				case .Marsh, .Sand, .Grassland, .Plains, .Forest, .Taiga, .Steppe, .Hill, .Desert, .Tundra, .Ash:
 					w.ground[wx][wy].type = .River
 				}
 			}
@@ -481,7 +551,9 @@ WorldGenerateBeaches :: proc(w: ^World, beachWidth: int, seed: u64) {
 	for x in 0..<worldWidth {
 		for y in 0..<worldHeight {
 			tileType := w.ground[x][y].type
-			if tileType == .Water || tileType == .FreshWater || tileType == .River do continue
+			if TileIsWater(tileType) || tileType == .Ice || tileType == .Mountain || tileType == .Lava {
+				continue
+			}
 
 			// Broad noise makes continuous sandy bays and rocky or vegetated shores.
 			shore := WorldPeriodicNoise(x, y, worldWidth, worldHeight,
@@ -489,9 +561,27 @@ WorldGenerateBeaches :: proc(w: ^World, beachWidth: int, seed: u64) {
 				WorldPeriodicNoise(x, y, worldWidth, worldHeight,
 					max(1, worldWidth/18), max(1, worldHeight/18), seed+157)*0.2
 			threshold: f32 = 0.51
-			if tileType == .Hill do threshold = 0.70
-			if tileType == .Forest do threshold = 0.60
-			if tileType == .Desert do threshold = 0.40
+			switch tileType {
+			case .Hill:
+				threshold = 0.70
+			case .Mountain:
+				threshold = 0.90
+			case .Forest:
+				threshold = 0.60
+			case .Taiga:
+				threshold = 0.64
+			case .Desert:
+				threshold = 0.40
+			case .Steppe:
+				threshold = 0.52
+			case .Marsh:
+				threshold = 0.26
+			case .Tundra:
+				threshold = 0.76
+			case .Ash:
+				threshold = 0.45
+			case .Ocean, .Lake, .River, .Ice, .Sand, .Grassland, .Plains, .Lava:
+			}
 			if shore < threshold do continue
 
 			nearWater := false
@@ -500,7 +590,7 @@ WorldGenerateBeaches :: proc(w: ^World, beachWidth: int, seed: u64) {
 					if deltaX*deltaX + deltaY*deltaY > beachWidth*beachWidth do continue
 					neighborX := WorldWrapCoordinate(x+deltaX, worldWidth)
 					neighborY := WorldWrapCoordinate(y+deltaY, worldHeight)
-					if w.ground[neighborX][neighborY].type == .Water {
+					if w.ground[neighborX][neighborY].type == .Ocean {
 						nearWater = true
 						break
 					}

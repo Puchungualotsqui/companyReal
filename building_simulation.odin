@@ -974,16 +974,17 @@ TownPlacementScore :: proc(w: ^World, kingdomSlot, townSlot, x, y, width, height
 			score += f32(min(neighborhood.homes, 3))*0.45-f32(max(0, neighborhood.homes-5))*0.6
 		}
 	}
-	fertileTiles := 0
+	fertility: f32 = 0
 	for tileX in x..<x+width {
 		for tileY in y..<y+height {
-			if w.ground[tileX][tileY].type == .FertileGround do fertileTiles += 1
+			fertility += TILE_DEFS[w.ground[tileX][tileY].type].food
 		}
 	}
+	fertility /= f32(max(width*height, 1))
 	if kind == .Farmland {
-		if fertileTiles >= 2 do score += 3
+		score += fertility*3
 	} else {
-		score -= f32(fertileTiles)*0.2
+		score -= fertility*0.8
 	}
 	return score
 }
@@ -992,13 +993,12 @@ BuildingFarmlandOutput :: proc(w: ^World, buildingSlot: int) -> f32 {
 	x := w.buildings.x[buildingSlot]
 	y := w.buildings.y[buildingSlot]
 	width, height := BuildingTileSize(w.buildings[buildingSlot].type)
-	fertileTiles := 0
+	fertility: f32 = 0
 	for tileX in x..<x+width {
 		for tileY in y..<y+height {
-			if w.ground[tileX][tileY].type == .FertileGround do fertileTiles += 1
+			fertility += TILE_DEFS[w.ground[tileX][tileY].type].food
 		}
 	}
-	output: f32 = 0.10
-	if fertileTiles >= 2 do output = 0.16
-	return output
+	fertility /= f32(max(width*height, 1))
+	return clamp(0.08+fertility*0.08, 0.08, 0.16)
 }

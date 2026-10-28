@@ -44,15 +44,9 @@ Fire :: struct {
 	remaining: f32,
 }
 
-// Water cannot burn; every other terrain can host a fire.
+// Fire risk is a terrain property; zero-risk tiles cannot ignite or spread.
 TileTypeAntiFire :: proc(tileType: TileType) -> bool {
-	switch tileType {
-	case .Water, .FreshWater, .River:
-		return true
-	case .Ground, .FertileGround, .Sand, .Forest, .Hill, .Desert:
-		return false
-	}
-	unreachable()
+	return TILE_DEFS[tileType].fireRisk <= 0
 }
 
 UnitImmuneToFire :: proc(type: UnitType) -> bool {
