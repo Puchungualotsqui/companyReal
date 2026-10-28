@@ -17,6 +17,7 @@ AlertKind :: enum {
 	TownGrowth,
 	TownFused,
 	InsightGained,
+	Environment,
 }
 
 Alert :: struct {
@@ -129,6 +130,24 @@ WorldAlertAddGrowth :: proc(w: ^World, kingdom, town, amount: int) {
 			y = f32(townRef.y),
 			time = w.simulationTime,
 			amount = amount,
+		},
+	)
+}
+
+WorldAlertAddEnvironment :: proc(w: ^World, event: ^EnvironmentEvent) {
+	if w.observerKingdom < 0 do return
+	if !EnvironmentEventRevealed(w) do return
+	WorldAlertPush(
+		w,
+		Alert{
+			kind = .Environment,
+			kingdom = event.kingdom,
+			town = event.town,
+			other = int(event.kind),
+			amount = int(event.severity),
+			x = event.centerX,
+			y = event.centerY,
+			time = w.simulationTime,
 		},
 	)
 }

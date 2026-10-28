@@ -701,6 +701,8 @@ AIFoundTownAt :: proc(w: ^World, kingdom, townSlot: int) -> bool {
 		x := WorldWrapCoordinate(int(centerX)-2, int(w.maxX))
 		y := WorldWrapCoordinate(int(centerY)-2, int(w.maxY))
 		if TownFoundingFailure(w, kingdom, townSlot, x, y) != .None do continue
+		width, height := BuildingTileSize(TownHall{})
+		if WorldScarInRect(w, x, y, width, height, {.Scorched, .Volcanic, .Cleft}) do continue
 		if KingdomIssueCommand(w, kingdom, CommandFoundTown{town = townSlot, x = x, y = y}) {
 			return true
 		}

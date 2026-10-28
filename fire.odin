@@ -42,6 +42,7 @@ Fire :: struct {
 	intensity: f32,
 	spread:    f32,
 	remaining: f32,
+	duration:  f32,
 }
 
 // Fire risk is a terrain property; zero-risk tiles cannot ignite or spread.
@@ -129,7 +130,9 @@ WorldFireIgnite :: proc(w: ^World, x, y, intensity: f32, spread: f32 = 1) -> (in
 	w.fires.y[slot] = f32(tileY)+0.5
 	w.fires.intensity[slot] = clamp(intensity, 0.2, 2)
 	w.fires.spread[slot] = clamp(spread, 0, 2)
-	w.fires.remaining[slot] = FIRE_DURATION*(0.8+WorldNoiseHash(tileX, tileY, 0xF12E)*0.4)
+	duration := FIRE_DURATION*(0.8+WorldNoiseHash(tileX, tileY, 0xF12E)*0.4)
+	w.fires.remaining[slot] = duration
+	w.fires.duration[slot] = duration
 	w.fireUsed[slot] = true
 	w.fireCursor = (slot+1)%FIRE_CAPACITY
 	w.fireCount += 1
@@ -188,6 +191,18 @@ FireDamageTile :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 	tileY := int(w.fires.y[fireSlot])
 	intensity := w.fires.intensity[fireSlot]
 	worldHeight := int(w.maxY)
+
+	// Once a blaze has taken hold it leaves a scar. Only the woody biomes turn
+	// to ash; grass fires recover without a lasting mark.
+	if w.fires.remaining[fireSlot] < w.fires.duration[fireSlot]*0.55 {
+		switch w.ground[tileX][tileY].type {
+		case .Forest, .Taiga:
+			seconds := SCORCHED_MIN_SECONDS+
+				WorldNoiseHash(tileX, tileY, 0xF1A5)*(SCORCHED_MAX_SECONDS-SCORCHED_MIN_SECONDS)
+			WorldTerrainTransform(w, tileX, tileY, .Ash, .Scorched, seconds)
+		case .Ocean, .Lake, .River, .Ice, .Marsh, .Sand, .Grassland, .Plains, .Steppe, .Hill, .Mountain, .Desert, .Tundra, .Ash, .Lava:
+		}
+	}
 
 	buildingSlot := w.tileBuilding[tileX*worldHeight+tileY]
 	if buildingSlot >= 0 && buildingSlot < BUILDING_CAPACITY && w.buildingUsed[buildingSlot] {

@@ -297,12 +297,19 @@ Weather pacing tuned to that:
    fire, vision and movement modifiers, `Wet`/`Chilled`/`HeatStressed` unit
    effects, and AI awareness of fire weather. `Sandstorm` and `Ashfall` are
    defined and supported visually, but reserved for phase-3 events.
-3. **Events framework.** Severity, weighted bags, debt-based fairness, telegraphs,
-   alerts and the active-event lifecycle.
-4. **Lethal events + aftermath.** Wildfire, flood, blizzard, earthquake, terrain
-   mutation and the ash/fertile regrowth loop.
-5. **Cataclysms + polish.** Eruption, hurricane, locusts, meteor shower, audio,
-   seasonal art and balance passes.
+3. **Events framework (implemented).** Severity tiers, weighted bags, debt-based
+   fairness, telegraph rings/banner/alerts and the active-event lifecycle for
+   wildfire, flood, drought, blizzard, earthquake, eruption, locusts, hurricane
+   and meteor shower.
+4. **Lethal events + aftermath (implemented).** Wildfire burns forest into ash,
+   floods drown land units and leave permanent silt, droughts dry rivers and
+   then recover when the rain returns, blizzards freeze lakes until spring,
+   earthquakes fracture the ground into hills and eruptions leave lethal lava
+   that cools into ash. Every mutation runs through `WorldTerrainTransform`,
+   which invalidates navigation, water access, coastal checks and terrain art.
+   Scars are tracked per tile with a recovery timer, pulse on the map and show
+   their remaining time in the hover tooltip.
+5. **Cataclysm polish.** Audio, seasonal art, camera shake and balance passes.
 
 Each phase should be playable on its own.
 
@@ -310,8 +317,8 @@ Each phase should be playable on its own.
 
 - Exact tile art budget: 17 tiles × 4 seasons is a lot; start with one seasonal
   tint pass and unique art only for the tiles that change silhouette.
-- Seasonal terrain transitions (lakes freezing and melting, snow accumulation)
-  are deferred to the aftermath phase; phase 2 handles weather visuals and
-  modifiers.
+- Seasonal terrain transitions are handled by aftermath scars: lakes freeze
+  during blizzards and thaw in spring, while snow accumulation remains a visual
+  pass for later.
 - Whether relief should be visible as a mechanic or only as favourable weather.
 - Final event frequencies after the first playtest of phase 3.

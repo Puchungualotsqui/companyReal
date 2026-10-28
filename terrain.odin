@@ -10,6 +10,7 @@ TERRAIN_CHUNK_PIXELS :: TERRAIN_CHUNK_TILES*PIXELS_PER_TILE
 TERRAIN_CHUNK_CAPACITY :: 128
 TERRAIN_CHUNK_GENERATION_BUDGET :: 8
 TERRAIN_CHUNK_MIN_ZOOM : f32 : 8
+TERRAIN_LOW_REFRESH_SECONDS :: 1.5
 TERRAIN_SEED :: u64(0x5EED_7E44_A1)
 
 // Terrain properties live in one table so a new tile is a single entry plus
@@ -58,11 +59,14 @@ TerrainChunk :: struct {
 	texture:  rl.Texture2D,
 	chunkX, chunkY: int,
 	lastUsed: u64,
+	revision: u64,
 }
 
 TerrainRenderer :: struct {
 	lowTexture: rl.Texture2D,
 	revision:   u64,
+	lowDirty:   bool,
+	lastLowTime: f32,
 	chunks:     [dynamic]TerrainChunk,
 	tiles:      [TileType][TERRAIN_TILE_VARIANTS]rl.Image,
 	clock:      u64,
@@ -73,6 +77,7 @@ TerrainRendererInit :: proc(w: ^World) -> TerrainRenderer {
 	renderer := TerrainRenderer{
 		lowTexture = WorldCreateTerrainTexture(w),
 		revision = w.terrainRevision,
+		lastLowTime = w.simulationTime,
 		chunks = make([dynamic]TerrainChunk, 0, TERRAIN_CHUNK_CAPACITY),
 	}
 	for kind in TileType {
@@ -85,12 +90,18 @@ TerrainRendererInit :: proc(w: ^World) -> TerrainRenderer {
 }
 
 TerrainRendererUpdate :: proc(w: ^World, renderer: ^TerrainRenderer) {
-	if renderer.revision == w.terrainRevision do return
-
+	if renderer.revision != w.terrainRevision {
+		renderer.revision = w.terrainRevision
+		renderer.lowDirty = true
+	}
+	// The low map is only used when zoomed out, so rebuilding it can wait; the
+	// high-zoom chunks regenerate lazily per chunk instead.
+	if !renderer.lowDirty do return
+	if w.simulationTime-renderer.lastLowTime < TERRAIN_LOW_REFRESH_SECONDS do return
+	renderer.lowDirty = false
+	renderer.lastLowTime = w.simulationTime
 	rl.UnloadTexture(renderer.lowTexture)
 	renderer.lowTexture = WorldCreateTerrainTexture(w)
-	renderer.revision = w.terrainRevision
-	TerrainChunksClear(renderer)
 }
 
 TerrainRendererDeinit :: proc(renderer: ^TerrainRenderer) {
@@ -186,9 +197,18 @@ TerrainRenderChunks :: proc(w: ^World, renderer: ^TerrainRenderer, camera: rl.Ca
 
 TerrainEnsureChunk :: proc(w: ^World, renderer: ^TerrainRenderer, chunkX, chunkY: int) -> (rl.Texture2D, bool) {
 	renderer.clock += 1
+	revision := WorldTerrainChunkRevision(w, chunkX, chunkY)
 	for &chunk in renderer.chunks {
 		if chunk.chunkX == chunkX && chunk.chunkY == chunkY {
 			chunk.lastUsed = renderer.clock
+			if chunk.revision == revision do return chunk.texture, true
+			if renderer.generated >= TERRAIN_CHUNK_GENERATION_BUDGET {
+				return chunk.texture, true
+			}
+			renderer.generated += 1
+			rl.UnloadTexture(chunk.texture)
+			chunk.texture = TerrainCreateChunkTexture(w, renderer, chunkX, chunkY)
+			chunk.revision = revision
 			return chunk.texture, true
 		}
 	}
@@ -207,6 +227,7 @@ TerrainEnsureChunk :: proc(w: ^World, renderer: ^TerrainRenderer, chunkX, chunkY
 			chunkX = chunkX,
 			chunkY = chunkY,
 			lastUsed = renderer.clock,
+			revision = revision,
 		}
 		return texture, true
 	}
@@ -216,6 +237,7 @@ TerrainEnsureChunk :: proc(w: ^World, renderer: ^TerrainRenderer, chunkX, chunkY
 		chunkX = chunkX,
 		chunkY = chunkY,
 		lastUsed = renderer.clock,
+		revision = revision,
 	})
 	return texture, true
 }
@@ -652,6 +674,7 @@ WorldHazardDespawn :: proc(w: ^World, slot: int) {
 			})
 		}
 	} else if w.hazardCells.kind[slot] == .Flood {
+		WorldTerrainFloodEnrich(w, x, y)
 		ParticleSpawn(w, Particle{
 			x = f32(x)+PRandom(w),
 			y = f32(y)+PRandom(w),
@@ -865,5 +888,589 @@ WorldHazardUpdate :: proc(w: ^World, deltaTime: f32) {
 				.Drowning,
 			)
 		}
+	}
+}
+
+// --- terrain aftermath ------------------------------------------------------
+
+// Scars are persistent terrain changes with a recovery timer. They are the
+// world's memory: burned forest, silted floodplains, dry riverbeds, frozen
+// lakes and cooled lava fields all revert or settle over time.
+TerrainScar :: enum u8 {
+	None,
+	Scorched,
+	Enriched,
+	Parched,
+	Frozen,
+	Volcanic,
+	Cleft,
+}
+
+LAVA_DAMAGE_PER_SECOND :: 45.0
+SCORCHED_MIN_SECONDS :: 90
+SCORCHED_MAX_SECONDS :: 180
+ENRICHED_SECONDS :: 240
+PARCHED_MIN_SECONDS :: 75
+PARCHED_MAX_SECONDS :: 165
+FROZEN_MIN_SECONDS :: 210
+FROZEN_MAX_SECONDS :: 390
+VOLCANIC_MIN_SECONDS :: 30
+VOLCANIC_MAX_SECONDS :: 70
+CLEFT_MIN_SECONDS :: 90
+CLEFT_MAX_SECONDS :: 150
+
+TerrainScarName :: proc(scar: TerrainScar) -> cstring {
+	switch scar {
+	case .None:
+		return ""
+	case .Scorched:
+		return "Scorched"
+	case .Enriched:
+		return "Silted"
+	case .Parched:
+		return "Parched"
+	case .Frozen:
+		return "Frozen"
+	case .Volcanic:
+		return "Volcanic"
+	case .Cleft:
+		return "Fractured"
+	}
+	unreachable()
+}
+
+TerrainScarDescription :: proc(scar: TerrainScar) -> cstring {
+	switch scar {
+	case .None:
+		return ""
+	case .Scorched:
+		return "Burned ground; forest regrows."
+	case .Enriched:
+		return "Flood silt; richer soil for good."
+	case .Parched:
+		return "Dried by drought; rain restores it."
+	case .Frozen:
+		return "Frozen over; thaws with the cold."
+	case .Volcanic:
+		return "Lava; lethal until it cools to ash."
+	case .Cleft:
+		return "Tremor cracks; settles into hills."
+	}
+	unreachable()
+}
+
+TerrainScarOverlayColor :: proc(scar: TerrainScar) -> rl.Color {
+	switch scar {
+	case .None:
+		return rl.Color{0, 0, 0, 0}
+	case .Scorched:
+		return rl.Color{74, 58, 48, 255}
+	case .Enriched:
+		return rl.Color{120, 196, 106, 255}
+	case .Parched:
+		return rl.Color{216, 184, 112, 255}
+	case .Frozen:
+		return rl.Color{196, 232, 252, 255}
+	case .Volcanic:
+		return rl.Color{255, 112, 54, 255}
+	case .Cleft:
+		return rl.Color{150, 128, 106, 255}
+	}
+	unreachable()
+}
+
+WorldScarInRect :: proc(
+	w: ^World,
+	x, y, width, height: int,
+	kinds: bit_set[TerrainScar],
+) -> bool {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || width <= 0 || height <= 0 do return false
+	for tileX in x ..< x+width {
+		wrappedX := WorldWrapCoordinate(tileX, worldWidth)
+		for tileY in y ..< y+height {
+			wrappedY := WorldWrapCoordinate(tileY, worldHeight)
+			if w.ground[wrappedX][wrappedY].scar in kinds do return true
+		}
+	}
+	return false
+}
+
+// All permanent terrain mutation funnels through here so the renderer, cached
+// water access, coastal checks and navigation are invalidated together.
+WorldTerrainTransform :: proc(
+	w: ^World,
+	x, y: int,
+	to: TileType,
+	scar: TerrainScar,
+	seconds: f32,
+) -> bool {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || scar == .None do return false
+	if len(w.tileBuilding) == 0 do return false
+
+	wrappedX := WorldWrapCoordinate(x, worldWidth)
+	wrappedY := WorldWrapCoordinate(y, worldHeight)
+	index := wrappedX*worldHeight+wrappedY
+	if index < 0 || index >= len(w.tileBuilding) do return false
+	if w.tileBuilding[index] >= 0 do return false
+	if _, hasHazard := WorldHazardKindAt(w, wrappedX, wrappedY); hasHazard do return false
+
+	tile := &w.ground[wrappedX][wrappedY]
+	original := tile.type
+	// Silt is permanent, so a later scar reverts to the enriched type rather
+	// than the pre-flood one.
+	if tile.scar != .None && tile.scar != .Enriched do original = tile.scarFrom
+	wasScarred := tile.scar != .None
+
+	if tile.type == to && tile.scar == scar {
+		tile.scarTimer = max(tile.scarTimer, seconds)
+		return true
+	}
+
+	tile.scarFrom = original
+	tile.scar = scar
+	tile.scarTimer = seconds
+	if tile.type != to do WorldTileSet(w, wrappedX, wrappedY, to)
+	if to == .Lava do WorldDecorationClearRect(w, wrappedX, wrappedY, 1, 1)
+	if !wasScarred do append(&w.scarTiles, i32(index))
+	TerrainScarBurst(w, wrappedX, wrappedY, scar)
+	return true
+}
+
+TerrainScarBurst :: proc(w: ^World, x, y: int, scar: TerrainScar) {
+	count := 3
+	switch scar {
+	case .Scorched:
+		count = 4
+	case .Enriched:
+		count = 3
+	case .Parched:
+		count = 3
+	case .Frozen:
+		count = 4
+	case .Volcanic:
+		count = 6
+	case .Cleft:
+		count = 4
+	case .None:
+		return
+	}
+	for _ in 0..<count {
+		angle := PRandom(w)*6.2831853
+		spread := PRandomRange(w, 0.15, 0.45)
+		particle := Particle{
+			x = f32(x)+0.5+math.cos(angle)*spread,
+			y = f32(y)+0.5+math.sin(angle)*spread,
+			z = PRandomRange(w, 0.15, 0.6),
+			vx = math.cos(angle)*PRandomRange(w, 0.3, 1.1),
+			vy = math.sin(angle)*PRandomRange(w, 0.3, 1.1),
+			vz = PRandomRange(w, 0.3, 1.2),
+			life = PRandomRange(w, 0.5, 1.3),
+			size = PRandomRange(w, 0.10, 0.26),
+			drag = 1.4,
+			gravity = 2.5,
+			kind = .Dust,
+			tint = rl.Color{210, 200, 180, 210},
+		}
+		switch scar {
+		case .Scorched:
+			particle.kind = .Ash
+			particle.gravity = -0.3
+			particle.tint = rl.Color{102, 96, 92, 215}
+		case .Enriched:
+			particle.kind = .Spark
+			particle.gravity = 3
+			particle.tint = rl.Color{140, 214, 120, 220}
+		case .Parched:
+			particle.kind = .Dust
+			particle.tint = rl.Color{218, 190, 132, 200}
+		case .Frozen:
+			particle.kind = .Spark
+			particle.gravity = 4
+			particle.tint = rl.Color{206, 240, 255, 255}
+		case .Volcanic:
+			particle.kind = .Ember
+			particle.vz = PRandomRange(w, 0.8, 2.2)
+			particle.gravity = -0.4
+			particle.tint = rl.Color{255, 150, 64, 255}
+		case .Cleft:
+			particle.kind = .StoneChip
+			particle.gravity = 8
+			particle.tint = rl.Color{176, 156, 132, 255}
+		case .None:
+		}
+		ParticleSpawn(w, particle)
+	}
+}
+
+TerrainScarDecayFactor :: proc(scar: TerrainScar, season: Season, weather: WeatherKind) -> f32 {
+	wet := weather == .Rain || weather == .Storm
+	switch scar {
+	case .Parched:
+		if wet do return 5
+		if season == .Spring do return 3
+		return 1
+	case .Frozen:
+		if season == .Spring || season == .Summer do return 5
+		if season == .Autumn do return 2
+		if wet do return 3
+		return 1
+	case .Scorched:
+		if season == .Spring do return 1.7
+		return 1
+	case .Enriched, .Volcanic, .Cleft, .None:
+		return 1
+	}
+	return 1
+}
+
+TerrainScarParticles :: proc(w: ^World, index, x, y: int, scar: TerrainScar) {
+	chance: f32 = 0
+	switch scar {
+	case .Volcanic:
+		chance = 0.06
+	case .Scorched:
+		chance = 0.012
+	case .Cleft:
+		chance = 0.008
+	case .Enriched, .Parched, .Frozen, .None:
+		return
+	}
+	if WorldNoiseHash(index, int(w.simulationTime*8), w.seed+0x6A11) > chance do return
+	particle := Particle{
+		x = f32(x)+PRandom(w),
+		y = f32(y)+PRandom(w),
+		z = PRandomRange(w, 0.1, 0.4),
+		vx = (PRandom(w)-0.5)*0.3,
+		vy = (PRandom(w)-0.5)*0.3,
+		vz = 0.4,
+		life = PRandomRange(w, 0.8, 1.8),
+		size = PRandomRange(w, 0.14, 0.3),
+		drag = 1.2,
+		gravity = -0.2,
+		kind = .Smoke,
+		tint = rl.Color{96, 88, 82, 170},
+	}
+	switch scar {
+	case .Volcanic:
+		particle.kind = .Ember
+		particle.vz = PRandomRange(w, 0.8, 1.8)
+		particle.gravity = -0.3
+		particle.tint = rl.Color{255, 140, 58, 240}
+	case .Scorched:
+		particle.tint = rl.Color{112, 104, 96, 180}
+	case .Cleft:
+		particle.kind = .Dust
+		particle.tint = rl.Color{178, 158, 134, 180}
+	case .Enriched, .Parched, .Frozen, .None:
+		return
+	}
+	ParticleSpawn(w, particle)
+}
+
+// Applies the final state of a scar. Enrichment and tremors leave a permanent
+// improvement; the other scars restore the original terrain.
+TerrainScarSettle :: proc(w: ^World, x, y: int, tile: ^Tile) {
+	switch tile.scar {
+	case .None:
+	case .Scorched:
+		WorldTileSet(w, x, y, tile.scarFrom)
+	case .Enriched:
+		// The enriched type itself is the payoff, so keep it.
+	case .Parched, .Frozen:
+		WorldTileSet(w, x, y, tile.scarFrom)
+	case .Volcanic:
+		if tile.type == .Lava do WorldTileSet(w, x, y, .Ash)
+	case .Cleft:
+		if tile.type != .Hill && tile.type != .Mountain do WorldTileSet(w, x, y, .Hill)
+	}
+	tile.scar = .None
+	tile.scarTimer = 0
+}
+
+WorldTerrainAftermathUpdate :: proc(w: ^World, deltaTime: f32) {
+	if deltaTime <= 0 || len(w.scarTiles) == 0 do return
+	worldHeight := int(w.maxY)
+	if worldHeight <= 0 do return
+	season := WorldSeason(w)
+
+	write := 0
+	for read in 0..<len(w.scarTiles) {
+		index := int(w.scarTiles[read])
+		if index < 0 || index >= len(w.tileBuilding) do continue
+		x := index/worldHeight
+		y := index%worldHeight
+		if x < 0 || x >= int(w.maxX) do continue
+		tile := &w.ground[x][y]
+		if tile.scar == .None do continue
+		if w.tileBuilding[index] >= 0 {
+			// Construction claims the ground; the scar stops mattering.
+			tile.scar = .None
+			tile.scarTimer = 0
+			continue
+		}
+
+		factor := TerrainScarDecayFactor(tile.scar, season, w.weather.kind)
+		tile.scarTimer = max(tile.scarTimer-deltaTime*factor, 0)
+		TerrainScarParticles(w, index, x, y, tile.scar)
+		if tile.scarTimer <= 0 {
+			TerrainScarSettle(w, x, y, tile)
+			continue
+		}
+
+		w.scarTiles[write] = i32(index)
+		write += 1
+	}
+	resize(&w.scarTiles, write)
+}
+
+// Floodwater recedes into silt. This runs when a flood cell expires, so shores
+// and riverbanks keep a permanent yield improvement.
+WorldTerrainFloodEnrich :: proc(w: ^World, x, y: int) {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
+	wrappedX := WorldWrapCoordinate(x, worldWidth)
+	wrappedY := WorldWrapCoordinate(y, worldHeight)
+	tile := w.ground[wrappedX][wrappedY]
+	if tile.scar != .None do return
+	if WorldNoiseHash(wrappedX, wrappedY, w.seed+0xF10D) > 0.55 do return
+
+	target: TileType
+	switch tile.type {
+	case .Grassland:
+		target = .Plains
+	case .Sand, .Steppe, .Ash:
+		target = .Grassland
+	case .Desert:
+		if WorldNoiseHash(wrappedX, wrappedY, w.seed+0xF10E) > 0.35 do return
+		target = .Steppe
+	case .Marsh:
+		if WorldNoiseHash(wrappedX, wrappedY, w.seed+0xF10F) > 0.3 do return
+		target = .Grassland
+	case .Ocean, .Lake, .River, .Ice, .Plains, .Forest, .Taiga, .Hill, .Mountain, .Tundra, .Lava:
+		return
+	}
+	WorldTerrainTransform(w, wrappedX, wrappedY, target, .Enriched, ENRICHED_SECONDS)
+}
+
+WorldTerrainDroughtApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: u64) {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
+	centerTileX := int(WorldWrapPosition(centerX, f32(worldWidth)))
+	centerTileY := int(WorldWrapPosition(centerY, f32(worldHeight)))
+	reach := int(math.ceil(radius))
+	for offsetX in -reach..=reach {
+		for offsetY in -reach..=reach {
+			if f32(offsetX*offsetX+offsetY*offsetY) > radius*radius do continue
+			x := WorldWrapCoordinate(centerTileX+offsetX, worldWidth)
+			y := WorldWrapCoordinate(centerTileY+offsetY, worldHeight)
+			if w.tileBuilding[x*worldHeight+y] >= 0 do continue
+			tile := &w.ground[x][y]
+			if tile.scar != .None do continue
+			roll := WorldNoiseHash(x, y, salt+0xD0D0)
+			seconds := PARCHED_MIN_SECONDS+
+				roll*(PARCHED_MAX_SECONDS-PARCHED_MIN_SECONDS)
+			switch tile.type {
+			case .River:
+				if roll < 0.8 {
+					WorldTerrainTransform(w, x, y, .Sand, .Parched, seconds)
+				}
+			case .Lake:
+				if roll < 0.45 {
+					WorldTerrainTransform(w, x, y, .Marsh, .Parched, seconds)
+				}
+			case .Marsh:
+				if roll < 0.6 {
+					WorldTerrainTransform(w, x, y, .Sand, .Parched, seconds)
+				}
+			case .Grassland, .Plains:
+				if roll < 0.55 {
+					WorldTerrainTransform(w, x, y, .Steppe, .Parched, seconds)
+				}
+			case .Ocean, .Ice, .Sand, .Forest, .Taiga, .Steppe, .Hill, .Mountain, .Desert, .Tundra, .Ash, .Lava:
+			}
+		}
+	}
+}
+
+WorldTerrainFreezeApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: u64) {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
+	centerTileX := int(WorldWrapPosition(centerX, f32(worldWidth)))
+	centerTileY := int(WorldWrapPosition(centerY, f32(worldHeight)))
+	reach := int(math.ceil(radius))
+	for offsetX in -reach..=reach {
+		for offsetY in -reach..=reach {
+			if f32(offsetX*offsetX+offsetY*offsetY) > radius*radius do continue
+			x := WorldWrapCoordinate(centerTileX+offsetX, worldWidth)
+			y := WorldWrapCoordinate(centerTileY+offsetY, worldHeight)
+			if w.tileBuilding[x*worldHeight+y] >= 0 do continue
+			tile := &w.ground[x][y]
+			if tile.scar != .None do continue
+			roll := WorldNoiseHash(x, y, salt+0xF0F0)
+			seconds := FROZEN_MIN_SECONDS+roll*(FROZEN_MAX_SECONDS-FROZEN_MIN_SECONDS)
+			switch tile.type {
+			case .Lake, .River, .Marsh:
+				WorldTerrainTransform(w, x, y, .Ice, .Frozen, seconds)
+			case .Ocean, .Ice, .Sand, .Grassland, .Plains, .Forest, .Taiga, .Steppe, .Hill, .Mountain, .Desert, .Tundra, .Ash, .Lava:
+			}
+		}
+	}
+}
+
+WorldTerrainQuakeApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: u64) {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
+	centerTileX := int(WorldWrapPosition(centerX, f32(worldWidth)))
+	centerTileY := int(WorldWrapPosition(centerY, f32(worldHeight)))
+	reach := int(math.ceil(radius))
+	for offsetX in -reach..=reach {
+		for offsetY in -reach..=reach {
+			if f32(offsetX*offsetX+offsetY*offsetY) > radius*radius do continue
+			x := WorldWrapCoordinate(centerTileX+offsetX, worldWidth)
+			y := WorldWrapCoordinate(centerTileY+offsetY, worldHeight)
+			if w.tileBuilding[x*worldHeight+y] >= 0 do continue
+			tile := &w.ground[x][y]
+			if tile.scar != .None do continue
+			roll := WorldNoiseHash(x, y, salt+0xC1EA)
+			seconds := CLEFT_MIN_SECONDS+roll*(CLEFT_MAX_SECONDS-CLEFT_MIN_SECONDS)
+			switch tile.type {
+			case .Grassland, .Plains, .Steppe, .Forest, .Taiga, .Tundra, .Desert, .Sand, .Marsh, .Ash:
+				if roll < 0.24 {
+					WorldTerrainTransform(w, x, y, .Hill, .Cleft, seconds)
+				}
+			case .Hill:
+				if roll < 0.14 {
+					WorldTerrainTransform(w, x, y, .Mountain, .Cleft, seconds)
+				}
+			case .Ocean, .Lake, .River, .Ice, .Mountain, .Lava:
+			}
+		}
+	}
+}
+
+WorldTerrainEruptionApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: u64) {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
+	centerTileX := int(WorldWrapPosition(centerX, f32(worldWidth)))
+	centerTileY := int(WorldWrapPosition(centerY, f32(worldHeight)))
+	reach := int(math.ceil(radius))
+	lavaRadius := max(radius*0.45, 1.5)
+	for offsetX in -reach..=reach {
+		for offsetY in -reach..=reach {
+			distanceSquared := f32(offsetX*offsetX+offsetY*offsetY)
+			if distanceSquared > radius*radius do continue
+			x := WorldWrapCoordinate(centerTileX+offsetX, worldWidth)
+			y := WorldWrapCoordinate(centerTileY+offsetY, worldHeight)
+			if w.tileBuilding[x*worldHeight+y] >= 0 do continue
+			tile := &w.ground[x][y]
+			if tile.scar != .None do continue
+			roll := WorldNoiseHash(x, y, salt+0xE402)
+			lavaRoll := WorldNoiseHash(x, y, salt+0xE401)
+			switch tile.type {
+			case .Ocean, .Lake, .River, .Ice, .Lava:
+				continue
+			case .Mountain, .Hill:
+				if distanceSquared <= lavaRadius*lavaRadius && lavaRoll < 0.55 {
+					WorldTerrainTransform(w, x, y, .Lava, .Volcanic, 40+roll*40)
+				}
+			case .Grassland, .Plains, .Steppe, .Forest, .Taiga, .Tundra, .Desert, .Sand, .Marsh, .Ash:
+				if distanceSquared <= lavaRadius*lavaRadius && lavaRoll < 0.65 {
+					seconds := VOLCANIC_MIN_SECONDS+
+						roll*(VOLCANIC_MAX_SECONDS-VOLCANIC_MIN_SECONDS)
+					WorldTerrainTransform(w, x, y, .Lava, .Volcanic, seconds)
+				} else if roll < 0.5 {
+					seconds := SCORCHED_MIN_SECONDS+
+						roll*(SCORCHED_MAX_SECONDS-SCORCHED_MIN_SECONDS)
+					WorldTerrainTransform(w, x, y, .Ash, .Scorched, seconds)
+				}
+			}
+		}
+	}
+}
+
+WorldTerrainLavaSpread :: proc(w: ^World, centerX, centerY, radius: f32, salt: u64) {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
+	centerTileX := int(WorldWrapPosition(centerX, f32(worldWidth)))
+	centerTileY := int(WorldWrapPosition(centerY, f32(worldHeight)))
+	for attempt in 0..<3 {
+		angle := WorldNoiseHash(attempt, int(w.simulationTime*4), salt+0xEA12)*6.2831853
+		distance := radius*math.sqrt(
+			WorldNoiseHash(attempt, int(w.simulationTime*4)+7, salt+0xEA13),
+		)
+		x := WorldWrapCoordinate(centerTileX+int(math.cos(angle)*distance), worldWidth)
+		y := WorldWrapCoordinate(centerTileY+int(math.sin(angle)*distance), worldHeight)
+		index := x*worldHeight+y
+		if index < 0 || index >= len(w.tileBuilding) do continue
+		if w.tileBuilding[index] >= 0 do continue
+		tile := &w.ground[x][y]
+		if tile.scar != .None do continue
+		switch tile.type {
+		case .Ocean, .Lake, .River, .Ice, .Lava:
+			continue
+		case .Grassland, .Plains, .Steppe, .Forest, .Taiga, .Tundra, .Desert, .Sand, .Marsh, .Ash, .Hill, .Mountain:
+			seconds := VOLCANIC_MIN_SECONDS+
+				WorldNoiseHash(x, y, salt+0xEA14)*(VOLCANIC_MAX_SECONDS-VOLCANIC_MIN_SECONDS)
+			WorldTerrainTransform(w, x, y, .Lava, .Volcanic, seconds)
+		}
+	}
+}
+
+WorldTerrainMeteorCrater :: proc(w: ^World, x, y: int, salt: u64) {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
+	for offsetX in -1..=1 {
+		for offsetY in -1..=1 {
+			if offsetX*offsetX+offsetY*offsetY > 2 do continue
+			wrappedX := WorldWrapCoordinate(x+offsetX, worldWidth)
+			wrappedY := WorldWrapCoordinate(y+offsetY, worldHeight)
+			if w.tileBuilding[wrappedX*worldHeight+wrappedY] >= 0 do continue
+			tile := &w.ground[wrappedX][wrappedY]
+			if tile.scar != .None do continue
+			switch tile.type {
+			case .Ocean, .Lake, .River, .Ice, .Mountain, .Lava:
+				continue
+			case .Grassland, .Plains, .Steppe, .Forest, .Taiga, .Tundra, .Desert, .Sand, .Marsh, .Ash, .Hill:
+				roll := WorldNoiseHash(wrappedX, wrappedY, salt+0x3E11)
+				if roll < 0.8 {
+					seconds := SCORCHED_MIN_SECONDS+
+						roll*(SCORCHED_MAX_SECONDS-SCORCHED_MIN_SECONDS)
+					WorldTerrainTransform(w, wrappedX, wrappedY, .Ash, .Scorched, seconds)
+				}
+			}
+		}
+	}
+}
+
+WorldTerrainLavaUpdate :: proc(w: ^World, deltaTime: f32) {
+	if deltaTime <= 0 do return
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] || w.units.type[unitSlot] == nil do continue
+		if UnitHiddenInside(w, unitSlot) do continue
+		tileX := int(WorldWrapPosition(w.units.x[unitSlot], f32(worldWidth)))
+		tileY := int(WorldWrapPosition(w.units.y[unitSlot], f32(worldHeight)))
+		if w.ground[tileX][tileY].type != .Lava do continue
+		UnitApplyDamage(
+			w,
+			unitSlot,
+			LAVA_DAMAGE_PER_SECOND*deltaTime,
+			f32(tileX)+0.5,
+			f32(tileY)+0.5,
+			.Fire,
+		)
 	}
 }

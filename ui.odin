@@ -56,6 +56,8 @@ UIState :: struct {
 	panel:      UIPanelMode,
 	townScroll: int,
 	survey:     bool,
+	hoverTileX, hoverTileY: int,
+	hoverTileValid: bool,
 }
 
 UI_COLOR_BG := rl.Color{26, 24, 28, 240}
@@ -1154,6 +1156,7 @@ UICanConvertFrom :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> bool 
 WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 	WorldAlertPrune(w)
 	ui := &view.ui
+	ui.hoverTileValid = false
 	if !UISelectionValid(w, ui.selection) {
 		ui.selection = {}
 		if ui.command == .Attack || ui.command == .Defend || ui.command == .Found ||
@@ -1259,6 +1262,11 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 		ui.hover = {}
 	} else {
 		ui.hover = UIFindAt(w, camera, mouse)
+		if tileX, tileY, ok := UITileAtMouse(w, camera, mouse); ok {
+			ui.hoverTileX = tileX
+			ui.hoverTileY = tileY
+			ui.hoverTileValid = true
+		}
 	}
 
 	if !rl.IsMouseButtonPressed(.LEFT) do return
@@ -1699,6 +1707,9 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 	if !milestonePending {
 		UIDrawHud(w, ui)
 		UIDrawWeatherChip(w)
+		UIDrawEnvironmentBanner(w)
+		UIDrawWeatherChipTooltip(w)
+		UIDrawTileInfo(w, ui)
 		UIDrawSidePanel(w, ui)
 		UIDrawAlerts(w)
 		if ui.panel == .Crown do UIDrawCrownPanel(w, renderer, ui)
@@ -5168,7 +5179,10 @@ UIDrawWeatherChip :: proc(w: ^World) {
 			color,
 		)
 	}
+}
 
+UIDrawWeatherChipTooltip :: proc(w: ^World) {
+	rect := UIWeatherChipRect()
 	if rl.CheckCollisionPointRec(rl.GetMousePosition(), rect) {
 		UIDrawWeatherTooltip(w, rect)
 	}
@@ -5225,6 +5239,270 @@ UIDrawWeatherTooltip :: proc(w: ^World, rect: rl.Rectangle) {
 		box.y+padding+lineHeight*3,
 		UI_COLOR_DIM,
 	)
+}
+
+UI_ENVIRONMENT_BANNER_W : f32 : 380
+UI_ENVIRONMENT_BANNER_H : f32 : 58
+
+UIEnvironmentBannerRect :: proc(w: ^World) -> rl.Rectangle {
+	if w.environment.phase == .None || !EnvironmentEventRevealed(w) do return {}
+	chip := UIWeatherChipRect()
+	return rl.Rectangle{
+		(f32(rl.GetScreenWidth())-UI_ENVIRONMENT_BANNER_W)*0.5,
+		chip.y+chip.height+8,
+		UI_ENVIRONMENT_BANNER_W,
+		UI_ENVIRONMENT_BANNER_H,
+	}
+}
+
+UIDrawEnvironmentIcon :: proc(
+	kind: EnvironmentEventKind,
+	x, y, size: f32,
+	color: rl.Color,
+) {
+	cx := x+size*0.5
+	cy := y+size*0.5
+	r := size*0.26
+	switch kind {
+	case .Wildfire:
+		rl.DrawTriangle(
+			rl.Vector2{cx, cy-r*1.6},
+			rl.Vector2{cx-r*1.2, cy+r*1.2},
+			rl.Vector2{cx+r*1.2, cy+r*1.2},
+			color,
+		)
+		inner := color
+		inner.a = 180
+		rl.DrawTriangle(
+			rl.Vector2{cx, cy-r*0.4},
+			rl.Vector2{cx-r*0.55, cy+r*1.0},
+			rl.Vector2{cx+r*0.55, cy+r*1.0},
+			inner,
+		)
+	case .Flood:
+		for line in 0..<3 {
+			yy := cy-size*0.18+f32(line)*size*0.18
+			rl.DrawLineEx(
+				rl.Vector2{cx-size*0.32, yy},
+				rl.Vector2{cx+size*0.32, yy},
+				2,
+				color,
+			)
+		}
+	case .Drought:
+		rl.DrawCircleV(rl.Vector2{cx, cy-size*0.08}, r*0.85, color)
+		for crack in 0..<3 {
+			x0 := cx-size*0.26+f32(crack)*size*0.24
+			rl.DrawLineEx(
+				rl.Vector2{x0, cy+size*0.22},
+				rl.Vector2{x0+size*0.08, cy+size*0.36},
+				1.5,
+				color,
+			)
+		}
+	case .Blizzard:
+		for arm in 0..<3 {
+			angle := f32(arm)*math.PI/3
+			rl.DrawLineEx(
+				rl.Vector2{cx-math.cos(angle)*r*1.5, cy-math.sin(angle)*r*1.5},
+				rl.Vector2{cx+math.cos(angle)*r*1.5, cy+math.sin(angle)*r*1.5},
+				1.5,
+				color,
+			)
+		}
+	case .Earthquake:
+		rl.DrawLineEx(
+			rl.Vector2{cx-size*0.34, cy-size*0.10},
+			rl.Vector2{cx-size*0.08, cy+size*0.06},
+			2,
+			color,
+		)
+		rl.DrawLineEx(
+			rl.Vector2{cx-size*0.08, cy+size*0.06},
+			rl.Vector2{cx+size*0.04, cy-size*0.16},
+			2,
+			color,
+		)
+		rl.DrawLineEx(
+			rl.Vector2{cx+size*0.04, cy-size*0.16},
+			rl.Vector2{cx+size*0.30, cy+size*0.14},
+			2,
+			color,
+		)
+	case .Eruption:
+		rl.DrawTriangle(
+			rl.Vector2{cx-r*1.4, cy+r*1.1},
+			rl.Vector2{cx+r*1.4, cy+r*1.1},
+			rl.Vector2{cx+r*0.2, cy-r*1.3},
+			color,
+		)
+		lava := color
+		lava.a = 190
+		rl.DrawLineEx(
+			rl.Vector2{cx+r*0.2, cy-r*1.1},
+			rl.Vector2{cx-r*0.3, cy-r*1.8},
+			2,
+			lava,
+		)
+	case .Locusts:
+		for dot in 0..<6 {
+			dx := cx-size*0.26+f32(dot%3)*size*0.24
+			dy := cy-size*0.14+f32(dot/3)*size*0.28
+			rl.DrawCircleV(rl.Vector2{dx, dy}, 1.7, color)
+		}
+	case .Hurricane:
+		for ring in 0..<3 {
+			rl.DrawCircleLines(
+				i32(cx+size*0.06*f32(ring)),
+				i32(cy-size*0.05*f32(ring)),
+				r*(0.55+f32(ring)*0.45),
+				color,
+			)
+		}
+		dotColor := color
+		dotColor.a = 200
+		rl.DrawCircleV(rl.Vector2{cx, cy}, 1.8, dotColor)
+	case .MeteorShower:
+		rl.DrawLineEx(
+			rl.Vector2{cx-size*0.36, cy-size*0.36},
+			rl.Vector2{cx+size*0.18, cy+size*0.18},
+			2,
+			color,
+		)
+		rl.DrawCircleV(rl.Vector2{cx+size*0.22, cy+size*0.22}, r*0.55, color)
+	}
+}
+
+UIDrawEnvironmentBanner :: proc(w: ^World) {
+	rect := UIEnvironmentBannerRect(w)
+	if rect.width <= 0 do return
+	e := &w.environment
+	eventColor := EnvironmentEventColor(e.kind)
+	severityColor := EnvironmentSeverityColor(e.severity)
+	rl.DrawRectangleRec(rect, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(rect, 2, severityColor)
+	rl.DrawRectangleLinesEx(
+		rl.Rectangle{rect.x+3, rect.y+3, rect.width-6, rect.height-6},
+		1,
+		UI_COLOR_BORDER_INNER,
+	)
+	rl.DrawRectangleRec(
+		rl.Rectangle{rect.x+3, rect.y+3, 4, rect.height-6},
+		severityColor,
+	)
+	UIDrawEnvironmentIcon(e.kind, rect.x+12, rect.y+12, 30, eventColor)
+
+	title := fmt.ctprintf(
+		"%s  -  %s",
+		EnvironmentEventName(e.kind),
+		EnvironmentSeverityName(e.severity),
+	)
+	UIText(title, rect.x+52, rect.y+7, eventColor)
+
+	target: cstring = "Unknown"
+	if WorldTownExists(w, e.kingdom, e.town) {
+		target = NameTownCString(w, e.kingdom, e.town)
+	}
+	subtitle: cstring
+	if e.phase == .Telegraph {
+		subtitle = fmt.ctprintf("%s  -  impact in %.1fs", target, e.remaining)
+	} else {
+		subtitle = fmt.ctprintf("%s  -  active %.0fs", target, e.remaining)
+	}
+	UIText(subtitle, rect.x+52, rect.y+26, UI_COLOR_DIM)
+
+	bar := rl.Rectangle{rect.x+52, rect.y+44, rect.width-64, 4}
+	rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
+	progress: f32 = 0
+	if e.phase == .Telegraph {
+		progress = clamp(1-e.remaining/max(e.telegraph, 0.01), 0, 1)
+	} else {
+		progress = clamp(e.remaining/max(e.duration, 0.01), 0, 1)
+	}
+	rl.DrawRectangleRec(
+		rl.Rectangle{bar.x, bar.y, bar.width*progress, bar.height},
+		eventColor,
+	)
+	rl.DrawRectangleLinesEx(bar, 1, UI_COLOR_BORDER_INNER)
+
+	if e.phase == .Telegraph {
+		pulse := 0.5+0.5*math.sin(w.simulationTime*8)
+		border := severityColor
+		border.a = u8(130+90*pulse)
+		rl.DrawRectangleLinesEx(rect, 3, border)
+	}
+}
+
+// Hovering bare ground shows what the warp left there and how long it needs to
+// recover. Selected units and buildings keep their own richer panels.
+UIDrawTileInfo :: proc(w: ^World, ui: ^UIState) {
+	if !ui.hoverTileValid || ui.command != .Inspect do return
+	if ui.hover.kind != .None do return
+	if ui.panel == .Crown do return
+
+	mouse := rl.GetMousePosition()
+	if rl.CheckCollisionPointRec(mouse, UIPanelRect(w, ui)) do return
+	if rl.CheckCollisionPointRec(mouse, UIHudRect(w)) do return
+	if rl.CheckCollisionPointRec(mouse, UIWeatherChipRect()) do return
+	if ui.panel != .None && ui.panel != .Crown {
+		if rl.CheckCollisionPointRec(mouse, UISidePanelRect(w, ui)) do return
+	}
+	envRect := UIEnvironmentBannerRect(w)
+	if envRect.width > 0 && rl.CheckCollisionPointRec(mouse, envRect) do return
+
+	tileX := ui.hoverTileX
+	tileY := ui.hoverTileY
+	if !FogTileExplored(w, tileX, tileY) do return
+
+	tile := w.ground[tileX][tileY]
+	hasScar := tile.scar != .None
+	padding: f32 = 8
+	width: f32 = 330
+	bodySize: f32 = 14
+	height := padding*2+24
+	height += hasScar ? 36 : 18
+
+	x := mouse.x+20
+	y := mouse.y+20
+	if x+width > f32(rl.GetScreenWidth())-8 do x = mouse.x-width-14
+	if y+height > f32(rl.GetScreenHeight())-8 do y = mouse.y-height-14
+	x = max(x, 8)
+	y = max(y, 8)
+	box := rl.Rectangle{x, y, width, height}
+
+	rl.DrawRectangleRec(box, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(box, 1, UI_COLOR_BORDER)
+	UIText(TILE_DEFS[tile.type].name, box.x+padding, box.y+padding-3, UI_COLOR_GOLD)
+
+	bodyY := box.y+padding+22
+	if hasScar {
+		scarColor := TerrainScarOverlayColor(tile.scar)
+		scarColor.a = 255
+		label := fmt.ctprintf(
+			"%s  -  %ds",
+			TerrainScarName(tile.scar),
+			int(math.ceil(tile.scarTimer)),
+		)
+		rl.DrawTextEx(UIFont(), label, rl.Vector2{box.x+padding, bodyY}, bodySize, 1, scarColor)
+		rl.DrawTextEx(
+			UIFont(),
+			TerrainScarDescription(tile.scar),
+			rl.Vector2{box.x+padding, bodyY+18},
+			bodySize,
+			1,
+			UI_COLOR_DIM,
+		)
+	} else {
+		def := TILE_DEFS[tile.type]
+		detail := fmt.ctprintf(
+			"Move x%.2f   Wood %.1f   Food %.1f   Water %.1f",
+			def.moveCost,
+			def.wood,
+			def.food,
+			def.water,
+		)
+		rl.DrawTextEx(UIFont(), detail, rl.Vector2{box.x+padding, bodyY}, bodySize, 1, UI_COLOR_DIM)
+	}
 }
 
 UIHudLineHeight :: proc() -> f32 {
@@ -5509,11 +5787,17 @@ UIAlertText :: proc(w: ^World, alert: ^Alert) -> cstring {
 			UIAlertTownName(&alert.otherName),
 			UIAlertTownName(&alert.townName),
 		)
+	case .Environment:
+		return fmt.ctprintf(
+			"%s - %s",
+			EnvironmentEventName(EnvironmentEventKind(alert.other)),
+			UIAlertTownName(&alert.townName),
+		)
 	}
 	return ""
 }
 
-UIAlertColor :: proc(kind: AlertKind) -> rl.Color {
+UIAlertColor :: proc(kind: AlertKind, amount: int) -> rl.Color {
 	switch kind {
 	case .TownFounded:
 		return rl.Color{112, 200, 126, 255}
@@ -5525,6 +5809,8 @@ UIAlertColor :: proc(kind: AlertKind) -> rl.Color {
 		return UI_COLOR_GOOD
 	case .PeaceMade:
 		return UI_COLOR_DEFEND
+	case .Environment:
+		return EnvironmentSeverityColor(EventSeverity(clamp(amount, 0, 3)))
 	}
 	return UI_COLOR_TEXT
 }
@@ -5559,6 +5845,10 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 	if ui.panel == .Crown do return false
 
 	if rl.CheckCollisionPointRec(mouse, UIWeatherChipRect()) do return true
+	if rect := UIEnvironmentBannerRect(w); rect.width > 0 &&
+		rl.CheckCollisionPointRec(mouse, rect) {
+		return true
+	}
 
 	if ui.panel != .None {
 		panel := UISidePanelRect(w, ui)
@@ -5806,7 +6096,7 @@ UIDrawAlerts :: proc(w: ^World) {
 		}
 		rl.DrawRectangleRec(
 			rl.Rectangle{rowRect.x+2, rowRect.y+4, 3, rowRect.height-8},
-			UIAlertColor(alert.kind),
+			UIAlertColor(alert.kind, alert.amount),
 		)
 		UIText(UIAlertText(w, &alert), rowRect.x+12, rowRect.y+4, UI_COLOR_TEXT)
 	}

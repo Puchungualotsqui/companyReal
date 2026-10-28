@@ -55,8 +55,22 @@ World :: struct {
 	dayTime: f32,
 	dayNumber: int,
 	weather: WeatherState,
+	environment: EnvironmentEvent,
+	eventMinorTimer: f32,
+	eventModerateTimer: f32,
+	eventMajorTimer: f32,
+	eventCataclysmTimer: f32,
+	eventGap: f32,
+	eventDebt: [KINGDOMS_CAPACITY]f32,
+	eventLastMajorKingdom: int,
+	eventCataclysmCount: int,
+	eventSequence: u32,
+	eventBag: bit_set[EnvironmentEventKind],
 	terrainRevision: u64,
+	scarTiles: [dynamic]i32,
 	ground: [dynamic][dynamic]Tile,
+	terrainChunkRevisions: []u64,
+	terrainChunkCountX, terrainChunkCountY: int,
 	spatial: SpatialIndex,
 	tileBuilding: []int,
 	tileConstructionBlocked: []bool,
@@ -85,11 +99,26 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.seed = settings.seed
 	w.dayTime = f32(WORLD_DAY_LENGTH_SECONDS)*6/24
 	WorldWeatherTransition(w, .Clear)
+	w.environment.phase = .None
+	w.environment.kingdom = -1
+	w.environment.town = -1
+	w.eventLastMajorKingdom = -1
+	w.eventMinorTimer = 185
+	w.eventModerateTimer = 280
+	w.eventMajorTimer = 450
+	w.eventCataclysmTimer = 900
 	if !FogInit(w) do return false
 	w.ground = make([dynamic][dynamic]Tile, maxX)
 	for &x in w.ground {
 		x = make([dynamic]Tile, maxY)
 	}
+	w.terrainChunkCountX = (int(maxX)+TERRAIN_CHUNK_TILES-1)/TERRAIN_CHUNK_TILES
+	w.terrainChunkCountY = (int(maxY)+TERRAIN_CHUNK_TILES-1)/TERRAIN_CHUNK_TILES
+	w.terrainChunkRevisions = make(
+		[]u64,
+		w.terrainChunkCountX*w.terrainChunkCountY,
+	)
+	w.scarTiles = make([dynamic]i32, 0, 256)
 	if !BloodInit(w) do return false
 	w.particleRandom = settings.seed*0x9E3779B97F4A7C15+0x9E37
 	if !SpatialIndexInit(w) do return false
@@ -133,6 +162,8 @@ WorldDeinit :: proc(w: ^World) {
 	delete(w.tileBuilding)
 	delete(w.hazardTile)
 	WorldNavigationDeinit(w)
+	delete(w.scarTiles)
+	delete(w.terrainChunkRevisions)
 	for &x in w.ground {
 		delete(x)
 	}
@@ -142,8 +173,11 @@ WorldDeinit :: proc(w: ^World) {
 }
 
 Tile :: struct {
-	type:    TileType,
-	climate: ClimateKind,
+	type:      TileType,
+	climate:   ClimateKind,
+	scar:      TerrainScar,
+	scarFrom:  TileType,
+	scarTimer: f32,
 }
 
 TileType :: enum u8 {
@@ -187,8 +221,23 @@ WorldTileSet :: proc(w: ^World, x, y: int, tileType: TileType) -> bool {
 		w.ground[wrappedX][wrappedY].type = tileType
 		w.navigationRevision += 1
 		w.terrainRevision += 1
+		if len(w.terrainChunkRevisions) > 0 {
+			chunkIndex := (wrappedX/TERRAIN_CHUNK_TILES)*w.terrainChunkCountY+
+				wrappedY/TERRAIN_CHUNK_TILES
+			if chunkIndex >= 0 && chunkIndex < len(w.terrainChunkRevisions) {
+				w.terrainChunkRevisions[chunkIndex] += 1
+			}
+		}
 	}
 	return true
+}
+
+WorldTerrainChunkRevision :: proc(w: ^World, chunkX, chunkY: int) -> u64 {
+	if chunkX < 0 || chunkY < 0 || chunkX >= w.terrainChunkCountX ||
+		chunkY >= w.terrainChunkCountY {
+		return 0
+	}
+	return w.terrainChunkRevisions[chunkX*w.terrainChunkCountY+chunkY]
 }
 
 UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: int) -> (int, bool) {

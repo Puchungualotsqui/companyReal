@@ -243,6 +243,7 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 		lastCopyY,
 	)
 	WorldRenderHazards(w, renderer, camera)
+	WorldRenderTerrainScars(w, camera)
 	WorldRenderSprites(
 		w,
 		renderer,
@@ -253,6 +254,7 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 		lastCopyY,
 	)
 	FogRenderDraw(w, renderer, firstCopyX, lastCopyX, firstCopyY, lastCopyY)
+	WorldRenderEnvironmentEvent(w, camera)
 	rl.EndMode2D()
 
 	ambient := WorldAmbientColor(w)
@@ -471,6 +473,135 @@ WorldRenderWeather :: proc(w: ^World) {
 		}
 	case .Clear:
 	}
+}
+
+WorldRenderEnvironmentEvent :: proc(w: ^World, camera: rl.Camera2D) {
+	e := &w.environment
+	if e.phase == .None || !EnvironmentEventRevealed(w) do return
+
+	color := EnvironmentEventColor(e.kind)
+	time := w.simulationTime+w.simulationAccumulator
+	pulse := 0.5+0.5*math.sin(time*6)
+	outline := color
+	outline.a = u8(140+90*pulse)
+	fill := color
+	fill.a = e.phase == .Telegraph ? 18 : 30
+	center := rl.Vector2{e.centerX, e.centerY}
+
+	rl.BeginMode2D(camera)
+	rl.DrawCircleV(center, e.radius, fill)
+	rl.DrawCircleLines(i32(e.centerX), i32(e.centerY), e.radius, outline)
+
+	for tick in 0..<6 {
+		angle := time*0.8+f32(tick)*6.2831853/6
+		rl.DrawLineEx(
+			rl.Vector2{
+				e.centerX+math.cos(angle)*e.radius*0.86,
+				e.centerY+math.sin(angle)*e.radius*0.86,
+			},
+			rl.Vector2{
+				e.centerX+math.cos(angle)*e.radius*0.96,
+				e.centerY+math.sin(angle)*e.radius*0.96,
+			},
+			2,
+			outline,
+		)
+	}
+
+	switch e.kind {
+	case .Wildfire, .Eruption, .MeteorShower:
+		for i in 0..<26 {
+			h1 := WorldNoiseHash(i, int(e.sequence), w.seed+0x6A1)
+			h2 := WorldNoiseHash(i, int(e.sequence)+3, w.seed+0x6A3)
+			angle := h1*6.2831853
+			distance := e.radius*math.sqrt(h2)
+			x := e.centerX+math.cos(angle)*distance
+			y := e.centerY+math.sin(angle)*distance
+			rl.DrawCircleV(rl.Vector2{x, y}, 0.12+h1*0.18, outline)
+		}
+	case .Flood:
+		for line in 0..<5 {
+			yy := e.centerY-e.radius*0.6+f32(line)*e.radius*0.3
+			rl.DrawLineEx(
+				rl.Vector2{e.centerX-e.radius*0.9, yy},
+				rl.Vector2{e.centerX+e.radius*0.9, yy},
+				2,
+				outline,
+			)
+		}
+	case .Blizzard:
+		for i in 0..<20 {
+			h1 := WorldNoiseHash(i, int(e.sequence), w.seed+0x6B1)
+			h2 := WorldNoiseHash(i, int(e.sequence)+5, w.seed+0x6B3)
+			x := e.centerX+(h1-0.5)*e.radius*1.8
+			y := e.centerY+(h2-0.5)*e.radius*1.8
+			rl.DrawLineEx(
+				rl.Vector2{x, y},
+				rl.Vector2{x-0.25, y+0.45},
+				1.2,
+				outline,
+			)
+		}
+	case .Drought:
+		for line in 0..<4 {
+			yy := e.centerY-e.radius*0.5+f32(line)*e.radius*0.34
+			rl.DrawLineEx(
+				rl.Vector2{e.centerX-e.radius*0.8, yy},
+				rl.Vector2{e.centerX+e.radius*0.8, yy},
+				1.5,
+				outline,
+			)
+		}
+	case .Earthquake:
+		for ring in 0..<3 {
+			r := e.radius*(0.3+f32(ring)*0.22)+pulse*0.3
+			rl.DrawCircleLines(i32(e.centerX), i32(e.centerY), r, outline)
+		}
+	case .Locusts:
+		for i in 0..<34 {
+			h1 := WorldNoiseHash(i, int(e.sequence), w.seed+0x6C1)
+			h2 := WorldNoiseHash(i, int(e.sequence)+7, w.seed+0x6C3)
+			x := e.centerX+(h1-0.5)*e.radius*1.6
+			y := e.centerY+(h2-0.5)*e.radius*1.6
+			rl.DrawCircleV(rl.Vector2{x, y}, 0.11+h1*0.1, outline)
+		}
+	case .Hurricane:
+		for ring in 0..<4 {
+			offset := math.sin(time*1.4+f32(ring))*e.radius*0.15
+			rl.DrawCircleLines(
+				i32(e.centerX+offset),
+				i32(e.centerY-offset*0.6),
+				e.radius*(0.35+f32(ring)*0.2),
+				outline,
+			)
+		}
+		for ray in 0..<8 {
+			angle := time*0.7+f32(ray)*6.2831853/8
+			rl.DrawLineEx(
+				rl.Vector2{
+					e.centerX+math.cos(angle)*e.radius*0.5,
+					e.centerY+math.sin(angle)*e.radius*0.5,
+				},
+				rl.Vector2{
+					e.centerX+math.cos(angle+0.5)*e.radius*0.95,
+					e.centerY+math.sin(angle+0.5)*e.radius*0.95,
+				},
+				1.5,
+				outline,
+			)
+		}
+	}
+
+	if e.phase == .Telegraph {
+		progress := 1-clamp(e.remaining/max(e.telegraph, 0.01), 0, 1)
+		rl.DrawCircleLines(
+			i32(e.centerX),
+			i32(e.centerY),
+			e.radius*(1-progress*0.45),
+			outline,
+		)
+	}
+	rl.EndMode2D()
 }
 
 // Decorations are only a pixel or two tall below this zoom, so drawing them
@@ -1286,5 +1417,68 @@ WorldRenderHazards :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 			radius,
 			rl.Color{110, 194, 92, u8((24+36*lifeRatio)*pulse)},
 		)
+	}
+}
+
+// Aftermath scars tint and pulse the tiles that environmental events left
+// behind, so regrowth and cooling read at a glance.
+WorldRenderTerrainScars :: proc(w: ^World, camera: rl.Camera2D) {
+	if len(w.scarTiles) == 0 do return
+	worldHeight := int(w.maxY)
+	if worldHeight <= 0 do return
+	worldWidth := f32(w.maxX)
+	worldHeightF := f32(w.maxY)
+	halfWidth := f32(rl.GetScreenWidth())/(2*camera.zoom)
+	halfHeight := f32(rl.GetScreenHeight())/(2*camera.zoom)
+	time := w.simulationTime+w.simulationAccumulator
+
+	for index in w.scarTiles {
+		tileIndex := int(index)
+		if tileIndex < 0 do continue
+		x := tileIndex/worldHeight
+		y := tileIndex%worldHeight
+		if x < 0 || x >= int(w.maxX) do continue
+		tile := w.ground[x][y]
+		if tile.scar == .None do continue
+		if !FogTileExplored(w, x, y) do continue
+		tileX := f32(x)+0.5
+		tileY := f32(y)+0.5
+		if abs(WorldShortestWrappedDelta(tileX-camera.target.x, worldWidth)) > halfWidth+1 ||
+			abs(WorldShortestWrappedDelta(tileY-camera.target.y, worldHeightF)) > halfHeight+1 {
+			continue
+		}
+
+		color := TerrainScarOverlayColor(tile.scar)
+		alpha: f32
+		switch tile.scar {
+		case .Scorched:
+			alpha = 34
+		case .Enriched:
+			alpha = 16
+		case .Parched:
+			alpha = 26
+		case .Frozen:
+			alpha = 24
+		case .Volcanic:
+			alpha = 72
+		case .Cleft:
+			alpha = 22
+		case .None:
+			continue
+		}
+		fade := clamp(tile.scarTimer/18, 0, 1)
+		pulse := 0.5+0.5*math.sin(time*4.5+f32(tileIndex%23))
+		if tile.scar == .Volcanic {
+			alpha += 38*pulse
+		} else {
+			alpha *= 0.35+0.65*fade
+		}
+		color.a = u8(clamp(alpha, 0, 255))
+		rl.DrawRectangleRec(rl.Rectangle{f32(x), f32(y), 1, 1}, color)
+
+		if tile.scar == .Volcanic {
+			glow := rl.Color{255, 150, 70, u8(30+50*pulse)}
+			rl.DrawRectangleLinesEx(rl.Rectangle{f32(x), f32(y), 1, 1}, 0.08, glow)
+		}
 	}
 }

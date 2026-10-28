@@ -599,6 +599,82 @@ BloodCharredDeath :: proc(w: ^World, x, y: f32, type: UnitType) {
 	}
 }
 
+// Drowning victims slip under with bubbles rather than blood.
+BloodDrownDeath :: proc(w: ^World, x, y: f32, type: UnitType) {
+	scale := UnitSpriteScale(UnitKindOf(type))
+	for _ in 0 ..< 7+int(PRandom(w)*5) {
+		angle := PRandom(w)*6.2831853
+		ParticleSpawn(w, Particle{
+			x = x+(PRandom(w)-0.5)*0.4,
+			y = y+(PRandom(w)-0.5)*0.4,
+			z = PRandomRange(w, 0.05, 0.3),
+			vx = math.cos(angle)*PRandomRange(w, 0.5, 1.8),
+			vy = math.sin(angle)*PRandomRange(w, 0.5, 1.8),
+			vz = PRandomRange(w, 0.5, 2.0),
+			life = PRandomRange(w, 0.4, 1.0),
+			size = PRandomRange(w, 0.10, 0.22)*scale,
+			drag = 1.5,
+			gravity = 6,
+			kind = .Splash,
+			tint = rl.Color{198, 228, 242, 255},
+		})
+	}
+	for _ in 0 ..< 3+int(PRandom(w)*3) {
+		ParticleSpawn(w, Particle{
+			x = x+(PRandom(w)-0.5)*0.35,
+			y = y+(PRandom(w)-0.5)*0.35,
+			z = PRandomRange(w, 0.1, 0.4),
+			vx = (PRandom(w)-0.5)*0.3,
+			vy = (PRandom(w)-0.5)*0.3,
+			vz = PRandomRange(w, 0.3, 0.8),
+			life = PRandomRange(w, 0.8, 1.6),
+			size = PRandomRange(w, 0.08, 0.16),
+			drag = 2,
+			gravity = -1.2,
+			kind = .Spark,
+			tint = rl.Color{224, 244, 255, 200},
+		})
+	}
+}
+
+// Exposure deaths in snow and blizzards leave frost, not gore.
+BloodFrozenDeath :: proc(w: ^World, x, y: f32, type: UnitType) {
+	scale := UnitSpriteScale(UnitKindOf(type))
+	for _ in 0 ..< 6+int(PRandom(w)*4) {
+		angle := PRandom(w)*6.2831853
+		ParticleSpawn(w, Particle{
+			x = x+(PRandom(w)-0.5)*0.35,
+			y = y+(PRandom(w)-0.5)*0.35,
+			z = PRandomRange(w, 0.15, 0.7),
+			vx = math.cos(angle)*PRandomRange(w, 0.3, 1.3),
+			vy = math.sin(angle)*PRandomRange(w, 0.3, 1.3),
+			vz = PRandomRange(w, 0.5, 1.8),
+			life = PRandomRange(w, 0.5, 1.3),
+			size = PRandomRange(w, 0.08, 0.18)*scale,
+			drag = 1.2,
+			gravity = 5,
+			kind = .StoneChip,
+			tint = rl.Color{214, 244, 255, 255},
+		})
+	}
+	for _ in 0 ..< 3+int(PRandom(w)*3) {
+		ParticleSpawn(w, Particle{
+			x = x+(PRandom(w)-0.5)*0.4,
+			y = y+(PRandom(w)-0.5)*0.4,
+			z = PRandomRange(w, 0.2, 0.7),
+			vx = (PRandom(w)-0.5)*0.3,
+			vy = (PRandom(w)-0.5)*0.3,
+			vz = PRandomRange(w, 0.3, 0.9),
+			life = PRandomRange(w, 0.9, 1.8),
+			size = PRandomRange(w, 0.35, 0.7),
+			drag = 0.8,
+			gravity = -0.25,
+			kind = .Smoke,
+			tint = rl.Color{206, 232, 248, 190},
+		})
+	}
+}
+
 UnitApplyDamage :: proc(
 	w: ^World,
 	victimSlot: int,
@@ -653,7 +729,9 @@ UnitApplyDamage :: proc(
 		BloodHit(w, x, y, dirX, dirY, damage, type)
 		if dead do BloodDeath(w, x, y, dirX, dirY, damage, type, faction)
 	case .Drowning:
-		if PRandom(w) < 0.35 {
+		if dead {
+			BloodDrownDeath(w, x, y, type)
+		} else if PRandom(w) < 0.35 {
 			ParticleSpawn(w, Particle{
 				x = x+(PRandom(w)-0.5)*0.35,
 				y = y+(PRandom(w)-0.5)*0.35,
@@ -687,7 +765,13 @@ UnitApplyDamage :: proc(
 			})
 		}
 	case .Weather:
-		if PRandom(w) < 0.10 {
+		if dead {
+			if w.units.effects[victimSlot][.Chilled] {
+				BloodFrozenDeath(w, x, y, type)
+			} else {
+				BloodCharredDeath(w, x, y, type)
+			}
+		} else if PRandom(w) < 0.10 {
 			ParticleSpawn(w, Particle{
 				x = x+(PRandom(w)-0.5)*0.4,
 				y = y+(PRandom(w)-0.5)*0.4,

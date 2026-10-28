@@ -1,6 +1,7 @@
 package main
 
 import "core:math"
+import rl "vendor:raylib"
 
 TOWN_SIMULATION_STEP :: 0.25
 TOWN_ALARM_AREA_FACTOR :: 1.25
@@ -338,12 +339,13 @@ WorldWeatherUpdate :: proc(w: ^World, deltaTime: f32) {
 	cold := active && (w.weather.kind == .Snow || w.weather.kind == .Blizzard)
 	heat := active && (w.weather.kind == .Heatwave || w.weather.kind == .Drought ||
 		w.weather.kind == .Sandstorm)
+	eventBlizzard := w.environment.phase == .Active && w.environment.kind == .Blizzard
 
 	for unitSlot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] || w.units.type[unitSlot] == nil do continue
 		hidden := UnitHiddenInside(w, unitSlot)
 		w.units.effects[unitSlot][.Wet] = wet && !hidden
-		w.units.effects[unitSlot][.Chilled] = cold && !hidden
+		w.units.effects[unitSlot][.Chilled] = (cold || eventBlizzard) && !hidden
 		w.units.effects[unitSlot][.HeatStressed] = heat && !hidden
 		if hidden || weatherEffects.exposure <= 0 do continue
 
@@ -383,6 +385,743 @@ WorldWeatherUpdate :: proc(w: ^World, deltaTime: f32) {
 	}
 }
 
+// --- environment events -----------------------------------------------------
+
+EventSeverity :: enum u8 {
+	Minor,
+	Moderate,
+	Major,
+	Cataclysm,
+}
+
+EnvironmentEventKind :: enum u8 {
+	Wildfire,
+	Flood,
+	Drought,
+	Blizzard,
+	Earthquake,
+	Eruption,
+	Locusts,
+	Hurricane,
+	MeteorShower,
+}
+
+EventPhase :: enum u8 {
+	None,
+	Telegraph,
+	Active,
+}
+
+EnvironmentEvent :: struct {
+	kind:      EnvironmentEventKind,
+	severity:  EventSeverity,
+	phase:     EventPhase,
+	remaining: f32,
+	telegraph: f32,
+	duration:  f32,
+	centerX:   f32,
+	centerY:   f32,
+	radius:    f32,
+	kingdom:   int,
+	town:      int,
+	tick:      f32,
+	sequence:  u32,
+}
+
+EnvironmentEventName :: proc(kind: EnvironmentEventKind) -> cstring {
+	switch kind {
+	case .Wildfire:
+		return "Wildfire"
+	case .Flood:
+		return "Flood"
+	case .Drought:
+		return "Drought"
+	case .Blizzard:
+		return "Blizzard"
+	case .Earthquake:
+		return "Earthquake"
+	case .Eruption:
+		return "Eruption"
+	case .Locusts:
+		return "Locusts"
+	case .Hurricane:
+		return "Hurricane"
+	case .MeteorShower:
+		return "Meteor Shower"
+	}
+	unreachable()
+}
+
+EnvironmentSeverityName :: proc(severity: EventSeverity) -> cstring {
+	switch severity {
+	case .Minor:
+		return "Minor"
+	case .Moderate:
+		return "Moderate"
+	case .Major:
+		return "Major"
+	case .Cataclysm:
+		return "Cataclysm"
+	}
+	unreachable()
+}
+
+EnvironmentEventColor :: proc(kind: EnvironmentEventKind) -> rl.Color {
+	switch kind {
+	case .Wildfire:
+		return rl.Color{232, 120, 58, 255}
+	case .Flood:
+		return rl.Color{92, 160, 220, 255}
+	case .Drought:
+		return rl.Color{214, 180, 96, 255}
+	case .Blizzard:
+		return rl.Color{180, 220, 244, 255}
+	case .Earthquake:
+		return rl.Color{168, 140, 112, 255}
+	case .Eruption:
+		return rl.Color{230, 86, 58, 255}
+	case .Locusts:
+		return rl.Color{150, 190, 90, 255}
+	case .Hurricane:
+		return rl.Color{90, 190, 200, 255}
+	case .MeteorShower:
+		return rl.Color{210, 150, 250, 255}
+	}
+	unreachable()
+}
+
+EnvironmentSeverityColor :: proc(severity: EventSeverity) -> rl.Color {
+	switch severity {
+	case .Minor:
+		return rl.Color{168, 172, 160, 255}
+	case .Moderate:
+		return rl.Color{226, 196, 92, 255}
+	case .Major:
+		return rl.Color{232, 120, 72, 255}
+	case .Cataclysm:
+		return rl.Color{214, 92, 220, 255}
+	}
+	unreachable()
+}
+
+EnvironmentSeverityScale :: proc(severity: EventSeverity) -> f32 {
+	switch severity {
+	case .Minor:
+		return 0.5
+	case .Moderate:
+		return 0.8
+	case .Major:
+		return 1.1
+	case .Cataclysm:
+		return 1.5
+	}
+	return 1
+}
+
+EnvironmentEventRadius :: proc(severity: EventSeverity) -> f32 {
+	switch severity {
+	case .Minor:
+		return 3.5
+	case .Moderate:
+		return 5.5
+	case .Major:
+		return 7.5
+	case .Cataclysm:
+		return 9.5
+	}
+	return 5
+}
+
+EnvironmentTelegraphSeconds :: proc(severity: EventSeverity) -> f32 {
+	switch severity {
+	case .Minor:
+		return 1.5
+	case .Moderate:
+		return 3
+	case .Major:
+		return 5
+	case .Cataclysm:
+		return 8
+	}
+	return 3
+}
+
+EnvironmentEventDuration :: proc(kind: EnvironmentEventKind, severity: EventSeverity) -> f32 {
+	base: f32 = 12
+	switch kind {
+	case .Wildfire:
+		base = 15
+	case .Flood:
+		base = 4
+	case .Drought:
+		base = 40
+	case .Blizzard:
+		base = 20
+	case .Earthquake:
+		base = 6
+	case .Eruption:
+		base = 16
+	case .Locusts:
+		base = 40
+	case .Hurricane:
+		base = 15
+	case .MeteorShower:
+		base = 10
+	}
+	return base*EnvironmentSeverityScale(severity)
+}
+
+EnvironmentEventTickSeconds :: proc(kind: EnvironmentEventKind) -> f32 {
+	switch kind {
+	case .Wildfire:
+		return 0.8
+	case .Blizzard:
+		return 0.5
+	case .Earthquake:
+		return 1.2
+	case .Eruption:
+		return 0.9
+	case .Hurricane:
+		return 1.2
+	case .MeteorShower:
+		return 1.0
+	case .Flood, .Drought, .Locusts:
+		return 1.0
+	}
+	return 1
+}
+
+EnvironmentKingdomEra :: proc(w: ^World, kingdom: int) -> int {
+	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do return 0
+	best := 0
+	for townSlot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+		best = max(best, TownEra(w, kingdom, townSlot))
+	}
+	return best
+}
+
+EnvironmentMaxEra :: proc(w: ^World) -> int {
+	best := 0
+	for kingdom in 0..<KINGDOMS_CAPACITY {
+		if kingdom == NEUTRAL_KINGDOM do continue
+		best = max(best, EnvironmentKingdomEra(w, kingdom))
+	}
+	return best
+}
+
+EnvironmentLeadingKingdom :: proc(w: ^World) -> int {
+	best := -1
+	bestTowns := -1
+	bestCitizens := -1
+	for kingdom in 0..<KINGDOMS_CAPACITY {
+		if kingdom == NEUTRAL_KINGDOM || !w.kingdomUsed[kingdom] do continue
+		towns := 0
+		citizens := 0
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+			towns += 1
+			citizens += w.kingdoms[kingdom].towns[townSlot].citizens
+		}
+		if towns > bestTowns || (towns == bestTowns && citizens > bestCitizens) {
+			best = kingdom
+			bestTowns = towns
+			bestCitizens = citizens
+		}
+	}
+	return best
+}
+
+EnvironmentPickTargetKingdom :: proc(w: ^World, severity: EventSeverity) -> int {
+	maxEra := EnvironmentMaxEra(w)
+	leader := EnvironmentLeadingKingdom(w)
+	weights: [KINGDOMS_CAPACITY]f32
+	total: f32 = 0
+	for kingdom in 0..<KINGDOMS_CAPACITY {
+		if kingdom == NEUTRAL_KINGDOM || !w.kingdomUsed[kingdom] do continue
+		weight := 1+w.eventDebt[kingdom]
+		if EnvironmentKingdomEra(w, kingdom) < maxEra do weight *= 0.55
+		if severity == .Cataclysm && kingdom == leader do weight *= 2.0
+		weights[kingdom] = weight
+		total += weight
+	}
+	if severity >= .Major && w.eventLastMajorKingdom >= 0 &&
+		w.eventLastMajorKingdom < KINGDOMS_CAPACITY {
+		last := w.eventLastMajorKingdom
+		total -= weights[last]
+		weights[last] = 0
+		if total <= 0 {
+			weights[last] = 1
+			total = 1
+		}
+	}
+	if total <= 0 do return -1
+	roll := WorldNoiseHash(int(w.eventSequence)+1, int(severity)+31, w.seed+0xE7E)*total
+	for kingdom in 0..<KINGDOMS_CAPACITY {
+		roll -= weights[kingdom]
+		if weights[kingdom] > 0 && roll <= 0 do return kingdom
+	}
+	return -1
+}
+
+EnvironmentKindEligible :: proc(kind: EnvironmentEventKind, severity: EventSeverity) -> bool {
+	switch severity {
+	case .Minor:
+		return kind == .Flood || kind == .Drought || kind == .Locusts
+	case .Moderate:
+		return kind == .Flood || kind == .Drought || kind == .Wildfire ||
+			kind == .Blizzard || kind == .Locusts
+	case .Major:
+		return kind == .Wildfire || kind == .Blizzard || kind == .Earthquake ||
+			kind == .Flood || kind == .Locusts
+	case .Cataclysm:
+		return kind == .Eruption || kind == .Hurricane || kind == .MeteorShower ||
+			kind == .Earthquake
+	}
+	return false
+}
+
+EnvironmentKingdomHasCoastalTown :: proc(w: ^World, kingdom: int) -> bool {
+	for townSlot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+		if TownIsCoastal(w, kingdom, townSlot) do return true
+	}
+	return false
+}
+
+EnvironmentPickKind :: proc(w: ^World, severity: EventSeverity, kingdom: int) -> EnvironmentEventKind {
+	weights: [EnvironmentEventKind]f32
+	for kind in EnvironmentEventKind {
+		if !EnvironmentKindEligible(kind, severity) do continue
+		if kind in w.eventBag do continue
+		if kind == .Hurricane && !EnvironmentKingdomHasCoastalTown(w, kingdom) do continue
+		weights[kind] = 10
+	}
+	weights[.Wildfire] *= 2.6
+	weights[.Flood] *= 2.4
+	weights[.Drought] *= 2.0
+	weights[.Blizzard] *= 1.6
+	weights[.Earthquake] *= 1.8
+	weights[.Eruption] *= 1.6
+	weights[.Locusts] *= 1.4
+	weights[.Hurricane] *= 1.6
+	weights[.MeteorShower] *= 1.6
+
+	switch w.weather.kind {
+	case .Rain, .Storm:
+		weights[.Wildfire] *= 0.3
+		weights[.Flood] *= 1.6
+		weights[.Hurricane] *= 1.5
+		weights[.Drought] *= 0.5
+	case .Snow, .Blizzard:
+		weights[.Wildfire] = 0
+		weights[.Blizzard] *= 1.6
+		weights[.Flood] *= 0.8
+	case .Drought, .Heatwave:
+		weights[.Wildfire] *= 1.8
+		weights[.Drought] *= 1.6
+		weights[.Flood] *= 0.5
+		weights[.Hurricane] *= 0.5
+	case .Clear, .Fog, .Sandstorm, .Ashfall:
+	}
+
+	total: f32 = 0
+	for kind in EnvironmentEventKind do total += weights[kind]
+	if total <= 0 {
+		w.eventBag = {}
+		return EnvironmentPickKind(w, severity, kingdom)
+	}
+	roll := WorldNoiseHash(int(w.eventSequence)+1, int(severity)+71, w.seed+0xBA6)*total
+	for kind in EnvironmentEventKind {
+		roll -= weights[kind]
+		if weights[kind] > 0 && roll <= 0 do return kind
+	}
+	return .Flood
+}
+
+EnvironmentPickTown :: proc(w: ^World, kingdom: int, kind: EnvironmentEventKind) -> int {
+	count := 0
+	for townSlot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+		if kind == .Hurricane && !TownIsCoastal(w, kingdom, townSlot) do continue
+		count += 1
+	}
+	if count <= 0 do return -1
+	index := int(WorldNoiseHash(int(w.eventSequence)+1, count+3, w.seed+0x70A)*f32(count))
+	for townSlot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+		if kind == .Hurricane && !TownIsCoastal(w, kingdom, townSlot) do continue
+		if index <= 0 do return townSlot
+		index -= 1
+	}
+	return -1
+}
+
+EnvironmentPickAnyTown :: proc(w: ^World, kingdom: int) -> int {
+	count := 0
+	for townSlot in 0..<TOWN_CAPACITY {
+		if w.kingdoms[kingdom].townUsed[townSlot] do count += 1
+	}
+	if count <= 0 do return -1
+	index := int(WorldNoiseHash(int(w.eventSequence)+1, count+9, w.seed+0x70B)*f32(count))
+	for townSlot in 0..<TOWN_CAPACITY {
+		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
+		if index <= 0 do return townSlot
+		index -= 1
+	}
+	return -1
+}
+
+EnvironmentEventRevealed :: proc(w: ^World) -> bool {
+	if w.environment.phase == .None do return false
+	if w.observerKingdom < 0 do return true
+	if w.environment.kingdom == w.observerKingdom do return true
+	if w.environment.town >= 0 &&
+		WorldTownExists(w, w.environment.kingdom, w.environment.town) {
+		return FogTownDiscovered(w, w.environment.kingdom, w.environment.town)
+	}
+	return false
+}
+
+EnvironmentEventStart :: proc(w: ^World, severity: EventSeverity) {
+	w.eventSequence += 1
+	kingdom := EnvironmentPickTargetKingdom(w, severity)
+	if kingdom < 0 do return
+
+	kind := EnvironmentPickKind(w, severity, kingdom)
+	town := EnvironmentPickTown(w, kingdom, kind)
+	if town < 0 {
+		kind = .Flood
+		town = EnvironmentPickTown(w, kingdom, kind)
+	}
+	if town < 0 do town = EnvironmentPickAnyTown(w, kingdom)
+	if town < 0 do return
+
+	ref := &w.kingdoms[kingdom].towns[town]
+	telegraph := EnvironmentTelegraphSeconds(severity)
+	w.environment = EnvironmentEvent {
+		kind = kind,
+		severity = severity,
+		phase = .Telegraph,
+		remaining = telegraph,
+		telegraph = telegraph,
+		duration = EnvironmentEventDuration(kind, severity),
+		centerX = f32(ref.x)+2,
+		centerY = f32(ref.y)+2,
+		radius = EnvironmentEventRadius(severity),
+		kingdom = kingdom,
+		town = town,
+		sequence = w.eventSequence,
+	}
+	w.eventBag += {kind}
+	w.eventDebt[kingdom] = 0
+	if severity >= .Major do w.eventLastMajorKingdom = kingdom
+
+	switch severity {
+	case .Minor:
+		w.eventMinorTimer = 70+WorldNoiseHash(int(w.eventSequence), 13, w.seed+0x2A1)*50
+	case .Moderate:
+		w.eventModerateTimer = 180+WorldNoiseHash(int(w.eventSequence), 17, w.seed+0x2A3)*120
+	case .Major:
+		w.eventMajorTimer = 420+WorldNoiseHash(int(w.eventSequence), 19, w.seed+0x2A5)*180
+	case .Cataclysm:
+		w.eventCataclysmTimer = 900+WorldNoiseHash(int(w.eventSequence), 23, w.seed+0x2A7)*600
+		w.eventCataclysmCount += 1
+	}
+	w.eventGap = 45+WorldNoiseHash(int(w.eventSequence), 29, w.seed+0x2A9)*30
+	WorldAlertAddEnvironment(w, &w.environment)
+}
+
+WorldEnvironmentUpdate :: proc(w: ^World, deltaTime: f32) {
+	if deltaTime <= 0 do return
+	maxEra := EnvironmentMaxEra(w)
+	for kingdom in 0..<KINGDOMS_CAPACITY {
+		if kingdom == NEUTRAL_KINGDOM || !w.kingdomUsed[kingdom] do continue
+		trailing := EnvironmentKingdomEra(w, kingdom) < maxEra
+		gain: f32 = (trailing ? 0.35 : 1.0)/60
+		w.eventDebt[kingdom] = min(w.eventDebt[kingdom]+deltaTime*gain, 6)
+	}
+
+	w.eventGap = max(w.eventGap-deltaTime, 0)
+	w.eventMinorTimer = max(w.eventMinorTimer-deltaTime, 0)
+	w.eventModerateTimer = max(w.eventModerateTimer-deltaTime, 0)
+	w.eventMajorTimer = max(w.eventMajorTimer-deltaTime, 0)
+	w.eventCataclysmTimer = max(w.eventCataclysmTimer-deltaTime, 0)
+
+	if w.environment.phase != .None {
+		w.environment.remaining = max(w.environment.remaining-deltaTime, 0)
+		switch w.environment.phase {
+		case .Telegraph:
+			if w.environment.remaining <= 0 {
+				w.environment.phase = .Active
+				w.environment.remaining = w.environment.duration
+				w.environment.tick = 0
+				EnvironmentEventActivate(w)
+			}
+		case .Active:
+			EnvironmentEventTick(w, deltaTime)
+			if w.environment.remaining <= 0 do EnvironmentEventEnd(w)
+		case .None:
+		}
+		return
+	}
+
+	if w.eventGap > 0 do return
+
+	severity: EventSeverity
+	ready := false
+	if w.eventCataclysmTimer <= 0 && w.eventCataclysmCount < 2 {
+		if maxEra >= 2 {
+			severity = .Cataclysm
+			ready = true
+		} else {
+			w.eventCataclysmTimer = 30
+		}
+	}
+	if !ready && w.eventMajorTimer <= 0 {
+		severity = .Major
+		ready = true
+	}
+	if !ready && w.eventModerateTimer <= 0 {
+		severity = .Moderate
+		ready = true
+	}
+	if !ready && w.eventMinorTimer <= 0 {
+		severity = .Minor
+		ready = true
+	}
+	if ready do EnvironmentEventStart(w, severity)
+}
+
+EnvironmentEventActivate :: proc(w: ^World) {
+	e := &w.environment
+	scale := EnvironmentSeverityScale(e.severity)
+	switch e.kind {
+	case .Wildfire:
+		EnvironmentFireBurst(w, e.centerX, e.centerY, e.radius, 5+int(scale*6))
+	case .Flood:
+		WorldHazardSpawnCircle(
+			w,
+			e.centerX,
+			e.centerY,
+			e.radius,
+			.Flood,
+			20+10*scale,
+			30+15*scale,
+			u64(e.sequence)+0xF100,
+		)
+	case .Hurricane:
+		WorldHazardSpawnCircle(
+			w,
+			e.centerX,
+			e.centerY,
+			e.radius,
+			.Flood,
+			25+12*scale,
+			35+18*scale,
+			u64(e.sequence)+0xF101,
+		)
+		EnvironmentDamageArea(
+			w,
+			e.centerX,
+			e.centerY,
+			e.radius,
+			8*scale,
+			30*scale,
+			.Area,
+		)
+	case .Earthquake:
+		EnvironmentDamageArea(
+			w,
+			e.centerX,
+			e.centerY,
+			e.radius,
+			10*scale,
+			70*scale,
+			.Area,
+		)
+		DecorationBlastBurst(w, e.centerX, e.centerY, e.radius*0.8)
+		WorldTerrainQuakeApply(w, e.centerX, e.centerY, e.radius, u64(e.sequence)+0x9E01)
+	case .Eruption:
+		EnvironmentDamageArea(
+			w,
+			e.centerX,
+			e.centerY,
+			e.radius,
+			18*scale,
+			110*scale,
+			.Fire,
+		)
+		EnvironmentFireBurst(w, e.centerX, e.centerY, e.radius, 10+int(scale*8))
+		DecorationBlastBurst(w, e.centerX, e.centerY, e.radius)
+		WorldTerrainEruptionApply(w, e.centerX, e.centerY, e.radius, u64(e.sequence)+0x9E02)
+	case .MeteorShower:
+		EnvironmentMeteorImpact(w)
+	case .Blizzard:
+		WorldTerrainFreezeApply(w, e.centerX, e.centerY, e.radius*1.4, u64(e.sequence)+0x9E03)
+	case .Drought:
+		WorldTerrainDroughtApply(w, e.centerX, e.centerY, e.radius*1.6, u64(e.sequence)+0x9E04)
+	case .Locusts:
+	}
+}
+
+EnvironmentEventTick :: proc(w: ^World, deltaTime: f32) {
+	e := &w.environment
+	e.tick -= deltaTime
+	if e.tick > 0 do return
+	e.tick = EnvironmentEventTickSeconds(e.kind)
+	scale := EnvironmentSeverityScale(e.severity)
+
+	switch e.kind {
+	case .Wildfire:
+		EnvironmentFireBurst(w, e.centerX, e.centerY, e.radius, 2+int(scale*2))
+		EnvironmentDamageArea(w, e.centerX, e.centerY, e.radius, 2*scale, 6*scale, .Fire)
+	case .Blizzard:
+		EnvironmentDamageArea(w, e.centerX, e.centerY, e.radius, 2*scale, 0, .Weather)
+	case .Earthquake:
+		EnvironmentDamageArea(w, e.centerX, e.centerY, e.radius, 4*scale, 35*scale, .Area)
+	case .Eruption:
+		EnvironmentDamageArea(w, e.centerX, e.centerY, e.radius, 8*scale, 70*scale, .Fire)
+		EnvironmentFireBurst(w, e.centerX, e.centerY, e.radius, 2+int(scale*2))
+		WorldTerrainLavaSpread(w, e.centerX, e.centerY, e.radius, u64(e.sequence)+0x9E11)
+	case .Hurricane:
+		EnvironmentDamageArea(w, e.centerX, e.centerY, e.radius, 5*scale, 25*scale, .Area)
+	case .MeteorShower:
+		EnvironmentMeteorImpact(w)
+	case .Flood, .Drought, .Locusts:
+	}
+}
+
+EnvironmentEventEnd :: proc(w: ^World) {
+	w.environment.phase = .None
+	w.environment.kingdom = -1
+	w.environment.town = -1
+	w.eventGap = max(w.eventGap, 25)
+}
+
+EnvironmentEventTownFactors :: proc(
+	w: ^World,
+	kingdom, town: int,
+) -> (food, water, growth: f32) {
+	food, water, growth = 1, 1, 1
+	e := &w.environment
+	if e.phase != .Active || e.kingdom != kingdom || e.town != town do return
+	scale := EnvironmentSeverityScale(e.severity)
+	switch e.kind {
+	case .Drought:
+		food = 1-0.35*scale
+		water = 1-0.65*scale
+		growth = 1-0.2*scale
+	case .Locusts:
+		food = 1-0.8*scale
+		growth = 1-0.1*scale
+	case .Blizzard:
+		food = 1-0.2*scale
+		if e.severity >= .Major do growth = 0
+	case .Flood, .Wildfire, .Earthquake, .Eruption, .Hurricane, .MeteorShower:
+	}
+	food = clamp(food, 0.05, 1)
+	water = clamp(water, 0.05, 1)
+	growth = clamp(growth, 0, 1)
+	return
+}
+
+EnvironmentFireBurst :: proc(w: ^World, x, y, radius: f32, count: int) {
+	if count <= 0 do return
+	salt := int(w.simulationTime*8)
+	for i in 0..<count {
+		angle := WorldNoiseHash(i, int(w.environment.sequence)+salt, w.seed+0x3A1)*6.2831853
+		distance := radius*math.sqrt(
+			WorldNoiseHash(i, int(w.environment.sequence)+salt+7, w.seed+0x3A3),
+		)
+		fx := WorldWrapPosition(x+math.cos(angle)*distance, f32(w.maxX))
+		fy := WorldWrapPosition(y+math.sin(angle)*distance, f32(w.maxY))
+		WorldFireIgnite(w, fx, fy, 1.0, 1.0)
+	}
+}
+
+EnvironmentMeteorImpact :: proc(w: ^World) {
+	e := &w.environment
+	scale := EnvironmentSeverityScale(e.severity)
+	angle := WorldNoiseHash(int(e.tick*17)+int(e.sequence), int(w.simulationTime*4), w.seed+0x4A1)*6.2831853
+	distance := e.radius*math.sqrt(WorldNoiseHash(int(e.sequence), int(w.simulationTime*4), w.seed+0x4A3))
+	x := WorldWrapPosition(e.centerX+math.cos(angle)*distance, f32(w.maxX))
+	y := WorldWrapPosition(e.centerY+math.sin(angle)*distance, f32(w.maxY))
+	EnvironmentDamageArea(w, x, y, 2.5+scale, 10*scale, 45*scale, .Fire)
+	EnvironmentFireBurst(w, x, y, 2+scale, 3+int(scale*2))
+	DecorationBlastBurst(w, x, y, 2+scale)
+	WorldTerrainMeteorCrater(w, int(x), int(y), u64(e.sequence)+0x3E00)
+}
+
+EnvironmentDamageArea :: proc(
+	w: ^World,
+	x, y, radius, unitDamage, buildingDamage: f32,
+	damageKind: DamageKind,
+) {
+	chunkSize := w.spatial.chunkSize
+	if chunkSize <= 0 do return
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	centerX := WorldWrapPosition(x, worldWidth)
+	centerY := WorldWrapPosition(y, worldHeight)
+	radiusSquared := radius*radius
+	centerChunkX := int(centerX)/chunkSize
+	centerChunkY := int(centerY)/chunkSize
+	chunkRadius := int(radius)/chunkSize+1
+
+	for offsetX in -chunkRadius..=chunkRadius {
+		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
+		for offsetY in -chunkRadius..=chunkRadius {
+			chunkY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
+			chunk := chunkX*w.spatial.chunksY+chunkY
+
+			slot := w.spatial.unitHead[chunk]
+			for slot >= 0 {
+				next := w.spatial.unitNext[slot]
+				if w.unitUsed[slot] && w.units.type[slot] != nil && !UnitHiddenInside(w, slot) {
+					deltaX := WorldShortestWrappedDelta(w.units.x[slot]-centerX, worldWidth)
+					deltaY := WorldShortestWrappedDelta(w.units.y[slot]-centerY, worldHeight)
+					if deltaX*deltaX+deltaY*deltaY <= radiusSquared {
+						UnitApplyDamage(w, slot, unitDamage, centerX, centerY, damageKind)
+					}
+				}
+				slot = next
+			}
+
+			slot = w.spatial.buildingHead[chunk]
+			for slot >= 0 {
+				next := w.spatial.buildingNext[slot]
+				if w.buildingUsed[slot] {
+					distance, impactX, impactY := WarriorBuildingNearestPoint(
+						w,
+						centerX,
+						centerY,
+						slot,
+					)
+					if distance <= radius {
+						EnvironmentDamageBuilding(w, slot, buildingDamage, impactX, impactY)
+					}
+				}
+				slot = next
+			}
+		}
+	}
+
+	WorldDecorationAreaDamage(w, centerX, centerY, radius, buildingDamage*0.5)
+}
+
+EnvironmentDamageBuilding :: proc(w: ^World, slot: int, damage, impactX, impactY: f32) {
+	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] || damage <= 0 do return
+	if w.buildings.kingdom[slot] == NEUTRAL_KINGDOM do return
+	BuildingHitBurst(w, slot, impactX, impactY)
+	w.buildings.health[slot] -= damage
+	if w.buildings.health[slot] > 0 do return
+	wasBurning := BuildingOnFire(w, slot)
+	BuildingSpawnDebris(w, slot, wasBurning)
+	BuildingDestroyedBurst(w, slot)
+	BuildingDespawn(w, slot, -1)
+}
+
 // Population growth is cohort-based: an era defines how many villagers arrive
 // together and how long the next cohort takes. Supply and unconverted villagers
 // speed up the countdown rather than changing the cohort size.
@@ -407,10 +1146,13 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 			w.dayNumber += 1
 		}
 		WorldWeatherUpdate(w, TOWN_SIMULATION_STEP)
+		WorldEnvironmentUpdate(w, TOWN_SIMULATION_STEP)
 		WorldUnitUpdate(w, TOWN_SIMULATION_STEP)
 		WorldBuildingUpdate(w, TOWN_SIMULATION_STEP)
 		WorldAegisUpdate(w, TOWN_SIMULATION_STEP)
 		WorldFireUpdate(w, TOWN_SIMULATION_STEP)
+		WorldTerrainAftermathUpdate(w, TOWN_SIMULATION_STEP)
+		WorldTerrainLavaUpdate(w, TOWN_SIMULATION_STEP)
 		WorldDecorationUpdate(w, TOWN_SIMULATION_STEP)
 		BloodUpdate(w, TOWN_SIMULATION_STEP)
 		WorldControllersUpdate(w, TOWN_SIMULATION_STEP)
@@ -738,6 +1480,10 @@ WorldConversionAssign :: proc(w: ^World) {
 KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32) {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	weather := WorldWeatherEffects(w)
+	eventFood, eventWater, eventGrowth := EnvironmentEventTownFactors(w, kingdomSlot, townSlot)
+	weather.food *= eventFood
+	weather.water *= eventWater
+	weather.growth *= eventGrowth
 
 	workingFarmlands := min(town.farmlands, town.farmers)
 
