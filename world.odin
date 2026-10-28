@@ -14,6 +14,8 @@ NEUTRAL_KINGDOM :: KINGDOMS_CAPACITY
 World :: struct {
 	units: #soa [UNIT_CAPACITY]Unit,
 	unitUsed: [UNIT_CAPACITY]bool,
+	unitCount: int,
+	unitFreeHint: int,
 	buildings: #soa [BUILDING_CAPACITY]Building,
 	buildingUsed: [BUILDING_CAPACITY]bool,
 	decorations: #soa [DECORATION_CAPACITY]Decoration,
@@ -104,6 +106,8 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.maxX = maxX
 	w.maxY = maxY
 	w.seed = settings.seed
+	w.unitCount = 0
+	w.unitFreeHint = 0
 	w.dayTime = f32(WORLD_DAY_LENGTH_SECONDS)*6/24
 	WorldWeatherTransition(w, .Clear)
 	w.environment.phase = .None
@@ -253,16 +257,27 @@ WorldTerrainChunkRevision :: proc(w: ^World, chunkX, chunkY: int) -> u64 {
 }
 
 UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: int) -> (int, bool) {
+	if w.unitCount >= UNIT_CAPACITY do return 0, false
 	i := -1
-	for slot in 0..<UNIT_CAPACITY {
+	for slot in w.unitFreeHint..<UNIT_CAPACITY {
 		if !w.unitUsed[slot] {
 			i = slot
 			break
 		}
 	}
 	if i < 0 {
+		for slot in 0..<w.unitFreeHint {
+			if !w.unitUsed[slot] {
+				i = slot
+				break
+			}
+		}
+	}
+	if i < 0 {
 		return 0, false
 	}
+	w.unitCount += 1
+	w.unitFreeHint = i+1
 	w.units.x[i] = x
 	w.units.y[i] = y
 	w.units.previousX[i] = x
@@ -343,6 +358,8 @@ UnitDespawn :: proc(w: ^World, slot: int) -> bool {
 		w.kingdoms[kingdomSlot].towns[townSlot].orderRevision += 1
 	}
 	w.unitUsed[slot] = false
+	w.unitCount -= 1
+	if slot < w.unitFreeHint do w.unitFreeHint = slot
 	return true
 }
 

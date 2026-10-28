@@ -1140,6 +1140,9 @@ GROWTH_MAX_SPEED :: 1.25
 GROWTH_VILLAGER_SPEED_BONUS :: 0.005
 GROWTH_VILLAGER_SPEED_CAP :: 0.5
 GROWTH_MAX_SPAWN_PER_TICK :: 32
+// At the unit cap or in a fully packed town, retry the spawn later instead of
+// scanning the whole town area every simulation tick.
+TOWN_GROWTH_FAIL_COOLDOWN :: 2.0
 
 WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 	if deltaTime <= 0 do return
@@ -1688,12 +1691,14 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 			if kingdomSlot == w.observerKingdom {
 				WorldAlertAddGrowth(w, kingdomSlot, townSlot, spawned)
 			}
-		}
-		if town.growthPending <= 0 {
-			town.growthPending = 0
-			town.growthCooldown = town.growthInterval
+			if town.growthPending <= 0 {
+				town.growthPending = 0
+				town.growthCooldown = town.growthInterval
+			} else {
+				town.growthCooldown = 0
+			}
 		} else {
-			town.growthCooldown = 0
+			town.growthCooldown = TOWN_GROWTH_FAIL_COOLDOWN
 		}
 	}
 
@@ -1786,6 +1791,7 @@ TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 }
 
 TownSpawnCitizen :: proc(w: ^World, kingdomSlot, townSlot: int, role: UnitType) -> int {
+	if w.unitCount >= UNIT_CAPACITY do return -1
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return -1
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	worldWidth := int(w.maxX)
