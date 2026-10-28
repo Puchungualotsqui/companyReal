@@ -56,8 +56,8 @@ UIState :: struct {
 	panel:      UIPanelMode,
 	townScroll: int,
 	survey:     bool,
-	hoverTileX, hoverTileY: int,
-	hoverTileValid: bool,
+	inspectTileX, inspectTileY: int,
+	inspectTileValid: bool,
 }
 
 UI_COLOR_BG := rl.Color{26, 24, 28, 240}
@@ -82,13 +82,13 @@ UI_HEADER_H : f32 : 92
 UI_DESC_Y : f32 : 102
 UI_STAT_Y : f32 : 136
 UI_STAT_H : f32 : 24
-UI_GROWTH_Y : f32 : 264
+UI_GROWTH_Y : f32 : 270
 UI_GROWTH_H : f32 : 20
-UI_TOWN_DIVIDER : f32 : 290
-UI_TABS_Y : f32 : 298
+UI_TOWN_DIVIDER : f32 : 296
+UI_TABS_Y : f32 : 304
 UI_TABS_H : f32 : 24
 UI_SECTION_HEADER : f32 : 26
-UI_ROWS_TOP : f32 : 330
+UI_ROWS_TOP : f32 : 336
 UI_ROW_HEIGHT : f32 : 36
 UI_CONSTRUCTION_ROW_HEIGHT : f32 : 28
 UI_ERAS_ROW_H : f32 : 60
@@ -1156,7 +1156,8 @@ UICanConvertFrom :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> bool 
 WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 	WorldAlertPrune(w)
 	ui := &view.ui
-	ui.hoverTileValid = false
+	// The tile inspector only exists while the right button is held.
+	ui.inspectTileValid = false
 	if !UISelectionValid(w, ui.selection) {
 		ui.selection = {}
 		if ui.command == .Attack || ui.command == .Defend || ui.command == .Found ||
@@ -1262,10 +1263,17 @@ WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
 		ui.hover = {}
 	} else {
 		ui.hover = UIFindAt(w, camera, mouse)
+	}
+
+	// Holding right-click inspects the tile under the cursor wherever it moves.
+	if rl.IsMouseButtonDown(.RIGHT) && !overUi &&
+		!(ui.selection.kind != .None && rl.CheckCollisionPointRec(mouse, panel)) {
 		if tileX, tileY, ok := UITileAtMouse(w, camera, mouse); ok {
-			ui.hoverTileX = tileX
-			ui.hoverTileY = tileY
-			ui.hoverTileValid = true
+			if FogTileExplored(w, tileX, tileY) {
+				ui.inspectTileX = tileX
+				ui.inspectTileY = tileY
+				ui.inspectTileValid = true
+			}
 		}
 	}
 
@@ -1706,10 +1714,8 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 	UIDrawCommandHint(w, ui, camera)
 	if !milestonePending {
 		UIDrawHud(w, ui)
-		UIDrawWeatherChip(w)
 		UIDrawEnvironmentBanner(w)
-		UIDrawWeatherChipTooltip(w)
-		UIDrawTileInfo(w, ui)
+		UIDrawTileInfo(w, ui, camera)
 		UIDrawSidePanel(w, ui)
 		UIDrawAlerts(w)
 		if ui.panel == .Crown do UIDrawCrownPanel(w, renderer, ui)
@@ -1982,14 +1988,6 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 			NameKingdomCString(w, kingdom),
 			NameTownCString(w, kingdom, town),
 		)
-		if UISelectionTownHall(w, ui.selection) {
-			subtitle = fmt.ctprintf(
-				"%s  -  %s  -  %s",
-				NameKingdomCString(w, kingdom),
-				NameTownCString(w, kingdom, town),
-				UIWeatherName(w.weather.kind),
-			)
-		}
 		UIText(subtitle, titleX, panel.y+48, UI_COLOR_DIM)
 		if UISelectionTownHall(w, ui.selection) && UICanControlKingdom(w, kingdom) {
 			villagers := fmt.ctprintf("%d villagers", TownUnitCount(w, kingdom, town, .Villager))
@@ -2423,7 +2421,7 @@ UIDrawAegisBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	bar := rl.Rectangle{
 		panel.x+UI_PAD+62,
 		y+7,
-		panel.width-2*UI_PAD-62-42,
+		panel.width-2*UI_PAD-62-52,
 		9,
 	}
 	ratio := clamp(t.orderWard/maximum, 0, 1)
@@ -2440,12 +2438,12 @@ UIDrawAegisBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 		rl.DrawRectangleLinesEx(bar, 2, rl.Color{214, 240, 255, u8(200*flash)})
 	}
 	text := fmt.ctprintf("%d%%", int(ratio*100))
-	textWidth := rl.MeasureTextEx(UIFont(), text, 14, 1).x
+	textWidth := rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x
 	rl.DrawTextEx(
 		UIFont(),
 		text,
-		rl.Vector2{panel.x+panel.width-UI_PAD-textWidth, y+3},
-		14,
+		rl.Vector2{panel.x+panel.width-UI_PAD-textWidth, y+1},
+		UI_TEXT_SIZE,
 		1,
 		UI_COLOR_TEXT,
 	)
@@ -2459,7 +2457,7 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
 	label := fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta)))
 	if WorldIsNight(w) do label = "Night"
-	if w.weather.kind == .Blizzard && w.weather.value > 0.5 do label = "Blizzard"
+	if w.weather.kind == .Blizzard && w.weather.value > 0.5 do label = "Halted"
 	UIText(
 		label,
 		panel.x+UI_PAD,
@@ -4896,19 +4894,6 @@ UIHudTextWidth :: proc(text: cstring) -> f32 {
 	return rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x
 }
 
-UI_WEATHER_CHIP_W : f32 : 256
-UI_WEATHER_CHIP_H : f32 : 58
-UI_WEATHER_ICON : f32 : 26
-
-UIWeatherChipRect :: proc() -> rl.Rectangle {
-	return rl.Rectangle{
-		(f32(rl.GetScreenWidth())-UI_WEATHER_CHIP_W)*0.5,
-		UI_MARGIN,
-		UI_WEATHER_CHIP_W,
-		UI_WEATHER_CHIP_H,
-	}
-}
-
 UISeasonName :: proc(season: Season) -> cstring {
 	switch season {
 	case .Spring:
@@ -4923,333 +4908,15 @@ UISeasonName :: proc(season: Season) -> cstring {
 	unreachable()
 }
 
-UISeasonColor :: proc(season: Season) -> rl.Color {
-	switch season {
-	case .Spring:
-		return rl.Color{126, 196, 112, 255}
-	case .Summer:
-		return rl.Color{226, 190, 82, 255}
-	case .Autumn:
-		return rl.Color{214, 132, 72, 255}
-	case .Winter:
-		return rl.Color{132, 184, 224, 255}
-	}
-	unreachable()
-}
-
-UIWeatherName :: proc(kind: WeatherKind) -> cstring {
-	switch kind {
-	case .Clear:
-		return "Clear"
-	case .Rain:
-		return "Rain"
-	case .Storm:
-		return "Storm"
-	case .Fog:
-		return "Fog"
-	case .Snow:
-		return "Snow"
-	case .Blizzard:
-		return "Blizzard"
-	case .Drought:
-		return "Drought"
-	case .Heatwave:
-		return "Heatwave"
-	case .Sandstorm:
-		return "Sandstorm"
-	case .Ashfall:
-		return "Ashfall"
-	}
-	unreachable()
-}
-
-UIWeatherColor :: proc(kind: WeatherKind) -> rl.Color {
-	switch kind {
-	case .Clear:
-		return rl.Color{236, 208, 128, 255}
-	case .Rain:
-		return rl.Color{126, 182, 226, 255}
-	case .Storm:
-		return rl.Color{118, 138, 196, 255}
-	case .Fog:
-		return rl.Color{178, 184, 188, 255}
-	case .Snow:
-		return rl.Color{214, 236, 250, 255}
-	case .Blizzard:
-		return rl.Color{192, 218, 244, 255}
-	case .Drought:
-		return rl.Color{224, 176, 96, 255}
-	case .Heatwave:
-		return rl.Color{242, 142, 78, 255}
-	case .Sandstorm:
-		return rl.Color{210, 168, 108, 255}
-	case .Ashfall:
-		return rl.Color{168, 156, 148, 255}
-	}
-	unreachable()
-}
-
-UIWeatherWindLabel :: proc(w: ^World) -> cstring {
-	windX := w.weather.windX
-	windY := w.weather.windY
-	if windX*windX+windY*windY < 0.0004 do return "calm"
-	angle := math.atan2(-windY, windX)
-	index := int(math.round(angle/(math.PI*0.25)))
-	directions := [8]cstring{"E", "NE", "N", "NW", "W", "SW", "S", "SE"}
-	return directions[(index+8)%8]
-}
-
-UIWeatherPercent :: proc(value: f32) -> int {
-	return int(math.round((value-1)*100))
-}
-
-UIDrawWeatherIcon :: proc(kind: WeatherKind, x, y, size: f32, color: rl.Color) {
-	cx := x+size*0.5
-	cy := y+size*0.5
-	r := size*0.24
-	switch kind {
-	case .Clear:
-		rl.DrawCircleV(rl.Vector2{cx, cy}, r, color)
-		for ray in 0..<8 {
-			angle := f32(ray)/8*6.2831853
-			rl.DrawLineEx(
-				rl.Vector2{cx+math.cos(angle)*r*1.3, cy+math.sin(angle)*r*1.3},
-				rl.Vector2{cx+math.cos(angle)*r*1.8, cy+math.sin(angle)*r*1.8},
-				1,
-				color,
-			)
-		}
-	case .Rain, .Storm, .Ashfall:
-		rl.DrawCircleV(rl.Vector2{cx-size*0.18, cy-size*0.06}, r*0.8, color)
-		rl.DrawCircleV(rl.Vector2{cx+size*0.06, cy-size*0.14}, r, color)
-		rl.DrawCircleV(rl.Vector2{cx+size*0.24, cy}, r*0.7, color)
-		if kind == .Storm {
-			rl.DrawLineEx(rl.Vector2{cx, cy}, rl.Vector2{cx-size*0.12, cy+size*0.22}, 2, color)
-			rl.DrawLineEx(
-				rl.Vector2{cx-size*0.12, cy+size*0.22},
-				rl.Vector2{cx+size*0.06, cy+size*0.22},
-				2,
-				color,
-			)
-			rl.DrawLineEx(
-				rl.Vector2{cx+size*0.06, cy+size*0.22},
-				rl.Vector2{cx-size*0.04, cy+size*0.38},
-				2,
-				color,
-			)
-		} else {
-			for drop in 0..<3 {
-				dx := cx-size*0.16+f32(drop)*size*0.16
-				rl.DrawLineEx(
-					rl.Vector2{dx, cy+size*0.14},
-					rl.Vector2{dx-size*0.04, cy+size*0.30},
-					1.5,
-					color,
-				)
-			}
-		}
-	case .Fog:
-		for line in 0..<3 {
-			yy := cy-size*0.16+f32(line)*size*0.16
-			rl.DrawLineEx(
-				rl.Vector2{cx-size*0.30, yy},
-				rl.Vector2{cx+size*0.30, yy},
-				2,
-				color,
-			)
-		}
-	case .Snow, .Blizzard:
-		for arm in 0..<3 {
-			angle := f32(arm)*math.PI/3
-			rl.DrawLineEx(
-				rl.Vector2{cx-math.cos(angle)*r*1.5, cy-math.sin(angle)*r*1.5},
-				rl.Vector2{cx+math.cos(angle)*r*1.5, cy+math.sin(angle)*r*1.5},
-				1.5,
-				color,
-			)
-		}
-		if kind == .Blizzard {
-			for line in 0..<2 {
-				yy := cy+size*0.30+f32(line)*size*0.10
-				rl.DrawLineEx(
-					rl.Vector2{cx-size*0.34, yy},
-					rl.Vector2{cx+size*0.34, yy},
-					1.5,
-					color,
-				)
-			}
-		}
-	case .Drought:
-		rl.DrawCircleV(rl.Vector2{cx, cy-size*0.08}, r*0.8, color)
-		for crack in 0..<3 {
-			x0 := cx-size*0.26+f32(crack)*size*0.24
-			rl.DrawLineEx(
-				rl.Vector2{x0, cy+size*0.24},
-				rl.Vector2{x0+size*0.10, cy+size*0.36},
-				1.5,
-				color,
-			)
-		}
-	case .Heatwave:
-		rl.DrawCircleV(rl.Vector2{cx, cy}, r*0.9, color)
-		for ray in 0..<8 {
-			angle := f32(ray)/8*6.2831853
-			rl.DrawLineEx(
-				rl.Vector2{cx+math.cos(angle)*r*1.3, cy+math.sin(angle)*r*1.3},
-				rl.Vector2{cx+math.cos(angle)*r*1.9, cy+math.sin(angle)*r*1.9},
-				1.5,
-				color,
-			)
-		}
-	case .Sandstorm:
-		for line in 0..<3 {
-			yy := cy-size*0.18+f32(line)*size*0.18
-			rl.DrawLineEx(
-				rl.Vector2{cx-size*0.32, yy},
-				rl.Vector2{cx+size*0.28, yy-size*0.08},
-				2,
-				color,
-			)
-		}
-	}
-}
-
-UIDrawWeatherChip :: proc(w: ^World) {
-	rect := UIWeatherChipRect()
-	rl.DrawRectangleRec(rect, UI_COLOR_BG)
-	rl.DrawRectangleLinesEx(rect, 2, UI_COLOR_BORDER)
-	rl.DrawRectangleLinesEx(
-		rl.Rectangle{rect.x+3, rect.y+3, rect.width-6, rect.height-6},
-		1,
-		UI_COLOR_BORDER_INNER,
-	)
-	rl.DrawRectangleRec(
-		rl.Rectangle{rect.x+3, rect.y+3, 4, rect.height-6},
-		UISeasonColor(WorldSeason(w)),
-	)
-
-	color := UIWeatherColor(w.weather.kind)
-	UIDrawWeatherIcon(w.weather.kind, rect.x+12, rect.y+9, UI_WEATHER_ICON, color)
-	UIText(
-		fmt.ctprintf("%s  -  %s", UISeasonName(WorldSeason(w)), UIWeatherName(w.weather.kind)),
-		rect.x+46,
-		rect.y+7,
-		color,
-	)
-	UIText(
-		fmt.ctprintf(
-			"Wind %s  -  %ds  -  next %s",
-			UIWeatherWindLabel(w),
-			int(math.ceil(w.weather.remaining)),
-			UIWeatherName(w.weather.nextKind),
-		),
-		rect.x+46,
-		rect.y+25,
-		UI_COLOR_DIM,
-	)
-
-	bar := rl.Rectangle{rect.x+46, rect.y+44, rect.width-58, 4}
-	rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
-	if w.weather.value > 0 {
-		fill := color
-		fill.a = 220
-		rl.DrawRectangleRec(
-			rl.Rectangle{bar.x, bar.y, bar.width*clamp(w.weather.value, 0, 1), bar.height},
-			fill,
-		)
-	}
-	rl.DrawRectangleLinesEx(bar, 1, UI_COLOR_BORDER_INNER)
-
-	windSpeed := math.sqrt(w.weather.windX*w.weather.windX+w.weather.windY*w.weather.windY)
-	if windSpeed > 0.02 {
-		ax := w.weather.windX/windSpeed
-		ay := w.weather.windY/windSpeed
-		cx := rect.x+rect.width-14
-		cy := rect.y+16
-		rl.DrawLineEx(
-			rl.Vector2{cx-ax*6, cy-ay*6},
-			rl.Vector2{cx+ax*4, cy+ay*4},
-			1.5,
-			color,
-		)
-		rl.DrawTriangle(
-			rl.Vector2{cx+ax*8, cy+ay*8},
-			rl.Vector2{cx+ax*2-ay*3, cy+ay*2+ax*3},
-			rl.Vector2{cx+ax*2+ay*3, cy+ay*2-ax*3},
-			color,
-		)
-	}
-}
-
-UIDrawWeatherChipTooltip :: proc(w: ^World) {
-	rect := UIWeatherChipRect()
-	if rl.CheckCollisionPointRec(rl.GetMousePosition(), rect) {
-		UIDrawWeatherTooltip(w, rect)
-	}
-}
-
-UIDrawWeatherTooltip :: proc(w: ^World, rect: rl.Rectangle) {
-	effects := WorldWeatherEffects(w)
-	padding: f32 = 8
-	lineHeight := UIHudLineHeight()
-	width: f32 = 330
-	height := lineHeight*4+padding*2+4
-	x := rect.x+(rect.width-width)*0.5
-	y := rect.y+rect.height+10
-	screenWidth := f32(rl.GetScreenWidth())
-	screenHeight := f32(rl.GetScreenHeight())
-	if x+width > screenWidth-8 do x = screenWidth-width-8
-	if x < 8 do x = 8
-	if y+height > screenHeight-8 do y = rect.y-height-10
-
-	box := rl.Rectangle{x, y, width, height}
-	rl.DrawRectangleRec(box, UI_COLOR_BG)
-	rl.DrawRectangleLinesEx(box, 1, UI_COLOR_GOLD)
-	UIText(UIWeatherName(w.weather.kind), box.x+padding, box.y+padding, UIWeatherColor(w.weather.kind))
-	UIText(
-		fmt.ctprintf(
-			"Food %+d%%   Water %+d%%   Growth %+d%%",
-			UIWeatherPercent(effects.food),
-			UIWeatherPercent(effects.water),
-			UIWeatherPercent(effects.growth),
-		),
-		box.x+padding,
-		box.y+padding+lineHeight,
-		UI_COLOR_TEXT,
-	)
-	UIText(
-		fmt.ctprintf(
-			"Vision %+d%%   Move %+d%%   Fire %+d%%",
-			UIWeatherPercent(effects.vision),
-			UIWeatherPercent(effects.move),
-			UIWeatherPercent(effects.fireSpread),
-		),
-		box.x+padding,
-		box.y+padding+lineHeight*2,
-		UI_COLOR_TEXT,
-	)
-	UIText(
-		fmt.ctprintf(
-			"Wind %s   Next %s in %ds",
-			UIWeatherWindLabel(w),
-			UIWeatherName(w.weather.nextKind),
-			int(math.ceil(w.weather.remaining)),
-		),
-		box.x+padding,
-		box.y+padding+lineHeight*3,
-		UI_COLOR_DIM,
-	)
-}
 
 UI_ENVIRONMENT_BANNER_W : f32 : 380
 UI_ENVIRONMENT_BANNER_H : f32 : 58
 
 UIEnvironmentBannerRect :: proc(w: ^World) -> rl.Rectangle {
 	if w.environment.phase == .None || !EnvironmentEventRevealed(w) do return {}
-	chip := UIWeatherChipRect()
 	return rl.Rectangle{
 		(f32(rl.GetScreenWidth())-UI_ENVIRONMENT_BANNER_W)*0.5,
-		chip.y+chip.height+8,
+		UI_MARGIN,
 		UI_ENVIRONMENT_BANNER_W,
 		UI_ENVIRONMENT_BANNER_H,
 	}
@@ -5433,41 +5100,42 @@ UIDrawEnvironmentBanner :: proc(w: ^World) {
 	}
 }
 
-// Hovering bare ground shows what the warp left there and how long it needs to
-// recover. Selected units and buildings keep their own richer panels.
-UIDrawTileInfo :: proc(w: ^World, ui: ^UIState) {
-	if !ui.hoverTileValid || ui.command != .Inspect do return
-	if ui.hover.kind != .None do return
+// Holding right-click shows the tile inspector on the tile under the cursor.
+// It follows the cursor and disappears when the button is released.
+UIDrawTileInfo :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
+	if !ui.inspectTileValid || ui.command != .Inspect do return
 	if ui.panel == .Crown do return
-
-	mouse := rl.GetMousePosition()
-	if rl.CheckCollisionPointRec(mouse, UIPanelRect(w, ui)) do return
-	if rl.CheckCollisionPointRec(mouse, UIHudRect(w)) do return
-	if rl.CheckCollisionPointRec(mouse, UIWeatherChipRect()) do return
-	if ui.panel != .None && ui.panel != .Crown {
-		if rl.CheckCollisionPointRec(mouse, UISidePanelRect(w, ui)) do return
-	}
-	envRect := UIEnvironmentBannerRect(w)
-	if envRect.width > 0 && rl.CheckCollisionPointRec(mouse, envRect) do return
-
-	tileX := ui.hoverTileX
-	tileY := ui.hoverTileY
+	tileX := ui.inspectTileX
+	tileY := ui.inspectTileY
 	if !FogTileExplored(w, tileX, tileY) do return
+	tileScreen, visible := UITileScreenPosition(w, camera, tileX, tileY)
+	if !visible do return
+
+	if camera.zoom > 0 {
+		rl.DrawRectangleLinesEx(
+			rl.Rectangle{tileScreen.x, tileScreen.y, camera.zoom, camera.zoom},
+			2,
+			UI_COLOR_GOLD,
+		)
+	}
 
 	tile := w.ground[tileX][tileY]
 	hasScar := tile.scar != .None
 	padding: f32 = 8
-	width: f32 = 330
-	bodySize: f32 = 14
-	height := padding*2+24
-	height += hasScar ? 36 : 18
+	width: f32 = 360
+	bodyStep: f32 = 22
+	height := padding*2+24+bodyStep*2
 
-	x := mouse.x+20
-	y := mouse.y+20
-	if x+width > f32(rl.GetScreenWidth())-8 do x = mouse.x-width-14
-	if y+height > f32(rl.GetScreenHeight())-8 do y = mouse.y-height-14
-	x = max(x, 8)
-	y = max(y, 8)
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
+	anchorX := tileScreen.x+camera.zoom*0.5
+	anchorY := tileScreen.y+camera.zoom*0.5
+	x := anchorX+22
+	y := anchorY+22
+	if x+width > screenWidth-8 do x = anchorX-width-22
+	if y+height > screenHeight-8 do y = anchorY-height-22
+	x = clamp(x, 8, max(8, screenWidth-width-8))
+	y = clamp(y, 8, max(8, screenHeight-height-8))
 	box := rl.Rectangle{x, y, width, height}
 
 	rl.DrawRectangleRec(box, UI_COLOR_BG)
@@ -5483,26 +5151,64 @@ UIDrawTileInfo :: proc(w: ^World, ui: ^UIState) {
 			TerrainScarName(tile.scar),
 			int(math.ceil(tile.scarTimer)),
 		)
-		rl.DrawTextEx(UIFont(), label, rl.Vector2{box.x+padding, bodyY}, bodySize, 1, scarColor)
-		rl.DrawTextEx(
-			UIFont(),
-			TerrainScarDescription(tile.scar),
-			rl.Vector2{box.x+padding, bodyY+18},
-			bodySize,
-			1,
-			UI_COLOR_DIM,
-		)
+		UIText(label, box.x+padding, bodyY, scarColor)
+		UIText(TerrainScarDescription(tile.scar), box.x+padding, bodyY+bodyStep, UI_COLOR_DIM)
 	} else {
 		def := TILE_DEFS[tile.type]
-		detail := fmt.ctprintf(
-			"Move x%.2f   Wood %.1f   Food %.1f   Water %.1f",
-			def.moveCost,
-			def.wood,
-			def.food,
-			def.water,
+		UIText(
+			fmt.ctprintf("Move x%.2f   Wood %.1f", def.moveCost, def.wood),
+			box.x+padding,
+			bodyY,
+			UI_COLOR_DIM,
 		)
-		rl.DrawTextEx(UIFont(), detail, rl.Vector2{box.x+padding, bodyY}, bodySize, 1, UI_COLOR_DIM)
+		UIText(
+			fmt.ctprintf("Food %.1f   Water %.1f", def.food, def.water),
+			box.x+padding,
+			bodyY+bodyStep,
+			UI_COLOR_DIM,
+		)
 	}
+}
+
+// Finds the visible wrapped copy of a tile, so inspection works across the
+// world seam.
+UITileScreenPosition :: proc(
+	w: ^World,
+	camera: rl.Camera2D,
+	tileX, tileY: int,
+) -> (rl.Vector2, bool) {
+	if w.maxX == 0 || w.maxY == 0 || camera.zoom <= 0 do return {}, false
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
+	bestDistance: f32 = 1e30
+	best: rl.Vector2
+	found := false
+	for copyX in -1..=1 {
+		for copyY in -1..=1 {
+			position := rl.GetWorldToScreen2D(
+				rl.Vector2{
+					f32(tileX)+f32(copyX)*worldWidth,
+					f32(tileY)+f32(copyY)*worldHeight,
+				},
+				camera,
+			)
+			if position.x+camera.zoom < 0 || position.y+camera.zoom < 0 ||
+				position.x > screenWidth || position.y > screenHeight {
+				continue
+			}
+			dx := position.x-screenWidth*0.5
+			dy := position.y-screenHeight*0.5
+			distance := dx*dx+dy*dy
+			if !found || distance < bestDistance {
+				bestDistance = distance
+				best = position
+				found = true
+			}
+		}
+	}
+	return best, found
 }
 
 UIHudLineHeight :: proc() -> f32 {
@@ -5844,7 +5550,6 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 	// The Crown window is a full-screen modal; it owns its own clicks.
 	if ui.panel == .Crown do return false
 
-	if rl.CheckCollisionPointRec(mouse, UIWeatherChipRect()) do return true
 	if rect := UIEnvironmentBannerRect(w); rect.width > 0 &&
 		rl.CheckCollisionPointRec(mouse, rect) {
 		return true
