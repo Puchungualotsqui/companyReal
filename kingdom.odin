@@ -199,13 +199,16 @@ ConversionJob :: struct {
 // A building ordered by the town. Builders must clear the decorations on the
 // footprint before they can raise the structure.
 ConstructionSite :: struct {
-	active:    bool, // false marks a free slot; keeps builder site indices stable
-	kind:      BuildingKind,
-	x, y:      int,
-	paid:      f32,
-	settlers:  int,
-	clearWork: f32,
-	buildWork: f32,
+	active:      bool, // false marks a free slot; keeps builder site indices stable
+	kind:        BuildingKind,
+	x, y:        int,
+	paid:        f32,
+	settlers:    int,
+	clearWork:   f32,
+	buildWork:   f32,
+	accessReady: bool, // Cached work access point
+	accessX:     int,
+	accessY:     int,
 }
 
 TOWN_CONSTRUCTION_CAPACITY :: 10

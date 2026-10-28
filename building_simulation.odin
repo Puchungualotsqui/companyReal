@@ -507,12 +507,31 @@ TownConstructionAccessPoint :: proc(
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	if siteIndex < 0 || siteIndex >= TOWN_CONSTRUCTION_CAPACITY do return 0, 0, false
-	site := town.constructions[siteIndex]
+	site := &town.constructions[siteIndex]
 	if !site.active do return 0, 0, false
 
-	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
 	unit := &w.units[unitSlot]
-	return BuildingFindWorkAccessPoint(w, site.x, site.y, width, height, unit.type, unit.kingdome, int(unit.x), int(unit.y))
+	if site.accessReady &&
+		WorldTileWalkable(w, site.accessX, site.accessY, unit.type, unit.kingdome) {
+		return site.accessX, site.accessY, true
+	}
+
+	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+	x, y, found := BuildingFindWorkAccessPoint(
+		w,
+		site.x,
+		site.y,
+		width,
+		height,
+		unit.type,
+		unit.kingdome,
+		int(unit.x),
+		int(unit.y),
+	)
+	if found {
+		site.accessX, site.accessY, site.accessReady = x, y, true
+	}
+	return x, y, found
 }
 
 // Idle builders pick the site whose access point is closest to them. The failed
@@ -835,9 +854,9 @@ TownBuildingValid :: proc(w: ^World, kingdom, x, y: int, bType: BuildingType) ->
 }
 
 // A full scan evaluates thousands of tiles and checks every construction/
-// combat site for each one. Sampling a few hundred candidates keeps placement
+// combat site for each one. Sampling a few dozen candidates keeps placement
 // varied while making the search orders of magnitude cheaper.
-TOWN_BUILDING_SITE_SAMPLES :: 192
+TOWN_BUILDING_SITE_SAMPLES :: 96
 
 TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType: BuildingType) -> (int, int, bool) {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false

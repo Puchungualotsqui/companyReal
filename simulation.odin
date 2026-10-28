@@ -1205,7 +1205,9 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 		WorldGasCloudUpdate(w, TOWN_SIMULATION_STEP)
 		ProfilerEnd(stamp)
 		stamp = ProfilerBegin("Sim:Fog")
-		FogUpdate(w)
+		if int(w.simulationTime/TOWN_SIMULATION_STEP)%FOG_UPDATE_INTERVAL == 0 {
+			FogUpdate(w)
+		}
 		ProfilerEnd(stamp)
 		w.simulationAccumulator -= TOWN_SIMULATION_STEP
 		ProfilerEnd(tickStamp)

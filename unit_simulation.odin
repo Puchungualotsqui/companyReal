@@ -53,7 +53,7 @@ UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 		unit.pathTargetY = targetY
 		unit.pathReady = false
 	}
-	UnitMoveToTarget(w, unitSlot, deltaTime)
+	UnitMoveToTarget(w, unitSlot, deltaTime, CIVILIAN_PATH_EXPANSIONS)
 	return true
 }
 
@@ -328,6 +328,12 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			state^ = .Building
 			w.units[unitSlot].pathReady = false
 		} else if blocked {
+			// The cached access point is on the wrong side of the site for this
+			// builder. Drop it so the next attempt searches from the new position.
+			if builder.constructionSite >= 0 &&
+				builder.constructionSite < TOWN_CONSTRUCTION_CAPACITY {
+				town.constructions[builder.constructionSite].accessReady = false
+			}
 			builder.failedConstruction = builder.constructionSite
 			builder.constructionSite = -1
 			state^ = .Roaming
@@ -566,7 +572,7 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		unit.pathTargetY = state.accessY
 		unit.pathReady = false
 	}
-	if UnitMoveToTarget(w, unitSlot, deltaTime) {
+	if UnitMoveToTarget(w, unitSlot, deltaTime, CIVILIAN_PATH_EXPANSIONS) {
 		state.inside = true
 		SpatialUnitRemove(w, unitSlot)
 		state.timer = UnitDefaultTrainingTime(state.to) / KingdomTechConversionSpeedMultiplier(w, unit.kingdome, state.to)
@@ -689,6 +695,8 @@ UnitSleepingHome :: proc(w: ^World, unitSlot: int) -> int {
 UnitHiddenInside :: proc(w: ^World, unitSlot: int) -> bool {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return false
 	if state, converting := w.units[unitSlot].state.(StateConverting); converting && state.inside do return true
+	// UnitInsideHome cannot succeed unless the unit is marked as inside.
+	if !w.units[unitSlot].sleepInside do return false
 	return UnitInsideHome(w, unitSlot) >= 0
 }
 
@@ -742,7 +750,10 @@ UnitUpdatePacificSafety :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> boo
 	if unit.sleepInside && UnitInsideHome(w, unitSlot) < 0 do UnitSleepWake(w, unitSlot)
 	alarm := WorldTownExists(w, unit.kingdome, unit.town) &&
 		w.kingdoms[unit.kingdome].towns[unit.town].alarmActive
-	enemy := UnitFindNearbyEnemy(w, unitSlot, FLEE_THREAT_RADIUS)
+	// The town alarm already covers the whole area. Only pay for a per-unit
+	// neighbourhood scan when the town is actually threatened.
+	enemy := -1
+	if alarm do enemy = UnitFindNearbyEnemy(w, unitSlot, FLEE_THREAT_RADIUS)
 	if !alarm && enemy < 0 {
 		if state, pacific := unit.state.(StatePacific); pacific {
 			if state == .Hiding {
@@ -778,7 +789,14 @@ UnitUpdatePacificSafety :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> boo
 			}
 		}
 		if state^ == .GoingHome {
-			if UnitMove(w, unitSlot, unit.pathTargetX, unit.pathTargetY, deltaTime) {
+			if UnitMove(
+				w,
+				unitSlot,
+				unit.pathTargetX,
+				unit.pathTargetY,
+				deltaTime,
+				CIVILIAN_PATH_EXPANSIONS,
+			) {
 				state^ = .Hiding
 				unit.pathReady = false
 				unit.sleepInside = true
@@ -835,7 +853,6 @@ UnitUpdatePacificSleep :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool
 	if state^ != .GoingHome {
 		if x, y, found := UnitFindHomeTarget(w, unitSlot); found {
 			unit.pathTargetX, unit.pathTargetY = x, y
-			unit.pathReady = false
 			state^ = .GoingHome
 		} else {
 			state^ = .Sleeping
@@ -844,7 +861,7 @@ UnitUpdatePacificSleep :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool
 			return true
 		}
 	}
-	if UnitMoveToTarget(w, unitSlot, deltaTime) {
+	if UnitMoveToTarget(w, unitSlot, deltaTime, CIVILIAN_PATH_EXPANSIONS) {
 		state^ = .Sleeping
 		unit.pathReady = false
 		unit.sleepInside = true
@@ -982,32 +999,32 @@ UnitFindResourceTarget :: proc(w: ^World, unitSlot, taskSequence: int) -> (int, 
 	centerChunkY := unitY/chunkSize
 	// Keep the search bounded. The old linear fallback scanned every decoration
 	// slot for every builder whenever the nearby area had been cleared.
-	for radius in 1..=8 {
-		for chunkY in centerChunkY-radius ..= centerChunkY+radius {
-			wrappedY := WorldWrapCoordinate(chunkY, w.spatial.chunksY)
-			for chunkX in centerChunkX-radius ..= centerChunkX+radius {
-				wrappedX := WorldWrapCoordinate(chunkX, w.spatial.chunksX)
-				chunk := wrappedX*w.spatial.chunksY+wrappedY
-				for slot := w.spatial.decorationHead[chunk]; slot >= 0;
-					slot = w.spatial.decorationNext[slot] {
-					if !DecorationChoppable(w.decorations.kind[slot]) do continue
-					sourceX := int(w.decorations.x[slot])
-					sourceY := int(w.decorations.y[slot])
-					if WorldTileOccupied(w, sourceX, sourceY) do continue
-					if !WorldTileWalkable(w, sourceX, sourceY, w.units[unitSlot].type, w.units[unitSlot].kingdome) do continue
+	// A single square pass replaces nested radius scans, which revisited every
+	// inner chunk once per ring.
+	for offsetY in -8..=8 {
+		wrappedY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
+		for offsetX in -8..=8 {
+			wrappedX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
+			chunk := wrappedX*w.spatial.chunksY+wrappedY
+			for slot := w.spatial.decorationHead[chunk]; slot >= 0;
+				slot = w.spatial.decorationNext[slot] {
+				if !DecorationChoppable(w.decorations.kind[slot]) do continue
+				sourceX := int(w.decorations.x[slot])
+				sourceY := int(w.decorations.y[slot])
+				if WorldTileOccupied(w, sourceX, sourceY) do continue
+				if !WorldTileWalkable(w, sourceX, sourceY, w.units[unitSlot].type, w.units[unitSlot].kingdome) do continue
 
-					deltaX := WorldShortestWrappedDelta(f32(sourceX)-f32(unitX), f32(worldWidth))
-					deltaY := WorldShortestWrappedDelta(f32(sourceY)-f32(unitY), f32(worldHeight))
-					distanceSquared := deltaX*deltaX+deltaY*deltaY
-					score := WorldNoiseHash(sourceX, sourceY, seed)
-					if bestSlot >= 0 && (distanceSquared > bestDistanceSquared ||
-						(distanceSquared == bestDistanceSquared && score <= bestScore)) {
-						continue
-					}
-					bestSlot = slot
-					bestDistanceSquared = distanceSquared
-					bestScore = score
+				deltaX := WorldShortestWrappedDelta(f32(sourceX)-f32(unitX), f32(worldWidth))
+				deltaY := WorldShortestWrappedDelta(f32(sourceY)-f32(unitY), f32(worldHeight))
+				distanceSquared := deltaX*deltaX+deltaY*deltaY
+				score := WorldNoiseHash(sourceX, sourceY, seed)
+				if bestSlot >= 0 && (distanceSquared > bestDistanceSquared ||
+					(distanceSquared == bestDistanceSquared && score <= bestScore)) {
+					continue
 				}
+				bestSlot = slot
+				bestDistanceSquared = distanceSquared
+				bestScore = score
 			}
 		}
 	}
@@ -1026,7 +1043,7 @@ UnitFindResourceTarget :: proc(w: ^World, unitSlot, taskSequence: int) -> (int, 
 COLLECTOR_SEARCH_MAX_EXPANSIONS :: 4096
 // Civilian errands are local. A capped search keeps one trapped unit from
 // running a world-sized A* while still covering any normal town approach.
-CIVILIAN_PATH_EXPANSIONS :: 8192
+CIVILIAN_PATH_EXPANSIONS :: 4096
 
 UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomSlot := -1, townSlot := -1) -> (int, int, bool) {
 	worldWidth := int(w.maxX)
@@ -1207,7 +1224,24 @@ UnitFindHomeTarget :: proc(w: ^World, unitSlot: int) -> (int, int, bool) {
 		}
 		if !found do break
 		tried[bestOx+1][bestOy+1] = true
-		if AStar(w, unit.type, unit.kingdome, int(unitX), int(unitY), bestX, bestY, &unit.path) {
+		if AStar(
+			w,
+			unit.type,
+			unit.kingdome,
+			int(unitX),
+			int(unitY),
+			bestX,
+			bestY,
+			&unit.path,
+			CIVILIAN_PATH_EXPANSIONS,
+		) {
+			// Keep the search: the caller is about to move to this target.
+			unit.pathTargetX, unit.pathTargetY = bestX, bestY
+			unit.pathRevision = w.pathRevision
+			unit.pathReady = true
+			unit.pathFound = true
+			unit.pathIndex = 1
+			if len(unit.path) == 1 do unit.pathIndex = 0
 			return bestX, bestY, true
 		}
 	}

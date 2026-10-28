@@ -20,6 +20,9 @@ FOG_MEMORY_TINT :: rl.Color{190, 194, 200, 255}
 // large attacks can be seen coming.
 FOG_TOWN_AREA_VISION_FACTOR :: 1.5
 FOG_RENDER_CHUNK_TILES :: 32
+// Vision changes slowly; rebuilding it every other tick halves the cost while
+// keeping reveal and contact latency below half a second.
+FOG_UPDATE_INTERVAL :: 2
 
 FogOfWar :: struct {
 	visible:  []bool,
@@ -263,8 +266,7 @@ FogDirtyClear :: proc(w: ^World) {
 	clear(&w.fog.dirtyChunks)
 }
 
-FogMarkVisible :: proc(w: ^World, x, y: int) {
-	index := FogTileIndex(w, x, y)
+FogMarkVisibleIndex :: proc(w: ^World, index: int) {
 	if index < 0 || index >= len(w.fog.visible) do return
 	changed := !w.fog.visible[index] || !w.fog.explored[index]
 	if !w.fog.visible[index] {
@@ -276,37 +278,42 @@ FogMarkVisible :: proc(w: ^World, x, y: int) {
 }
 
 // A kingdom source stamps contact vision and, only for the observer, fog.
-// The default remains useful for observer-only footprint revelation.
-FogRevealCircle :: proc(w: ^World, centerX, centerY: int, radius: f32, kingdom: int = -1) {
+// needsContact is computed once per FogUpdate instead of once per source.
+FogRevealCircle :: proc(
+	w: ^World,
+	centerX, centerY: int,
+	radius: f32,
+	kingdom: int = -1,
+	needsContact := true,
+) {
 	if radius <= 0 do return
 	if kingdom >= 0 && (kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom]) do return
-	needsContact := false
-	if kingdom >= 0 {
-		for other in 0..<KINGDOMS_CAPACITY {
-			if other != kingdom && w.kingdomUsed[other] && !KingdomsMet(w, kingdom, other) {
-				needsContact = true
-				break
-			}
-		}
-		// Once introduced to every living kingdom, only observer fog needs
-		// updating. Large AI armies need not stamp redundant contact circles.
-		if !needsContact && kingdom != w.observerKingdom do return
-	}
+
+	stampContact := kingdom >= 0 && needsContact
+	stampVisible := kingdom < 0 || kingdom == w.observerKingdom
+	// Once introduced to every living kingdom, only observer fog needs updating.
+	if !stampContact && !stampVisible do return
+
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
+
+	contactFlags: u8
+	if stampContact do contactFlags = u8(1) << u8(kingdom)
 	radiusSquared := radius*radius
 	extent := int(radius)+1
 	for offsetY in -extent..=extent {
 		distanceSquared := f32(offsetY*offsetY)
 		if distanceSquared > radiusSquared do continue
 		halfWidth := int(math.sqrt(radiusSquared-distanceSquared))
-		for offsetX in -halfWidth..=halfWidth {
-			x, y := centerX+offsetX, centerY+offsetY
-			if needsContact {
-				index := FogTileIndex(w, x, y)
-				if index >= 0 && index < len(w.fog.contactVision) {
-					w.fog.contactVision[index] |= u8(1) << u8(kingdom)
-				}
-			}
-			if kingdom < 0 || kingdom == w.observerKingdom do FogMarkVisible(w, x, y)
+		wrappedY := WorldWrapCoordinate(centerY+offsetY, worldHeight)
+		x := WorldWrapCoordinate(centerX-halfWidth, worldWidth)
+		for _ in 0..<halfWidth*2+1 {
+			index := x*worldHeight+wrappedY
+			if stampContact do w.fog.contactVision[index] |= contactFlags
+			if stampVisible do FogMarkVisibleIndex(w, index)
+			x += 1
+			if x >= worldWidth do x = 0
 		}
 	}
 }
@@ -314,7 +321,7 @@ FogRevealCircle :: proc(w: ^World, centerX, centerY: int, radius: f32, kingdom: 
 FogRevealRect :: proc(w: ^World, x, y, width, height: int) {
 	for tileX in x ..< x+width {
 		for tileY in y ..< y+height {
-			FogMarkVisible(w, tileX, tileY)
+			FogMarkVisibleIndex(w, FogTileIndex(w, tileX, tileY))
 		}
 	}
 }
@@ -498,6 +505,19 @@ FogUpdate :: proc(w: ^World) {
 	clear(&w.fog.visibleTiles)
 
 	isNight := WorldIsNight(w)
+	// Contact only matters until a kingdom has met every other living one.
+	needsContact: [KINGDOMS_CAPACITY]bool
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for other in 0..<KINGDOMS_CAPACITY {
+			if other != kingdomSlot && w.kingdomUsed[other] &&
+				!KingdomsMet(w, kingdomSlot, other) {
+				needsContact[kingdomSlot] = true
+				break
+			}
+		}
+	}
+
 	for unitSlot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil || UnitHiddenInside(w, unitSlot) do continue
 		kingdom := w.units[unitSlot].kingdome
@@ -511,7 +531,7 @@ FogUpdate :: proc(w: ^World) {
 			continue
 		}
 		vision := UnitDefaultVision(w.units[unitSlot].type, isNight)*WorldWeatherVisionFactor(w)
-		FogRevealCircle(w, x, y, vision, kingdom)
+		FogRevealCircle(w, x, y, vision, kingdom, needsContact[kingdom])
 		FogContactRect(w, kingdom, x, y, 1, 1)
 	}
 
@@ -527,7 +547,14 @@ FogUpdate :: proc(w: ^World) {
 			continue
 		}
 		vision := BuildingVision(BuildingKindOf(building.type))
-		FogRevealCircle(w, centerX, centerY, vision, building.kingdom)
+		FogRevealCircle(
+			w,
+			centerX,
+			centerY,
+			vision,
+			building.kingdom,
+			needsContact[building.kingdom],
+		)
 		FogContactRect(w, building.kingdom, building.x, building.y, width, height)
 	}
 
@@ -545,6 +572,7 @@ FogUpdate :: proc(w: ^World) {
 					site.y+height/2,
 					BuildingVision(site.kind),
 					kingdomSlot,
+					needsContact[kingdomSlot],
 				)
 				FogContactRect(w, kingdomSlot, site.x, site.y, width, height)
 			}
@@ -564,6 +592,7 @@ FogUpdate :: proc(w: ^World) {
 					circleY+height/2,
 					f32(circleRadius)*FOG_TOWN_AREA_VISION_FACTOR,
 					kingdomSlot,
+					needsContact[kingdomSlot],
 				)
 			}
 		}
