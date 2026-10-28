@@ -292,8 +292,11 @@ Weather pacing tuned to that:
 1. **Tile refactor (implemented).** New `TileType` roster, `TILE_DEFS`, climate
    field, migration of all exhaustive switches, movement/water/fire/yield
    properties. No weather yet, but the map already plays differently.
-2. **Global weather + seasons.** One weather state, rain/drought/snow, HUD chip,
-   screen-space particles, yield and fire modifiers, AI aware of the forecast.
+2. **Global weather + seasons (implemented).** One weather state, rain, storm, fog,
+   snow, blizzard, drought and heatwave, HUD chip, screen-space particles, yield,
+   fire, vision and movement modifiers, `Wet`/`Chilled`/`HeatStressed` unit
+   effects, and AI awareness of fire weather. `Sandstorm` and `Ashfall` are
+   defined and supported visually, but reserved for phase-3 events.
 3. **Events framework.** Severity, weighted bags, debt-based fairness, telegraphs,
    alerts and the active-event lifecycle.
 4. **Lethal events + aftermath.** Wildfire, flood, blizzard, earthquake, terrain
@@ -307,5 +310,8 @@ Each phase should be playable on its own.
 
 - Exact tile art budget: 17 tiles × 4 seasons is a lot; start with one seasonal
   tint pass and unique art only for the tiles that change silhouette.
+- Seasonal terrain transitions (lakes freezing and melting, snow accumulation)
+  are deferred to the aftermath phase; phase 2 handles weather visuals and
+  modifiers.
 - Whether relief should be visible as a mechanic or only as favourable weather.
 - Final event frequencies after the first playtest of phase 3.

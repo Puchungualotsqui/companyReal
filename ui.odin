@@ -1698,6 +1698,7 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 	UIDrawCommandHint(w, ui, camera)
 	if !milestonePending {
 		UIDrawHud(w, ui)
+		UIDrawWeatherChip(w)
 		UIDrawSidePanel(w, ui)
 		UIDrawAlerts(w)
 		if ui.panel == .Crown do UIDrawCrownPanel(w, renderer, ui)
@@ -1970,6 +1971,14 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 			NameKingdomCString(w, kingdom),
 			NameTownCString(w, kingdom, town),
 		)
+		if UISelectionTownHall(w, ui.selection) {
+			subtitle = fmt.ctprintf(
+				"%s  -  %s  -  %s",
+				NameKingdomCString(w, kingdom),
+				NameTownCString(w, kingdom, town),
+				UIWeatherName(w.weather.kind),
+			)
+		}
 		UIText(subtitle, titleX, panel.y+48, UI_COLOR_DIM)
 		if UISelectionTownHall(w, ui.selection) && UICanControlKingdom(w, kingdom) {
 			villagers := fmt.ctprintf("%d villagers", TownUnitCount(w, kingdom, town, .Villager))
@@ -2295,6 +2304,12 @@ UIUnitEffectName :: proc(effect: UnitEffects) -> cstring {
 		return "Food shortage"
 	case .Poisoned:
 		return "Poisoned"
+	case .Wet:
+		return "Wet"
+	case .Chilled:
+		return "Chilled"
+	case .HeatStressed:
+		return "Heat stressed"
 	}
 	unreachable()
 }
@@ -2309,6 +2324,12 @@ UIUnitEffectText :: proc(effect: UnitEffects) -> cstring {
 		return "Food shortage: the town cannot feed everyone."
 	case .Poisoned:
 		return "Poison: losing health and dealing less damage."
+	case .Wet:
+		return "Rain-soaked: slowed while exposed to the weather."
+	case .Chilled:
+		return "Cold: slowed and losing health while exposed."
+	case .HeatStressed:
+		return "Heat: slowed and losing health while exposed."
 	}
 	unreachable()
 }
@@ -2427,6 +2448,7 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
 	label := fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta)))
 	if WorldIsNight(w) do label = "Night"
+	if w.weather.kind == .Blizzard && w.weather.value > 0.5 do label = "Blizzard"
 	UIText(
 		label,
 		panel.x+UI_PAD,
@@ -4863,12 +4885,359 @@ UIHudTextWidth :: proc(text: cstring) -> f32 {
 	return rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x
 }
 
+UI_WEATHER_CHIP_W : f32 : 256
+UI_WEATHER_CHIP_H : f32 : 58
+UI_WEATHER_ICON : f32 : 26
+
+UIWeatherChipRect :: proc() -> rl.Rectangle {
+	return rl.Rectangle{
+		(f32(rl.GetScreenWidth())-UI_WEATHER_CHIP_W)*0.5,
+		UI_MARGIN,
+		UI_WEATHER_CHIP_W,
+		UI_WEATHER_CHIP_H,
+	}
+}
+
+UISeasonName :: proc(season: Season) -> cstring {
+	switch season {
+	case .Spring:
+		return "Spring"
+	case .Summer:
+		return "Summer"
+	case .Autumn:
+		return "Autumn"
+	case .Winter:
+		return "Winter"
+	}
+	unreachable()
+}
+
+UISeasonColor :: proc(season: Season) -> rl.Color {
+	switch season {
+	case .Spring:
+		return rl.Color{126, 196, 112, 255}
+	case .Summer:
+		return rl.Color{226, 190, 82, 255}
+	case .Autumn:
+		return rl.Color{214, 132, 72, 255}
+	case .Winter:
+		return rl.Color{132, 184, 224, 255}
+	}
+	unreachable()
+}
+
+UIWeatherName :: proc(kind: WeatherKind) -> cstring {
+	switch kind {
+	case .Clear:
+		return "Clear"
+	case .Rain:
+		return "Rain"
+	case .Storm:
+		return "Storm"
+	case .Fog:
+		return "Fog"
+	case .Snow:
+		return "Snow"
+	case .Blizzard:
+		return "Blizzard"
+	case .Drought:
+		return "Drought"
+	case .Heatwave:
+		return "Heatwave"
+	case .Sandstorm:
+		return "Sandstorm"
+	case .Ashfall:
+		return "Ashfall"
+	}
+	unreachable()
+}
+
+UIWeatherColor :: proc(kind: WeatherKind) -> rl.Color {
+	switch kind {
+	case .Clear:
+		return rl.Color{236, 208, 128, 255}
+	case .Rain:
+		return rl.Color{126, 182, 226, 255}
+	case .Storm:
+		return rl.Color{118, 138, 196, 255}
+	case .Fog:
+		return rl.Color{178, 184, 188, 255}
+	case .Snow:
+		return rl.Color{214, 236, 250, 255}
+	case .Blizzard:
+		return rl.Color{192, 218, 244, 255}
+	case .Drought:
+		return rl.Color{224, 176, 96, 255}
+	case .Heatwave:
+		return rl.Color{242, 142, 78, 255}
+	case .Sandstorm:
+		return rl.Color{210, 168, 108, 255}
+	case .Ashfall:
+		return rl.Color{168, 156, 148, 255}
+	}
+	unreachable()
+}
+
+UIWeatherWindLabel :: proc(w: ^World) -> cstring {
+	windX := w.weather.windX
+	windY := w.weather.windY
+	if windX*windX+windY*windY < 0.0004 do return "calm"
+	angle := math.atan2(-windY, windX)
+	index := int(math.round(angle/(math.PI*0.25)))
+	directions := [8]cstring{"E", "NE", "N", "NW", "W", "SW", "S", "SE"}
+	return directions[(index+8)%8]
+}
+
+UIWeatherPercent :: proc(value: f32) -> int {
+	return int(math.round((value-1)*100))
+}
+
+UIDrawWeatherIcon :: proc(kind: WeatherKind, x, y, size: f32, color: rl.Color) {
+	cx := x+size*0.5
+	cy := y+size*0.5
+	r := size*0.24
+	switch kind {
+	case .Clear:
+		rl.DrawCircleV(rl.Vector2{cx, cy}, r, color)
+		for ray in 0..<8 {
+			angle := f32(ray)/8*6.2831853
+			rl.DrawLineEx(
+				rl.Vector2{cx+math.cos(angle)*r*1.3, cy+math.sin(angle)*r*1.3},
+				rl.Vector2{cx+math.cos(angle)*r*1.8, cy+math.sin(angle)*r*1.8},
+				1,
+				color,
+			)
+		}
+	case .Rain, .Storm, .Ashfall:
+		rl.DrawCircleV(rl.Vector2{cx-size*0.18, cy-size*0.06}, r*0.8, color)
+		rl.DrawCircleV(rl.Vector2{cx+size*0.06, cy-size*0.14}, r, color)
+		rl.DrawCircleV(rl.Vector2{cx+size*0.24, cy}, r*0.7, color)
+		if kind == .Storm {
+			rl.DrawLineEx(rl.Vector2{cx, cy}, rl.Vector2{cx-size*0.12, cy+size*0.22}, 2, color)
+			rl.DrawLineEx(
+				rl.Vector2{cx-size*0.12, cy+size*0.22},
+				rl.Vector2{cx+size*0.06, cy+size*0.22},
+				2,
+				color,
+			)
+			rl.DrawLineEx(
+				rl.Vector2{cx+size*0.06, cy+size*0.22},
+				rl.Vector2{cx-size*0.04, cy+size*0.38},
+				2,
+				color,
+			)
+		} else {
+			for drop in 0..<3 {
+				dx := cx-size*0.16+f32(drop)*size*0.16
+				rl.DrawLineEx(
+					rl.Vector2{dx, cy+size*0.14},
+					rl.Vector2{dx-size*0.04, cy+size*0.30},
+					1.5,
+					color,
+				)
+			}
+		}
+	case .Fog:
+		for line in 0..<3 {
+			yy := cy-size*0.16+f32(line)*size*0.16
+			rl.DrawLineEx(
+				rl.Vector2{cx-size*0.30, yy},
+				rl.Vector2{cx+size*0.30, yy},
+				2,
+				color,
+			)
+		}
+	case .Snow, .Blizzard:
+		for arm in 0..<3 {
+			angle := f32(arm)*math.PI/3
+			rl.DrawLineEx(
+				rl.Vector2{cx-math.cos(angle)*r*1.5, cy-math.sin(angle)*r*1.5},
+				rl.Vector2{cx+math.cos(angle)*r*1.5, cy+math.sin(angle)*r*1.5},
+				1.5,
+				color,
+			)
+		}
+		if kind == .Blizzard {
+			for line in 0..<2 {
+				yy := cy+size*0.30+f32(line)*size*0.10
+				rl.DrawLineEx(
+					rl.Vector2{cx-size*0.34, yy},
+					rl.Vector2{cx+size*0.34, yy},
+					1.5,
+					color,
+				)
+			}
+		}
+	case .Drought:
+		rl.DrawCircleV(rl.Vector2{cx, cy-size*0.08}, r*0.8, color)
+		for crack in 0..<3 {
+			x0 := cx-size*0.26+f32(crack)*size*0.24
+			rl.DrawLineEx(
+				rl.Vector2{x0, cy+size*0.24},
+				rl.Vector2{x0+size*0.10, cy+size*0.36},
+				1.5,
+				color,
+			)
+		}
+	case .Heatwave:
+		rl.DrawCircleV(rl.Vector2{cx, cy}, r*0.9, color)
+		for ray in 0..<8 {
+			angle := f32(ray)/8*6.2831853
+			rl.DrawLineEx(
+				rl.Vector2{cx+math.cos(angle)*r*1.3, cy+math.sin(angle)*r*1.3},
+				rl.Vector2{cx+math.cos(angle)*r*1.9, cy+math.sin(angle)*r*1.9},
+				1.5,
+				color,
+			)
+		}
+	case .Sandstorm:
+		for line in 0..<3 {
+			yy := cy-size*0.18+f32(line)*size*0.18
+			rl.DrawLineEx(
+				rl.Vector2{cx-size*0.32, yy},
+				rl.Vector2{cx+size*0.28, yy-size*0.08},
+				2,
+				color,
+			)
+		}
+	}
+}
+
+UIDrawWeatherChip :: proc(w: ^World) {
+	rect := UIWeatherChipRect()
+	rl.DrawRectangleRec(rect, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(rect, 2, UI_COLOR_BORDER)
+	rl.DrawRectangleLinesEx(
+		rl.Rectangle{rect.x+3, rect.y+3, rect.width-6, rect.height-6},
+		1,
+		UI_COLOR_BORDER_INNER,
+	)
+	rl.DrawRectangleRec(
+		rl.Rectangle{rect.x+3, rect.y+3, 4, rect.height-6},
+		UISeasonColor(WorldSeason(w)),
+	)
+
+	color := UIWeatherColor(w.weather.kind)
+	UIDrawWeatherIcon(w.weather.kind, rect.x+12, rect.y+9, UI_WEATHER_ICON, color)
+	UIText(
+		fmt.ctprintf("%s  -  %s", UISeasonName(WorldSeason(w)), UIWeatherName(w.weather.kind)),
+		rect.x+46,
+		rect.y+7,
+		color,
+	)
+	UIText(
+		fmt.ctprintf(
+			"Wind %s  -  %ds  -  next %s",
+			UIWeatherWindLabel(w),
+			int(math.ceil(w.weather.remaining)),
+			UIWeatherName(w.weather.nextKind),
+		),
+		rect.x+46,
+		rect.y+25,
+		UI_COLOR_DIM,
+	)
+
+	bar := rl.Rectangle{rect.x+46, rect.y+44, rect.width-58, 4}
+	rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
+	if w.weather.value > 0 {
+		fill := color
+		fill.a = 220
+		rl.DrawRectangleRec(
+			rl.Rectangle{bar.x, bar.y, bar.width*clamp(w.weather.value, 0, 1), bar.height},
+			fill,
+		)
+	}
+	rl.DrawRectangleLinesEx(bar, 1, UI_COLOR_BORDER_INNER)
+
+	windSpeed := math.sqrt(w.weather.windX*w.weather.windX+w.weather.windY*w.weather.windY)
+	if windSpeed > 0.02 {
+		ax := w.weather.windX/windSpeed
+		ay := w.weather.windY/windSpeed
+		cx := rect.x+rect.width-14
+		cy := rect.y+16
+		rl.DrawLineEx(
+			rl.Vector2{cx-ax*6, cy-ay*6},
+			rl.Vector2{cx+ax*4, cy+ay*4},
+			1.5,
+			color,
+		)
+		rl.DrawTriangle(
+			rl.Vector2{cx+ax*8, cy+ay*8},
+			rl.Vector2{cx+ax*2-ay*3, cy+ay*2+ax*3},
+			rl.Vector2{cx+ax*2+ay*3, cy+ay*2-ax*3},
+			color,
+		)
+	}
+
+	if rl.CheckCollisionPointRec(rl.GetMousePosition(), rect) {
+		UIDrawWeatherTooltip(w, rect)
+	}
+}
+
+UIDrawWeatherTooltip :: proc(w: ^World, rect: rl.Rectangle) {
+	effects := WorldWeatherEffects(w)
+	padding: f32 = 8
+	lineHeight := UIHudLineHeight()
+	width: f32 = 330
+	height := lineHeight*4+padding*2+4
+	x := rect.x+(rect.width-width)*0.5
+	y := rect.y+rect.height+10
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
+	if x+width > screenWidth-8 do x = screenWidth-width-8
+	if x < 8 do x = 8
+	if y+height > screenHeight-8 do y = rect.y-height-10
+
+	box := rl.Rectangle{x, y, width, height}
+	rl.DrawRectangleRec(box, UI_COLOR_BG)
+	rl.DrawRectangleLinesEx(box, 1, UI_COLOR_GOLD)
+	UIText(UIWeatherName(w.weather.kind), box.x+padding, box.y+padding, UIWeatherColor(w.weather.kind))
+	UIText(
+		fmt.ctprintf(
+			"Food %+d%%   Water %+d%%   Growth %+d%%",
+			UIWeatherPercent(effects.food),
+			UIWeatherPercent(effects.water),
+			UIWeatherPercent(effects.growth),
+		),
+		box.x+padding,
+		box.y+padding+lineHeight,
+		UI_COLOR_TEXT,
+	)
+	UIText(
+		fmt.ctprintf(
+			"Vision %+d%%   Move %+d%%   Fire %+d%%",
+			UIWeatherPercent(effects.vision),
+			UIWeatherPercent(effects.move),
+			UIWeatherPercent(effects.fireSpread),
+		),
+		box.x+padding,
+		box.y+padding+lineHeight*2,
+		UI_COLOR_TEXT,
+	)
+	UIText(
+		fmt.ctprintf(
+			"Wind %s   Next %s in %ds",
+			UIWeatherWindLabel(w),
+			UIWeatherName(w.weather.nextKind),
+			int(math.ceil(w.weather.remaining)),
+		),
+		box.x+padding,
+		box.y+padding+lineHeight*3,
+		UI_COLOR_DIM,
+	)
+}
+
 UIHudLineHeight :: proc() -> f32 {
 	return rl.MeasureTextEx(UIFont(), "Ag", UI_TEXT_SIZE, 1).y
 }
 
 UIHudTimeLabel :: proc(w: ^World) -> cstring {
-	return fmt.ctprintf("Day %d  %02dh", w.dayNumber+1, int(WorldTimeOfDay(w)))
+	return fmt.ctprintf(
+		"%s  Day %d  %02dh",
+		UISeasonName(WorldSeason(w)),
+		w.dayNumber+1,
+		int(WorldTimeOfDay(w)),
+	)
 }
 
 UIHudCrownLabel :: proc(w: ^World) -> cstring {
@@ -5188,6 +5557,8 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 
 	// The Crown window is a full-screen modal; it owns its own clicks.
 	if ui.panel == .Crown do return false
+
+	if rl.CheckCollisionPointRec(mouse, UIWeatherChipRect()) do return true
 
 	if ui.panel != .None {
 		panel := UISidePanelRect(w, ui)

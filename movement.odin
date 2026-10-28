@@ -860,6 +860,7 @@ UnitMoveSpeed :: proc(w: ^World, unitSlot: int, baseSpeed: f32) -> f32 {
 		speed /= max(TILE_DEFS[tile].moveCost, 0.1)
 	}
 	speed *= UnitSeaSpeedMultiplier(w, unitSlot)
+	speed *= WorldWeatherMoveFactor(w)
 	return speed
 }
 

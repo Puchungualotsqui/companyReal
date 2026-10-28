@@ -161,6 +161,7 @@ AIUseOrders :: proc(w: ^World, kingdom: int) {
 		}
 		hazard := kind == .GlacierShell || kind == .WaterBomber ||
 			kind == .MiasmaBarrage || kind == .NapalmBarrage
+		if kind == .NapalmBarrage && WorldWeatherEffects(w).fireSpread < 0.5 do continue
 		for other in 0 ..< KINGDOMS_CAPACITY {
 			if !KingdomAtWar(w, kingdom, other) do continue
 			targetTown := AINearestTownOf(w, other, kingdom)

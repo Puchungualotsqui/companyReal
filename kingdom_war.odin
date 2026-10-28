@@ -332,7 +332,7 @@ WarriorFindFocus :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) -> Warr
 
 	state.scanSequence += 1
 	nearUnit, unitDistance, nearBuilding, buildingDistance :=
-		WarriorFindNearbyHostiles(w, unitSlot, state, max(UnitDefaultVision(unit.type, WorldIsNight(w)), aggro, UnitDefaultRange(unit.type)))
+		WarriorFindNearbyHostiles(w, unitSlot, state, max(UnitDefaultVision(unit.type, WorldIsNight(w))*WorldWeatherVisionFactor(w), aggro, UnitDefaultRange(unit.type)))
 	seed := u64(unitSlot)+u64(state.scanSequence)*7919+1307
 
 	if nearUnit >= 0 {

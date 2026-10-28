@@ -463,7 +463,7 @@ FogUpdate :: proc(w: ^World) {
 		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil || UnitHiddenInside(w, unitSlot) do continue
 		kingdom := w.units[unitSlot].kingdome
 		if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do continue
-		vision := UnitDefaultVision(w.units[unitSlot].type, isNight)
+		vision := UnitDefaultVision(w.units[unitSlot].type, isNight)*WorldWeatherVisionFactor(w)
 		x := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
 		y := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
 		FogRevealCircle(w, x, y, vision, kingdom)

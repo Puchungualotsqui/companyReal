@@ -280,6 +280,8 @@ WorldRender :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D) {
 		rl.EndBlendMode()
 		rl.EndMode2D()
 	}
+
+	WorldRenderWeather(w)
 }
 
 // Multiplied over the frame: white at noon, warm at dawn/dusk, deep blue at night.
@@ -297,13 +299,39 @@ WorldAmbientColor :: proc(w: ^World) -> rl.Color {
 		{21.5, rl.Color{142, 142, 192, 255}},
 		{24, rl.Color{112, 126, 182, 255}},
 	}
+	base := keys[0].color
 	for i in 0 ..< len(keys)-1 {
 		if hour >= keys[i].hour && hour <= keys[i+1].hour {
 			t := (hour-keys[i].hour)/(keys[i+1].hour-keys[i].hour)
-			return WorldLerpColor(keys[i].color, keys[i+1].color, t)
+			base = WorldLerpColor(keys[i].color, keys[i+1].color, t)
+			break
 		}
 	}
-	return keys[0].color
+
+	tint := rl.Color{255, 255, 255, 255}
+	switch w.weather.kind {
+	case .Clear:
+	case .Rain:
+		tint = rl.Color{150, 166, 184, 255}
+	case .Storm:
+		tint = rl.Color{112, 124, 146, 255}
+	case .Fog:
+		tint = rl.Color{196, 198, 202, 255}
+	case .Snow:
+		tint = rl.Color{222, 232, 242, 255}
+	case .Blizzard:
+		tint = rl.Color{190, 202, 218, 255}
+	case .Drought:
+		tint = rl.Color{255, 232, 196, 255}
+	case .Heatwave:
+		tint = rl.Color{255, 206, 160, 255}
+	case .Sandstorm:
+		tint = rl.Color{214, 176, 128, 255}
+	case .Ashfall:
+		tint = rl.Color{170, 156, 148, 255}
+	}
+	mix := w.weather.value*(0.35+0.25*(1-WorldNightAmount(w)))
+	return WorldLerpColor(base, tint, mix)
 }
 
 WorldLerpColor :: proc(a, b: rl.Color, t: f32) -> rl.Color {
@@ -312,6 +340,136 @@ WorldLerpColor :: proc(a, b: rl.Color, t: f32) -> rl.Color {
 		u8(clamp(f32(a[1])+(f32(b[1])-f32(a[1]))*t, 0, 255)),
 		u8(clamp(f32(a[2])+(f32(b[2])-f32(a[2]))*t, 0, 255)),
 		u8(clamp(f32(a[3])+(f32(b[3])-f32(a[3]))*t, 0, 255)),
+	}
+}
+
+// Screen-space weather: cheap, camera-independent and deterministic.
+WorldRenderWeather :: proc(w: ^World) {
+	value := w.weather.value
+	flash := w.weather.lightningFlash
+	if value <= 0.01 && flash <= 0.01 do return
+
+	screenWidth := f32(rl.GetScreenWidth())
+	screenHeight := f32(rl.GetScreenHeight())
+	time := w.simulationTime+w.simulationAccumulator
+	seed := w.seed+u64(w.weather.sequence)*7919
+
+	overlay := rl.Color{0, 0, 0, 0}
+	switch w.weather.kind {
+	case .Clear:
+	case .Rain:
+		overlay = rl.Color{40, 60, 86, u8(22*value)}
+	case .Storm:
+		overlay = rl.Color{28, 36, 54, u8(40*value)}
+	case .Fog:
+		overlay = rl.Color{190, 196, 200, u8(34*value)}
+	case .Snow:
+		overlay = rl.Color{220, 232, 244, u8(28*value)}
+	case .Blizzard:
+		overlay = rl.Color{205, 220, 236, u8(48*value)}
+	case .Drought:
+		overlay = rl.Color{120, 90, 40, u8(18*value)}
+	case .Heatwave:
+		overlay = rl.Color{160, 90, 30, u8(22*value)}
+	case .Sandstorm:
+		overlay = rl.Color{150, 110, 60, u8(40*value)}
+	case .Ashfall:
+		overlay = rl.Color{80, 70, 66, u8(30*value)}
+	}
+	if overlay.a > 0 {
+		rl.DrawRectangle(0, 0, rl.GetScreenWidth(), rl.GetScreenHeight(), overlay)
+	}
+
+	if flash > 0 {
+		rl.DrawRectangle(
+			0,
+			0,
+			rl.GetScreenWidth(),
+			rl.GetScreenHeight(),
+			rl.Color{224, 236, 255, u8(58*flash)},
+		)
+		boltX := screenWidth*(0.2+WorldNoiseHash(int(w.weather.sequence), 3, w.seed)*0.6)
+		x := boltX
+		y: f32 = 0
+		for segment in 0..<8 {
+			nextX := x+(WorldNoiseHash(segment, int(w.weather.sequence), 0xB017)-0.5)*50
+			nextY := y+screenHeight/8
+			rl.DrawLineEx(
+				rl.Vector2{x, y},
+				rl.Vector2{nextX, nextY},
+				2,
+				rl.Color{224, 238, 255, u8(220*flash)},
+			)
+			x = nextX
+			y = nextY
+		}
+	}
+
+	switch w.weather.kind {
+	case .Rain, .Storm:
+		count := int(260*value)
+		for i in 0..<count {
+			h1 := WorldNoiseHash(i, 0, seed)
+			h2 := WorldNoiseHash(i, 1, seed)
+			speed := 700+h2*500
+			y := WorldWrapPosition(h2*screenHeight+time*speed, screenHeight+40)-20
+			x := WorldWrapPosition(h1*screenWidth+time*w.weather.windX*220, screenWidth+80)-40
+			slant := w.weather.windX*160
+			rl.DrawLineEx(
+				rl.Vector2{x, y},
+				rl.Vector2{x+slant, y+12+h1*16},
+				1.2,
+				rl.Color{190, 214, 236, u8(110+70*h2)},
+			)
+		}
+	case .Snow, .Blizzard:
+		baseCount := 180
+		if w.weather.kind == .Blizzard do baseCount = 260
+		count := int(f32(baseCount)*value)
+		for i in 0..<count {
+			h1 := WorldNoiseHash(i, 2, seed)
+			h2 := WorldNoiseHash(i, 3, seed)
+			fall := 30+h1*70
+			y := WorldWrapPosition(h2*screenHeight+time*fall, screenHeight+20)-10
+			x := WorldWrapPosition(
+				h1*screenWidth+time*w.weather.windX*120+math.sin(time*0.8+f32(i))*16,
+				screenWidth+20,
+			)-10
+			rl.DrawCircleV(rl.Vector2{x, y}, 1+h1*1.6, rl.Color{240, 245, 252, u8(120+90*h2)})
+		}
+	case .Fog:
+		for i in 0..<6 {
+			h1 := WorldNoiseHash(i, 4, seed)
+			h2 := WorldNoiseHash(i, 5, seed)
+			x := WorldWrapPosition(h1*screenWidth+time*(8+h2*12), screenWidth+400)-200
+			y := h2*screenHeight
+			rl.DrawEllipse(i32(x), i32(y), 220, 70, rl.Color{210, 214, 218, u8(12*value)})
+		}
+	case .Drought, .Heatwave, .Sandstorm:
+		count := int(140*value)
+		for i in 0..<count {
+			h1 := WorldNoiseHash(i, 6, seed)
+			h2 := WorldNoiseHash(i, 7, seed)
+			y := WorldWrapPosition(h2*screenHeight+time*(20+h1*40), screenHeight+20)-10
+			x := WorldWrapPosition(
+				h1*screenWidth+time*(60+w.weather.windX*140),
+				screenWidth+60,
+			)-30
+			rl.DrawCircleV(rl.Vector2{x, y}, 1+h1*2, rl.Color{196, 168, 120, u8(70+60*h2)})
+		}
+	case .Ashfall:
+		count := int(120*value)
+		for i in 0..<count {
+			h1 := WorldNoiseHash(i, 8, seed)
+			h2 := WorldNoiseHash(i, 9, seed)
+			y := WorldWrapPosition(h2*screenHeight+time*(18+h1*30), screenHeight+20)-10
+			x := WorldWrapPosition(
+				h1*screenWidth+time*w.weather.windX*100,
+				screenWidth+40,
+			)-20
+			rl.DrawCircleV(rl.Vector2{x, y}, 0.8+h1*1.6, rl.Color{188, 166, 154, u8(80+60*h2)})
+		}
+	case .Clear:
 	}
 }
 

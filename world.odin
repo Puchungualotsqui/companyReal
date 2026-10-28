@@ -54,6 +54,7 @@ World :: struct {
 	simulationAccumulator: f32,
 	dayTime: f32,
 	dayNumber: int,
+	weather: WeatherState,
 	terrainRevision: u64,
 	ground: [dynamic][dynamic]Tile,
 	spatial: SpatialIndex,
@@ -83,6 +84,7 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.maxY = maxY
 	w.seed = settings.seed
 	w.dayTime = f32(WORLD_DAY_LENGTH_SECONDS)*6/24
+	WorldWeatherTransition(w, .Clear)
 	if !FogInit(w) do return false
 	w.ground = make([dynamic][dynamic]Tile, maxX)
 	for &x in w.ground {
@@ -224,6 +226,9 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 		.NoWater = false,
 		.NoFood = false,
 		.Poisoned = false,
+		.Wet = false,
+		.Chilled = false,
+		.HeatStressed = false,
 	}
 
 	w.units[i].path = make([dynamic]int, 0, 250)

@@ -6,6 +6,383 @@ TOWN_SIMULATION_STEP :: 0.25
 TOWN_ALARM_AREA_FACTOR :: 1.25
 WORLD_DAY_LENGTH_SECONDS :: 7*60.0
 
+// --- weather ---------------------------------------------------------------
+
+SEASONS_PER_YEAR :: 4
+WEATHER_MIN_SECONDS :: 90
+WEATHER_MAX_SECONDS :: 180
+WEATHER_RAMP_IN :: 25
+WEATHER_RAMP_OUT :: 15
+WEATHER_LIGHTNING_DECAY :: 2.5
+GAS_CLOUD_WIND_DRIFT :: 0.8
+
+Season :: enum u8 {
+	Spring,
+	Summer,
+	Autumn,
+	Winter,
+}
+
+WeatherKind :: enum u8 {
+	Clear,
+	Rain,
+	Storm,
+	Fog,
+	Snow,
+	Blizzard,
+	Drought,
+	Heatwave,
+	Sandstorm,
+	Ashfall,
+}
+
+WeatherState :: struct {
+	kind:           WeatherKind,
+	nextKind:       WeatherKind,
+	value:          f32,
+	duration:       f32,
+	remaining:      f32,
+	windX, windY:   f32,
+	season:         Season,
+	sequence:       u32,
+	lightningTimer: f32,
+	lightningFlash: f32,
+}
+
+WeatherEffects :: struct {
+	food:            f32,
+	water:           f32,
+	growth:          f32,
+	vision:          f32,
+	move:            f32,
+	fireSpread:      f32,
+	fireIgnition:    f32,
+	fireExtinguish:  f32,
+	harbor:          f32,
+	exposure:        f32,
+}
+
+WorldSeason :: proc(w: ^World) -> Season {
+	return Season(w.dayNumber%SEASONS_PER_YEAR)
+}
+
+WorldWeatherEffects :: proc(w: ^World) -> WeatherEffects {
+	full := WeatherEffects {
+		food = 1,
+		water = 1,
+		growth = 1,
+		vision = 1,
+		move = 1,
+		fireSpread = 1,
+		fireIgnition = 1,
+		fireExtinguish = 1,
+		harbor = 1,
+	}
+	switch w.weather.kind {
+	case .Clear:
+	case .Rain:
+		full = WeatherEffects {
+			food = 1.15,
+			water = 1.30,
+			growth = 1.10,
+			vision = 0.85,
+			move = 0.92,
+			fireSpread = 0.25,
+			fireIgnition = 0.45,
+			fireExtinguish = 2.0,
+			harbor = 0.9,
+		}
+	case .Storm:
+		full = WeatherEffects {
+			food = 1.05,
+			water = 1.25,
+			growth = 0.95,
+			vision = 0.65,
+			move = 0.80,
+			fireSpread = 0.10,
+			fireIgnition = 0.25,
+			fireExtinguish = 2.5,
+			harbor = 0.5,
+		}
+	case .Fog:
+		full = WeatherEffects {
+			food = 0.95,
+			growth = 0.95,
+			vision = 0.50,
+			move = 0.90,
+			fireSpread = 0.70,
+			fireIgnition = 0.90,
+			fireExtinguish = 1.2,
+			harbor = 0.9,
+		}
+	case .Snow:
+		full = WeatherEffects {
+			food = 0.82,
+			water = 1.10,
+			growth = 0.70,
+			vision = 0.85,
+			move = 0.78,
+			fireSpread = 0.15,
+			fireIgnition = 0.25,
+			fireExtinguish = 2.0,
+			harbor = 0.8,
+			exposure = 0.0006,
+		}
+	case .Blizzard:
+		full = WeatherEffects {
+			food = 0.65,
+			water = 0.90,
+			growth = 0.00,
+			vision = 0.45,
+			move = 0.60,
+			fireSpread = 0.00,
+			fireIgnition = 0.00,
+			fireExtinguish = 4.0,
+			harbor = 0.3,
+			exposure = 0.0018,
+		}
+	case .Drought:
+		full = WeatherEffects {
+			food = 0.75,
+			water = 0.45,
+			growth = 0.72,
+			move = 0.95,
+			fireSpread = 1.70,
+			fireIgnition = 1.25,
+			fireExtinguish = 0.7,
+			harbor = 0.9,
+			exposure = 0.0004,
+		}
+	case .Heatwave:
+		full = WeatherEffects {
+			food = 0.86,
+			water = 0.72,
+			growth = 0.85,
+			vision = 0.95,
+			move = 0.90,
+			fireSpread = 1.40,
+			fireIgnition = 1.20,
+			fireExtinguish = 0.8,
+			harbor = 0.9,
+			exposure = 0.0012,
+		}
+	case .Sandstorm:
+		full = WeatherEffects {
+			food = 0.80,
+			water = 0.90,
+			growth = 0.80,
+			vision = 0.45,
+			move = 0.70,
+			fireSpread = 0.80,
+			fireIgnition = 0.70,
+			fireExtinguish = 1.0,
+			harbor = 0.5,
+			exposure = 0.0020,
+		}
+	case .Ashfall:
+		full = WeatherEffects {
+			food = 0.80,
+			water = 0.90,
+			growth = 0.75,
+			vision = 0.60,
+			move = 0.90,
+			fireSpread = 0.50,
+			fireIgnition = 0.60,
+			fireExtinguish = 1.2,
+			harbor = 0.8,
+			exposure = 0.0008,
+		}
+	}
+
+	value := clamp(w.weather.value, 0, 1)
+	return WeatherEffects {
+		food = 1+(full.food-1)*value,
+		water = 1+(full.water-1)*value,
+		growth = 1+(full.growth-1)*value,
+		vision = 1+(full.vision-1)*value,
+		move = 1+(full.move-1)*value,
+		fireSpread = 1+(full.fireSpread-1)*value,
+		fireIgnition = 1+(full.fireIgnition-1)*value,
+		fireExtinguish = 1+(full.fireExtinguish-1)*value,
+		harbor = 1+(full.harbor-1)*value,
+		exposure = full.exposure*value,
+	}
+}
+
+WorldWeatherVisionFactor :: proc(w: ^World) -> f32 {
+	return WorldWeatherEffects(w).vision
+}
+
+WorldWeatherMoveFactor :: proc(w: ^World) -> f32 {
+	return WorldWeatherEffects(w).move
+}
+
+WorldWeatherPick :: proc(w: ^World, season: Season, current: WeatherKind) -> WeatherKind {
+	weights: [WeatherKind]f32
+	switch season {
+	case .Spring:
+		weights[.Clear] = 30
+		weights[.Rain] = 40
+		weights[.Storm] = 10
+		weights[.Fog] = 20
+	case .Summer:
+		weights[.Clear] = 26
+		weights[.Rain] = 14
+		weights[.Storm] = 16
+		weights[.Fog] = 6
+		weights[.Heatwave] = 20
+		weights[.Drought] = 18
+	case .Autumn:
+		weights[.Clear] = 24
+		weights[.Rain] = 32
+		weights[.Storm] = 20
+		weights[.Fog] = 24
+	case .Winter:
+		weights[.Clear] = 18
+		weights[.Rain] = 6
+		weights[.Snow] = 42
+		weights[.Blizzard] = 14
+		weights[.Fog] = 20
+	}
+	if current != .Clear do weights[current] *= 0.12
+
+	total: f32 = 0
+	for kind in WeatherKind do total += weights[kind]
+	if total <= 0 do return .Clear
+	roll := WorldNoiseHash(int(w.weather.sequence), int(season)+13, w.seed+0x7EA5E)*total
+	for kind in WeatherKind {
+		roll -= weights[kind]
+		if roll <= 0 do return kind
+	}
+	return .Clear
+}
+
+WorldWeatherTransition :: proc(w: ^World, kind: WeatherKind) {
+	w.weather.kind = kind
+	w.weather.sequence += 1
+	w.weather.season = WorldSeason(w)
+
+	duration := WEATHER_MIN_SECONDS+
+		WorldNoiseHash(int(w.weather.sequence), 5, w.seed+0x71EA)*f32(WEATHER_MAX_SECONDS-WEATHER_MIN_SECONDS)
+	switch kind {
+	case .Clear:
+		duration *= 1.25
+	case .Storm, .Blizzard:
+		duration *= 0.8
+	case .Drought:
+		duration *= 1.15
+	case .Rain, .Fog, .Snow, .Heatwave, .Sandstorm, .Ashfall:
+	}
+	w.weather.duration = duration
+	w.weather.remaining = duration
+	w.weather.nextKind = WorldWeatherPick(w, w.weather.season, kind)
+
+	speed: f32 = 0.03
+	switch kind {
+	case .Clear:
+		speed = 0.03
+	case .Rain:
+		speed = 0.16
+	case .Storm:
+		speed = 0.50
+	case .Fog:
+		speed = 0.02
+	case .Snow:
+		speed = 0.14
+	case .Blizzard:
+		speed = 0.55
+	case .Drought:
+		speed = 0.10
+	case .Heatwave:
+		speed = 0.06
+	case .Sandstorm:
+		speed = 0.60
+	case .Ashfall:
+		speed = 0.15
+	}
+	angle := WorldNoiseHash(int(w.weather.sequence), 7, w.seed+0x31D)*6.2831853
+	w.weather.windX = math.cos(angle)*speed
+	w.weather.windY = math.sin(angle)*speed
+	w.weather.lightningTimer = 1.5+WorldNoiseHash(int(w.weather.sequence), 9, w.seed+0x4A1)*3
+}
+
+WorldWeatherUpdate :: proc(w: ^World, deltaTime: f32) {
+	if deltaTime <= 0 do return
+
+	season := WorldSeason(w)
+	if season != w.weather.season {
+		newKind := WorldWeatherPick(w, season, w.weather.kind)
+		WorldWeatherTransition(w, newKind)
+	}
+	w.weather.remaining = max(w.weather.remaining-deltaTime, 0)
+	if w.weather.remaining <= 0 do WorldWeatherTransition(w, w.weather.nextKind)
+
+	age := w.weather.duration-w.weather.remaining
+	fadeIn := clamp(age/WEATHER_RAMP_IN, 0, 1)
+	fadeOut := clamp(w.weather.remaining/WEATHER_RAMP_OUT, 0, 1)
+	w.weather.value = min(fadeIn, fadeOut)
+
+	if w.weather.kind == .Storm && w.weather.value > 0.3 {
+		w.weather.lightningTimer -= deltaTime
+		if w.weather.lightningTimer <= 0 {
+			w.weather.lightningTimer = 1.5+
+				WorldNoiseHash(int(w.simulationTime*4), int(w.weather.sequence), w.seed+0x11)*4
+			w.weather.lightningFlash = 1
+		}
+	}
+	w.weather.lightningFlash = max(w.weather.lightningFlash-deltaTime*WEATHER_LIGHTNING_DECAY, 0)
+
+	weatherEffects := WorldWeatherEffects(w)
+	active := w.weather.value > 0.2
+	wet := active && (w.weather.kind == .Rain || w.weather.kind == .Storm)
+	cold := active && (w.weather.kind == .Snow || w.weather.kind == .Blizzard)
+	heat := active && (w.weather.kind == .Heatwave || w.weather.kind == .Drought ||
+		w.weather.kind == .Sandstorm)
+
+	for unitSlot in 0..<UNIT_CAPACITY {
+		if !w.unitUsed[unitSlot] || w.units.type[unitSlot] == nil do continue
+		hidden := UnitHiddenInside(w, unitSlot)
+		w.units.effects[unitSlot][.Wet] = wet && !hidden
+		w.units.effects[unitSlot][.Chilled] = cold && !hidden
+		w.units.effects[unitSlot][.HeatStressed] = heat && !hidden
+		if hidden || weatherEffects.exposure <= 0 do continue
+
+		tileX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
+		tileY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+		climate := w.ground[tileX][tileY].climate
+		tile := w.ground[tileX][tileY].type
+		coldTile := climate == .Boreal || tile == .Tundra || tile == .Ice
+		hotTile := climate == .Arid || climate == .Volcanic || tile == .Desert || tile == .Ash
+
+		exposure := weatherEffects.exposure
+		switch w.weather.kind {
+		case .Snow:
+			exposure = coldTile ? exposure*1.5 : 0
+		case .Blizzard:
+			exposure *= coldTile ? 1.5 : 0.7
+		case .Drought:
+			exposure = hotTile ? exposure : 0
+		case .Heatwave:
+			exposure *= hotTile ? 1.5 : 0.6
+		case .Sandstorm:
+			exposure *= hotTile ? 1.5 : 0.5
+		case .Ashfall:
+		case .Clear, .Rain, .Storm, .Fog:
+			exposure = 0
+		}
+		if exposure <= 0 do continue
+		damage := UnitMaxHealth(w, unitSlot)*exposure*deltaTime
+		UnitApplyDamage(
+			w,
+			unitSlot,
+			damage,
+			w.units.x[unitSlot],
+			w.units.y[unitSlot],
+			.Weather,
+		)
+	}
+}
+
 // Population growth is cohort-based: an era defines how many villagers arrive
 // together and how long the next cohort takes. Supply and unconverted villagers
 // speed up the countdown rather than changing the cohort size.
@@ -29,6 +406,7 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 			w.dayTime -= f32(WORLD_DAY_LENGTH_SECONDS)
 			w.dayNumber += 1
 		}
+		WorldWeatherUpdate(w, TOWN_SIMULATION_STEP)
 		WorldUnitUpdate(w, TOWN_SIMULATION_STEP)
 		WorldBuildingUpdate(w, TOWN_SIMULATION_STEP)
 		WorldAegisUpdate(w, TOWN_SIMULATION_STEP)
@@ -359,6 +737,7 @@ WorldConversionAssign :: proc(w: ^World) {
 
 KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32) {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	weather := WorldWeatherEffects(w)
 
 	workingFarmlands := min(town.farmlands, town.farmers)
 
@@ -370,13 +749,14 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 	if town.farmlands > 0 {
 		town.foodPotential = town.farmlandOutput*f32(workingFarmlands)/f32(town.farmlands)
 	}
-	town.foodPotential *= KingdomTechFoodMultiplier(w, kingdomSlot, townSlot)*blockadeFactor
+	town.foodPotential *= KingdomTechFoodMultiplier(w, kingdomSlot, townSlot)*blockadeFactor*weather.food
 	town.waterPotential =
 		TownWaterCollectorOutput(TownWaterAccess(w, kingdomSlot, townSlot))*
-		f32(town.waterCollectors)*KingdomTechWaterMultiplier(w, kingdomSlot, townSlot)*blockadeFactor
+		f32(town.waterCollectors)*KingdomTechWaterMultiplier(w, kingdomSlot, townSlot)*
+		blockadeFactor*weather.water
 
 	if TownFindBuilding(w, kingdomSlot, townSlot, .Harbor) >= 0 {
-		town.wood += 0.05*deltaTime
+		town.wood += 0.05*deltaTime*weather.harbor
 	}
 	FishingFlotillaFx(w, kingdomSlot, townSlot)
 	town.foodShortage = TownResourceShortage(town.foodPotential, town.citizens)
@@ -399,12 +779,13 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 	speed := clamp(coverage, GROWTH_MIN_SPEED, GROWTH_MAX_SPEED)
 	speed *= 1+min(GROWTH_VILLAGER_SPEED_CAP, f32(town.villagers)*GROWTH_VILLAGER_SPEED_BONUS)
 	if town.blockadeUntil > w.simulationTime do speed *= 0.75
+	speed *= weather.growth
 	isNight := WorldIsNight(w)
 	if isNight do speed = 0
 	town.growthSpeed = speed
 
 	town.growthCooldown -= deltaTime*speed
-	if !isNight && town.growthCooldown <= 0 {
+	if !isNight && weather.growth > 0.01 && town.growthCooldown <= 0 {
 		if town.growthPending <= 0 do town.growthPending = town.growthBatch
 		spawnNow := min(town.growthPending, GROWTH_MAX_SPAWN_PER_TICK)
 		spawned := TownSpawnCitizens(w, kingdomSlot, townSlot, spawnNow)

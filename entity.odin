@@ -509,13 +509,19 @@ UnitEffects :: enum {
 	NoWater,
 	NoFood,
 	Poisoned,
+	Wet,
+	Chilled,
+	HeatStressed,
 }
 
-ALL_UNIT_EFFECTS := [4]UnitEffects {
+ALL_UNIT_EFFECTS := [7]UnitEffects {
 	.NoHome,
 	.NoWater,
 	.NoFood,
 	.Poisoned,
+	.Wet,
+	.Chilled,
+	.HeatStressed,
 }
 
 UnitKind :: enum {

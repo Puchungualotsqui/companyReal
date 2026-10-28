@@ -2208,6 +2208,30 @@ DrawEffectIcon :: proc(effect: UnitEffects) -> Art {
 		ArtLine(&art, 3, 17, 17, 3, C_OUTLINE)
 		ArtLine(&art, 4, 17, 18, 3, C_EFFECT_BAD)
 		ArtLine(&art, 3, 16, 17, 2, C_EFFECT_BAD)
+	case .Wet:
+		ArtTriangle(&art, 10, 2, 5, 12, 15, 12, C_OUTLINE)
+		ArtCircle(&art, 10, 12, 6, C_OUTLINE)
+		ArtTriangle(&art, 10, 4, 6, 11, 14, 11, C_WATER_DARK)
+		ArtCircle(&art, 10, 12, 5, C_WATER)
+		ArtCircle(&art, 8, 11, 2, C_WATER_LIGHT)
+		ArtPixel(&art, 7, 10, C_WHITE)
+	case .Chilled:
+		ArtLine(&art, 10, 2, 10, 18, C_WATER_LIGHT)
+		ArtLine(&art, 3, 6, 17, 14, C_WATER_LIGHT)
+		ArtLine(&art, 3, 14, 17, 6, C_WATER_LIGHT)
+		ArtLine(&art, 10, 6, 7, 3, C_WHITE)
+		ArtLine(&art, 10, 6, 13, 3, C_WHITE)
+		ArtLine(&art, 10, 14, 7, 17, C_WHITE)
+		ArtLine(&art, 10, 14, 13, 17, C_WHITE)
+		ArtPixel(&art, 10, 10, C_WHITE)
+	case .HeatStressed:
+		ArtCircle(&art, 10, 10, 5, C_OUTLINE)
+		ArtCircle(&art, 10, 10, 4, C_GOLD)
+		ArtCircle(&art, 8, 8, 2, C_GOLD_LIGHT)
+		rays := [8][2]int{{0, -6}, {4, -4}, {6, 0}, {4, 4}, {0, 6}, {-4, 4}, {-6, 0}, {-4, -4}}
+		for ray in rays {
+			ArtLine(&art, 10+ray[0]/2, 10+ray[1]/2, 10+ray[0], 10+ray[1], C_EFFECT_BAD)
+		}
 	}
 	return art
 }

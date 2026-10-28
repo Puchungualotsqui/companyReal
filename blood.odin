@@ -101,6 +101,7 @@ DamageKind :: enum {
 	Fire,
 	Drowning,
 	Poison,
+	Weather,
 }
 
 BloodInit :: proc(w: ^World) -> bool {
@@ -683,6 +684,23 @@ UnitApplyDamage :: proc(
 				gravity = -1,
 				kind = .Smoke,
 				tint = rl.Color{122, 194, 106, 220},
+			})
+		}
+	case .Weather:
+		if PRandom(w) < 0.10 {
+			ParticleSpawn(w, Particle{
+				x = x+(PRandom(w)-0.5)*0.4,
+				y = y+(PRandom(w)-0.5)*0.4,
+				z = PRandomRange(w, 0.3, 0.9),
+				vx = (PRandom(w)-0.5)*0.4,
+				vy = (PRandom(w)-0.5)*0.4,
+				vz = PRandomRange(w, 0.2, 0.8),
+				life = PRandomRange(w, 0.4, 1.0),
+				size = PRandomRange(w, 0.08, 0.18),
+				drag = 1.4,
+				gravity = -0.2,
+				kind = .Dust,
+				tint = rl.Color{200, 204, 208, 160},
 			})
 		}
 	}

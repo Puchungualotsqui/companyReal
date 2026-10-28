@@ -107,6 +107,12 @@ WorldFireIgnite :: proc(w: ^World, x, y, intensity: f32, spread: f32 = 1) -> (in
 	if hazardKind, hasHazard := WorldHazardKindAt(w, tileX, tileY); hasHazard && hazardKind == .Flood {
 		return 0, false
 	}
+	fireWeather := WorldWeatherEffects(w).fireIgnition
+	if fireWeather <= 0 do return 0, false
+	if fireWeather < 1 &&
+		WorldNoiseHash(tileX, tileY, u64(w.simulationTime*8)) > fireWeather {
+		return 0, false
+	}
 	if WorldFireAt(w, tileX, tileY) do return 0, false
 
 	slot := -1
@@ -155,6 +161,7 @@ WorldFireUpdate :: proc(w: ^World, deltaTime: f32) {
 	FireDamageBurningUnits(w, deltaTime)
 	if w.fireCount == 0 do return
 
+	weatherEffects := WorldWeatherEffects(w)
 	for slot in 0 ..< FIRE_CAPACITY {
 		if !w.fireUsed[slot] do continue
 		tileX := int(w.fires.x[slot])
@@ -163,7 +170,7 @@ WorldFireUpdate :: proc(w: ^World, deltaTime: f32) {
 			WorldFireDespawn(w, slot)
 			continue
 		}
-		w.fires.remaining[slot] -= deltaTime
+		w.fires.remaining[slot] -= deltaTime*weatherEffects.fireExtinguish
 		if w.fires.remaining[slot] <= 0 {
 			WorldFireDespawn(w, slot)
 			continue
@@ -213,14 +220,18 @@ FireSpread :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 	if chunkSize <= 0 do return
 	spread := w.fires.spread[fireSlot]
 	if spread <= 0 do return
+	weatherEffects := WorldWeatherEffects(w)
+	if weatherEffects.fireSpread <= 0 do return
 
 	x := w.fires.x[fireSlot]
 	y := w.fires.y[fireSlot]
-	chance := FIRE_SPREAD_CHANCE*w.fires.intensity[fireSlot]*spread*deltaTime
+	chance := FIRE_SPREAD_CHANCE*w.fires.intensity[fireSlot]*spread*deltaTime*
+		weatherEffects.fireSpread
 	if chance <= 0 do return
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
 	radiusSquared: f32 = FIRE_SPREAD_RADIUS*FIRE_SPREAD_RADIUS
+	windLength := math.sqrt(w.weather.windX*w.weather.windX+w.weather.windY*w.weather.windY)
 
 	radius := FIRE_SPREAD_CHUNK_RADIUS
 	firstChunkX := (int(x)-radius)/chunkSize
@@ -246,6 +257,14 @@ FireSpread :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 					worldHeight,
 				)
 				if deltaX*deltaX+deltaY*deltaY > radiusSquared do continue
+				if windLength > 0.05 {
+					distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
+					if distance > 0.01 &&
+						(deltaX*w.weather.windX+deltaY*w.weather.windY)/
+							(distance*windLength) < -0.2 {
+						continue
+					}
+				}
 				roll := WorldNoiseHash(decorationSlot, fireSlot, u64(w.simulationTime*64))
 				if roll > chance do continue
 				WorldFireIgnite(
@@ -268,6 +287,14 @@ FireSpread :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 				deltaX := WorldShortestWrappedDelta(centerX-x, worldWidth)
 				deltaY := WorldShortestWrappedDelta(centerY-y, worldHeight)
 				if deltaX*deltaX+deltaY*deltaY > radiusSquared do continue
+				if windLength > 0.05 {
+					distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
+					if distance > 0.01 &&
+						(deltaX*w.weather.windX+deltaY*w.weather.windY)/
+							(distance*windLength) < -0.2 {
+						continue
+					}
+				}
 				roll := WorldNoiseHash(buildingSlot, fireSlot, u64(w.simulationTime*128)+7)
 				if roll > chance do continue
 				WorldFireIgnite(w, centerX, centerY, w.fires.intensity[fireSlot]*0.85, spread*0.9)
@@ -380,6 +407,16 @@ WorldGasCloudUpdate :: proc(w: ^World, deltaTime: f32) {
 		}
 		cloudX := w.gasClouds.x[cloud]
 		cloudY := w.gasClouds.y[cloud]
+		cloudX = WorldWrapPosition(
+			cloudX+w.weather.windX*deltaTime*GAS_CLOUD_WIND_DRIFT,
+			worldWidth,
+		)
+		cloudY = WorldWrapPosition(
+			cloudY+w.weather.windY*deltaTime*GAS_CLOUD_WIND_DRIFT,
+			worldHeight,
+		)
+		w.gasClouds.x[cloud] = cloudX
+		w.gasClouds.y[cloud] = cloudY
 		radius := w.gasClouds.radius[cloud]
 		radiusSquared := radius*radius
 
