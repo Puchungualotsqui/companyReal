@@ -1,5 +1,4 @@
 # Things to do
-- Debug/stress world with a command argument to test the whole game with a lot of buildings and units already, etc.
 - Optimization and bugs solving
 - RL AI implementation
 - Menu improvement, more similar to the civ VI menu

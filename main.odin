@@ -9,6 +9,14 @@ main :: proc() {
 
 	app := AppInit()
 	defer AppDeinit(&app)
+	if CrazyWorldRequested() {
+		app.crazyWorld = true
+		app.config.kingdomCount = APP_MAX_KINGDOMS
+		app.config.mapSizeIndex = len(APP_MAP_SIZES)-1
+		app.config.spectator = false
+		_ = AppStartGame(&app)
+		app.crazyWorld = false
+	}
 
 	for !rl.WindowShouldClose() && !app.quitRequested {
 		deltaTime := rl.GetFrameTime()

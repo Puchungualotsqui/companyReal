@@ -54,6 +54,7 @@ App :: struct {
 	world:          ^World,
 	view:           WorldView,
 	hasGame:        bool,
+	crazyWorld:     bool,
 	menuTime:       f32,
 }
 
@@ -114,6 +115,9 @@ AppStartGame :: proc(app: ^App) -> bool {
 		WorldDeinit(world)
 		free(world)
 		return false
+	}
+	if app.crazyWorld {
+		WorldCrazyWorldPopulate(world)
 	}
 
 	localKingdom := app.config.spectator ? -1 : 0
