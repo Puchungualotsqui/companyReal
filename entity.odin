@@ -1136,7 +1136,7 @@ UnitSetType :: proc(w: ^World, unitSlot: int, kind: UnitKind) {
 	UnitTypeInit(w, unitSlot, UnitTypeFromKind(kind))
 }
 
-UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32) -> bool {
+UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32, maxExpansions := 0) -> bool {
 	unitIndex, exists := UnitGet(w, unitSlot)
 	if !exists || deltaTime < 0 do return false
 
@@ -1151,14 +1151,40 @@ UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32) -> bool
 	targetY := WorldWrapCoordinate(goalY, worldHeight)
 
 	needsPath := !unit.pathReady || unit.pathTargetX != targetX ||
-		unit.pathTargetY != targetY || unit.pathRevision != w.navigationRevision
+		unit.pathTargetY != targetY
+	// Global navigation revisions are deliberately not part of the cache key:
+	// a hazard or building anywhere in the world used to force every unit to
+	// run A* again. Validate the next waypoint instead and replan only when
+	// this unit is actually affected.
+	if !needsPath && unit.pathIndex < len(unit.path) {
+		waypoint := unit.path[unit.pathIndex]
+		if !WorldTileWalkable(
+			w,
+			waypoint/worldHeight,
+			waypoint%worldHeight,
+			unit.type,
+			unit.kingdome,
+		) {
+			needsPath = true
+		}
+	}
 	if needsPath {
 		startX := WorldWrapCoordinate(int(unitX), worldWidth)
 		startY := WorldWrapCoordinate(int(unitY), worldHeight)
-		unit.pathFound = AStar(w, unit.type, unit.kingdome, startX, startY, targetX, targetY, &unit.path)
+		unit.pathFound = AStar(
+			w,
+			unit.type,
+			unit.kingdome,
+			startX,
+			startY,
+			targetX,
+			targetY,
+			&unit.path,
+			maxExpansions,
+		)
 		unit.pathTargetX = targetX
 		unit.pathTargetY = targetY
-		unit.pathRevision = w.navigationRevision
+		unit.pathRevision = w.pathRevision
 		unit.pathReady = true
 		unit.pathIndex = 1
 		if len(unit.path) == 1 do unit.pathIndex = 0

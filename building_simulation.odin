@@ -535,10 +535,11 @@ TownFindConstructionForBuilder :: proc(
 	fallbackScore: f32 = 1e30
 	for site, index in town.constructions {
 		if !site.active do continue
-		accessX, accessY, ok := TownConstructionAccessPoint(w, unitSlot, kingdomSlot, townSlot, index)
-		if !ok do continue
-		deltaX := WorldShortestWrappedDelta(f32(accessX)+0.5-unit.x, worldWidth)
-		deltaY := WorldShortestWrappedDelta(f32(accessY)+0.5-unit.y, worldHeight)
+		width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+		centerX := f32(site.x)+f32(width)*0.5
+		centerY := f32(site.y)+f32(height)*0.5
+		deltaX := WorldShortestWrappedDelta(centerX-unit.x, worldWidth)
+		deltaY := WorldShortestWrappedDelta(centerY-unit.y, worldHeight)
 		score := deltaX*deltaX+deltaY*deltaY
 		if index == builder.failedConstruction {
 			if score < fallbackScore {
@@ -550,15 +551,15 @@ TownFindConstructionForBuilder :: proc(
 		if score < bestScore {
 			bestScore = score
 			siteIndex = index
-			x = accessX
-			y = accessY
 			found = true
 		}
 	}
 	if !found && fallback >= 0 {
-		x, y, found = TownConstructionAccessPoint(w, unitSlot, kingdomSlot, townSlot, fallback)
 		siteIndex = fallback
+		found = true
 	}
+	if !found do return
+	x, y, found = TownConstructionAccessPoint(w, unitSlot, kingdomSlot, townSlot, siteIndex)
 	return
 }
 

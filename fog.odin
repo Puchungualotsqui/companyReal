@@ -2,6 +2,7 @@ package main
 
 import rl "vendor:raylib"
 import "core:math"
+import "core:slice"
 
 // Terrain memory is observer-only. Contact uses every kingdom's actual
 // vision, independently of who is observing or controlling the game.
@@ -18,11 +19,11 @@ FOG_MEMORY_TINT :: rl.Color{190, 194, 200, 255}
 // Own towns always keep an extra ring of vision around their whole area so
 // large attacks can be seen coming.
 FOG_TOWN_AREA_VISION_FACTOR :: 1.5
+FOG_RENDER_CHUNK_TILES :: 32
 
 FogOfWar :: struct {
 	visible:  []bool,
 	explored: []bool,
-	revision: u64,
 
 	// Persistent mutual contact and scratch per-tile vision bits. Contact does
 	// not reveal the other kingdom's towns or share its map exploration.
@@ -46,6 +47,10 @@ FogOfWar :: struct {
 	enemyAlerted:        [KINGDOMS_CAPACITY]bool,
 
 	visibleTiles:        [dynamic]int,
+	allVisible:          bool, // Spectator omniscience already applied
+	dirtyChunks:         [dynamic]int,
+	dirtyChunkFlags:     []bool,
+	dirtyChunkCountY:    int,
 }
 
 FogInit :: proc(w: ^World) -> bool {
@@ -69,6 +74,11 @@ FogInit :: proc(w: ^World) -> bool {
 	w.fog.decorationOffsetY = make([]u8, count)
 	w.fog.visibleTiles = make([dynamic]int, 0, 4096)
 	w.fog.ghosts = make([dynamic]int, 0, 64)
+	chunksX := (int(w.maxX)+FOG_RENDER_CHUNK_TILES-1)/FOG_RENDER_CHUNK_TILES
+	chunksY := (int(w.maxY)+FOG_RENDER_CHUNK_TILES-1)/FOG_RENDER_CHUNK_TILES
+	w.fog.dirtyChunkCountY = chunksY
+	w.fog.dirtyChunkFlags = make([]bool, chunksX*chunksY)
+	w.fog.dirtyChunks = make([dynamic]int, 0, 64)
 
 	for i in 0..<count {
 		w.fog.buildingKind[i] = FOG_NONE
@@ -78,7 +88,6 @@ FogInit :: proc(w: ^World) -> bool {
 		w.fog.buildingGhostIndex[i] = -1
 		w.fog.decorationKind[i] = FOG_NONE
 	}
-	w.fog.revision = 1
 	return true
 }
 
@@ -98,6 +107,8 @@ FogDeinit :: proc(w: ^World) {
 	delete(w.fog.decorationOffsetX)
 	delete(w.fog.decorationOffsetY)
 	delete(w.fog.visibleTiles)
+	delete(w.fog.dirtyChunkFlags)
+	delete(w.fog.dirtyChunks)
 	w.fog = {}
 }
 
@@ -226,14 +237,42 @@ FogFindTownAt :: proc(w: ^World, tileX, tileY: int) -> (kingdom, town: int, foun
 	return kingdom, town, true
 }
 
+FogDirtyMarkIndex :: proc(w: ^World, index: int) {
+	if len(w.fog.dirtyChunkFlags) == 0 || w.fog.dirtyChunkCountY <= 0 do return
+	if index < 0 || index >= len(w.fog.visible) do return
+	height := int(w.maxY)
+	x := index/height
+	y := index%height
+	chunk := (x/FOG_RENDER_CHUNK_TILES)*w.fog.dirtyChunkCountY +
+		y/FOG_RENDER_CHUNK_TILES
+	if w.fog.dirtyChunkFlags[chunk] do return
+	w.fog.dirtyChunkFlags[chunk] = true
+	append(&w.fog.dirtyChunks, chunk)
+}
+
+FogDirtyMarkAll :: proc(w: ^World) {
+	for chunk in 0..<len(w.fog.dirtyChunkFlags) {
+		if w.fog.dirtyChunkFlags[chunk] do continue
+		w.fog.dirtyChunkFlags[chunk] = true
+		append(&w.fog.dirtyChunks, chunk)
+	}
+}
+
+FogDirtyClear :: proc(w: ^World) {
+	for chunk in w.fog.dirtyChunks do w.fog.dirtyChunkFlags[chunk] = false
+	clear(&w.fog.dirtyChunks)
+}
+
 FogMarkVisible :: proc(w: ^World, x, y: int) {
 	index := FogTileIndex(w, x, y)
 	if index < 0 || index >= len(w.fog.visible) do return
+	changed := !w.fog.visible[index] || !w.fog.explored[index]
 	if !w.fog.visible[index] {
 		w.fog.visible[index] = true
 		append(&w.fog.visibleTiles, index)
 	}
 	w.fog.explored[index] = true
+	if changed do FogDirtyMarkIndex(w, index)
 }
 
 // A kingdom source stamps contact vision and, only for the observer, fog.
@@ -452,10 +491,10 @@ FogUpdate :: proc(w: ^World) {
 	if count <= 0 || len(w.fog.visible) != count do return
 
 	observer := w.observerKingdom
-	for i in 0..<count {
-		w.fog.visible[i] = false
-		w.fog.contactVision[i] = 0
-	}
+	// Tiles that were visible last tick may become explored or fogged again.
+	for index in w.fog.visibleTiles do FogDirtyMarkIndex(w, index)
+	slice.zero(w.fog.visible)
+	slice.zero(w.fog.contactVision)
 	clear(&w.fog.visibleTiles)
 
 	isNight := WorldIsNight(w)
@@ -463,10 +502,17 @@ FogUpdate :: proc(w: ^World) {
 		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil || UnitHiddenInside(w, unitSlot) do continue
 		kingdom := w.units[unitSlot].kingdome
 		if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do continue
-		vision := UnitDefaultVision(w.units[unitSlot].type, isNight)*WorldWeatherVisionFactor(w)
 		x := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
 		y := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+		// Town area circles already cover every tile inside the town.
+		townSlot := w.units[unitSlot].town
+		if WorldTownExists(w, kingdom, townSlot) &&
+			TownPointInArea(w, kingdom, townSlot, x, y) {
+			continue
+		}
+		vision := UnitDefaultVision(w.units[unitSlot].type, isNight)*WorldWeatherVisionFactor(w)
 		FogRevealCircle(w, x, y, vision, kingdom)
+		FogContactRect(w, kingdom, x, y, 1, 1)
 	}
 
 	for buildingSlot in 0..<BUILDING_CAPACITY {
@@ -474,8 +520,15 @@ FogUpdate :: proc(w: ^World) {
 		building := &w.buildings[buildingSlot]
 		if building.kingdom < 0 || building.kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[building.kingdom] do continue
 		width, height := BuildingTileSize(building.type)
+		centerX := building.x+width/2
+		centerY := building.y+height/2
+		if WorldTownExists(w, building.kingdom, building.town) &&
+			TownPointInArea(w, building.kingdom, building.town, centerX, centerY) {
+			continue
+		}
 		vision := BuildingVision(BuildingKindOf(building.type))
-		FogRevealCircle(w, building.x+width/2, building.y+height/2, vision, building.kingdom)
+		FogRevealCircle(w, centerX, centerY, vision, building.kingdom)
+		FogContactRect(w, building.kingdom, building.x, building.y, width, height)
 	}
 
 	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
@@ -493,6 +546,7 @@ FogUpdate :: proc(w: ^World) {
 					BuildingVision(site.kind),
 					kingdomSlot,
 				)
+				FogContactRect(w, kingdomSlot, site.x, site.y, width, height)
 			}
 		}
 	}
@@ -515,43 +569,23 @@ FogUpdate :: proc(w: ^World) {
 		}
 	}
 
-	for unitSlot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil || UnitHiddenInside(w, unitSlot) do continue
-		x := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
-		y := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
-		FogContactRect(w, w.units[unitSlot].kingdome, x, y, 1, 1)
-	}
-	for buildingSlot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[buildingSlot] do continue
-		building := &w.buildings[buildingSlot]
-		width, height := BuildingTileSize(building.type)
-		FogContactRect(w, building.kingdom, building.x, building.y, width, height)
-	}
-	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdomSlot] do continue
-		for townSlot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
-			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			for site in town.constructions {
-				if !site.active do continue
-				width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
-				FogContactRect(w, kingdomSlot, site.x, site.y, width, height)
-			}
-		}
-	}
-
 	if observer < 0 {
-		// Spectator omniscience is not diplomatic contact.
-		for i in 0..<count {
-			w.fog.visible[i] = true
-			w.fog.explored[i] = true
+		// Spectator omniscience is not diplomatic contact. Only touch the tiles
+		// once, otherwise every tick would re-upload the whole fog texture.
+		if !w.fog.allVisible {
+			for i in 0..<count {
+				w.fog.visible[i] = true
+				w.fog.explored[i] = true
+			}
+			FogDirtyMarkAll(w)
+			w.fog.allVisible = true
 		}
 		clear(&w.fog.visibleTiles)
 		clear(&w.fog.ghosts)
 		for i in 0..<KINGDOMS_CAPACITY do w.fog.enemyAlerted[i] = false
-		w.fog.revision += 1
 		return
 	}
+	w.fog.allVisible = false
 
 	// A building seen at all reveals its whole footprint. This keeps sprites
 	// and memory snapshots all-or-nothing instead of half fogged.
@@ -640,8 +674,6 @@ FogUpdate :: proc(w: ^World) {
 		}
 		index += 1
 	}
-
-	w.fog.revision += 1
 }
 
 // --- fog render texture ----------------------------------------------------
@@ -649,12 +681,14 @@ FogUpdate :: proc(w: ^World) {
 FogRenderInit :: proc(w: ^World, renderer: ^WorldRenderer) -> bool {
 	count := int(w.maxX)*int(w.maxY)
 	if count <= 0 do return false
-	renderer.fogPixels = make([]u8, count*4)
+
+	// One chunk is rebuilt into this scratch buffer and uploaded at a time.
+	renderer.fogPixels = make([]u8, FOG_RENDER_CHUNK_TILES*FOG_RENDER_CHUNK_TILES*4)
 	image := rl.GenImageColor(i32(w.maxX), i32(w.maxY), rl.BLACK)
 	renderer.fogTexture = rl.LoadTextureFromImage(image)
 	rl.UnloadImage(image)
 	rl.SetTextureFilter(renderer.fogTexture, .POINT)
-	renderer.fogRevision = ~u64(0)
+	FogDirtyMarkAll(w)
 	return true
 }
 
@@ -665,40 +699,68 @@ FogRenderDeinit :: proc(renderer: ^WorldRenderer) {
 	renderer.fogPixels = nil
 }
 
-FogRenderUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
-	if renderer.fogTexture.id == 0 || len(renderer.fogPixels) == 0 do return
-	if renderer.fogRevision == w.fog.revision do return
+FogRenderChunk :: proc(w: ^World, renderer: ^WorldRenderer, chunk, worldWidth, worldHeight: int) {
+	chunksY := w.fog.dirtyChunkCountY
+	if chunksY <= 0 do return
+	chunkX := chunk/chunksY
+	chunkY := chunk%chunksY
+	minX := chunkX*FOG_RENDER_CHUNK_TILES
+	minY := chunkY*FOG_RENDER_CHUNK_TILES
+	maxX := min(minX+FOG_RENDER_CHUNK_TILES, worldWidth)
+	maxY := min(minY+FOG_RENDER_CHUNK_TILES, worldHeight)
+	width := maxX-minX
+	height := maxY-minY
+	if width <= 0 || height <= 0 do return
 
-	width := int(w.maxX)
-	height := int(w.maxY)
-	for y in 0..<height {
-		for x in 0..<width {
-			tile := x*height+y
-			pixel := (y*width+x)*4
+	needed := width*height*4
+	if len(renderer.fogPixels) < needed do return
+	pixels := renderer.fogPixels[:needed]
+	for tileY in 0..<height {
+		y := minY+tileY
+		for tileX in 0..<width {
+			x := minX+tileX
+			tile := x*worldHeight+y
+			pixel := (tileY*width+tileX)*4
 			switch {
 			case w.fog.visible[tile]:
-				renderer.fogPixels[pixel+0] = 0
-				renderer.fogPixels[pixel+1] = 0
-				renderer.fogPixels[pixel+2] = 0
-				renderer.fogPixels[pixel+3] = 0
+				pixels[pixel+0] = 0
+				pixels[pixel+1] = 0
+				pixels[pixel+2] = 0
+				pixels[pixel+3] = 0
 			case w.fog.explored[tile]:
-				renderer.fogPixels[pixel+0] = FOG_EXPLORED_COLOR[0]
-				renderer.fogPixels[pixel+1] = FOG_EXPLORED_COLOR[1]
-				renderer.fogPixels[pixel+2] = FOG_EXPLORED_COLOR[2]
-				renderer.fogPixels[pixel+3] = FOG_EXPLORED_COLOR[3]
+				pixels[pixel+0] = FOG_EXPLORED_COLOR[0]
+				pixels[pixel+1] = FOG_EXPLORED_COLOR[1]
+				pixels[pixel+2] = FOG_EXPLORED_COLOR[2]
+				pixels[pixel+3] = FOG_EXPLORED_COLOR[3]
 			case:
 				noise := WorldNoiseHash(x, y, 0xF06C10D)
 				shade := u8(22+int(noise*10))
-				renderer.fogPixels[pixel+0] = shade
-				renderer.fogPixels[pixel+1] = shade+4
-				renderer.fogPixels[pixel+2] = shade+11
-				renderer.fogPixels[pixel+3] = FOG_UNEXPLORED_COLOR[3]
+				pixels[pixel+0] = shade
+				pixels[pixel+1] = shade+4
+				pixels[pixel+2] = shade+11
+				pixels[pixel+3] = FOG_UNEXPLORED_COLOR[3]
 			}
 		}
 	}
-	rl.UpdateTexture(renderer.fogTexture, raw_data(renderer.fogPixels))
-	rl.SetTextureFilter(renderer.fogTexture, .POINT)
-	renderer.fogRevision = w.fog.revision
+
+	rl.UpdateTextureRec(
+		renderer.fogTexture,
+		rl.Rectangle{f32(minX), f32(minY), f32(width), f32(height)},
+		raw_data(pixels),
+	)
+}
+
+FogRenderUpdate :: proc(w: ^World, renderer: ^WorldRenderer) {
+	if renderer.fogTexture.id == 0 || len(renderer.fogPixels) == 0 do return
+	if len(w.fog.dirtyChunks) == 0 do return
+
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return
+	for chunk in w.fog.dirtyChunks {
+		FogRenderChunk(w, renderer, chunk, worldWidth, worldHeight)
+	}
+	FogDirtyClear(w)
 }
 
 FogRenderDraw :: proc(w: ^World, renderer: ^WorldRenderer, firstCopyX, lastCopyX, firstCopyY, lastCopyY: int) {

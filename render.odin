@@ -29,8 +29,7 @@ WorldRenderer :: struct {
 	lights:  [dynamic]RenderQuad,
 	memoryFires: [dynamic]RenderQuad,
 	fogTexture: rl.Texture2D,
-	fogPixels:  []u8,
-	fogRevision: u64,
+	fogPixels:  []u8, // Scratch buffer for one fog chunk upload
 	bloodTexture: rl.Texture2D,
 	bloodPixels: [dynamic]u8,
 }

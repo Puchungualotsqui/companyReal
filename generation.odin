@@ -224,6 +224,7 @@ WorldGenerate :: proc(w: ^World, settings: WorldGenerationSettings) {
 	WorldGenerateBeaches(w, settings.beachWidth, settings.seed)
 	WorldGenerateDecorations(w, settings.seed)
 	w.navigationRevision += 1
+	w.pathRevision += 1
 	w.terrainRevision += 1
 }
 

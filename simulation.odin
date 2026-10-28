@@ -1628,7 +1628,9 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 
 	if town.builders > 0 {
 		town.constructionProgress += f32(town.builders)*deltaTime
-		if town.constructionProgress >= 3 {
+		tick := int(w.simulationTime/TOWN_SIMULATION_STEP)
+		phase := (tick+kingdomSlot*TOWN_CAPACITY+townSlot)%TOWN_CONSTRUCTION_ATTEMPT_INTERVAL
+		if town.constructionProgress >= 3 && phase == 0 {
 			constructionStamp := ProfilerBegin("Town:Construction")
 			if TownBuilderConstruct(w, kingdomSlot, townSlot, canGrow) {
 				town.constructionProgress -= 3
@@ -1636,6 +1638,8 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 				town.constructionProgress = min(town.constructionProgress, 3)
 			}
 			ProfilerEnd(constructionStamp)
+		} else {
+			town.constructionProgress = min(town.constructionProgress, 3)
 		}
 	}
 

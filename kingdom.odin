@@ -212,6 +212,9 @@ TOWN_CONSTRUCTION_CAPACITY :: 10
 // Planning one building per tick keeps large towns from running the site
 // search dozens of times in the same simulation step.
 TOWN_CONSTRUCTION_STARTS_PER_TICK :: 1
+// Towns take turns planning so a large realm does not run site searches for
+// every town in the same simulation step.
+TOWN_CONSTRUCTION_ATTEMPT_INTERVAL :: 4
 
 TownDistrict :: struct {
 	x, y:   int,
@@ -1249,6 +1252,7 @@ TownFuse :: proc(
 	w.kingdoms[kingdomSlot].towns[guestSlot] = Town{}
 	WorldConstructionChanged(w)
 	w.navigationRevision += 1
+	w.pathRevision += 1
 	KingdomAddInsight(w, kingdomSlot, CROWN_INSIGHT_PER_FUSION)
 	return true
 }

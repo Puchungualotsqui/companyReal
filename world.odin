@@ -50,6 +50,7 @@ World :: struct {
 	seed: u64,
 	maxX, maxY: uint,
 	navigationRevision: u64,
+	pathRevision: u64,
 	simulationTime: f32,
 	simulationAccumulator: f32,
 	dayTime: f32,
@@ -79,8 +80,13 @@ World :: struct {
 	navigationOpen: []bool,
 	navigationClosed: []bool,
 	navigationQueue: []int,
+	navigationHeapPos: []int,
 	navigationStamp: []u32,
 	navigationSearchId: u32,
+	navigationWalkable: []u8,
+	navigationWalkableKingdom: int,
+	navigationWalkableWater: bool,
+	navigationWalkableRevision: u64,
 	flowFields: [FLOW_FIELD_CAPACITY]FlowField,
 	flowFieldStamp: u64,
 	combatSites: #soa [COMBAT_SITE_CAPACITY]CombatSite,
@@ -220,6 +226,7 @@ WorldTileSet :: proc(w: ^World, x, y: int, tileType: TileType) -> bool {
 	if w.ground[wrappedX][wrappedY].type != tileType {
 		w.ground[wrappedX][wrappedY].type = tileType
 		w.navigationRevision += 1
+		w.pathRevision += 1
 		w.terrainRevision += 1
 		if len(w.terrainChunkRevisions) > 0 {
 			chunkIndex := (wrappedX/TERRAIN_CHUNK_TILES)*w.terrainChunkCountY+
@@ -372,6 +379,10 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 		// Trees felled to clear the site are not wasted.
 		town.wood += clearedWood
 	}
+	// A finished building stands where construction already reserved the
+	// footprint, so existing paths were planned around it. Bumping pathRevision
+	// here would invalidate every unit path in the world on each completion;
+	// UnitMove validates its next waypoint instead and replans locally.
 	w.navigationRevision += 1
 	if BuildingKindOf(type) == .Path do WorldSpawnStreetLamp(w, x, y)
 	return i, true
@@ -465,6 +476,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 	FogBuildingDespawn(w, slot)
 	w.buildingUsed[slot] = false
 	w.navigationRevision += 1
+	w.pathRevision += 1
 	return true
 }
 

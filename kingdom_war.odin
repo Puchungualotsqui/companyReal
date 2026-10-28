@@ -64,13 +64,18 @@ UnitUpdateWarrior :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	if state.orderKingdom != kingdomSlot || state.orderTown != townSlot ||
 		state.orderRevision != town.orderRevision {
+		assignStamp := ProfilerBegin("Warrior:Assign")
 		UnitWarriorAssignOrder(w, unitSlot, state)
+		ProfilerEnd(assignStamp)
 	}
 
 	if state.retreating {
 		state.target = TargetNone{}
 		state.activity = .Moving
-		if UnitWarriorTravel(w, unitSlot, kingdomSlot, townSlot, deltaTime) == .Arrived {
+		travelStamp := ProfilerBegin("Warrior:Travel")
+		arrived := UnitWarriorTravel(w, unitSlot, kingdomSlot, townSlot, deltaTime)
+		ProfilerEnd(travelStamp)
+		if arrived == .Arrived {
 			state.retreating = false
 			state.orderKingdom = -1
 			unit.pathReady = false
@@ -87,14 +92,19 @@ UnitUpdateWarrior :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		jitter := 0.75+WorldNoiseHash(unitSlot, state.scanSequence, u64(kingdomSlot)+911)*0.5
 		state.scanTimer = WARRIOR_SCAN_INTERVAL*jitter
 		if _, isNone := state.target.(TargetNone); isNone {
+			focusStamp := ProfilerBegin("Warrior:Focus")
 			state.target = WarriorFindFocus(w, unitSlot, state)
+			ProfilerEnd(focusStamp)
 		}
 	}
 
 	if _, isNone := state.target.(TargetNone); !isNone {
 		state.activity = .Attacking
 		unit.pathReady = false
-		if UnitWarriorEngage(w, unitSlot, state, deltaTime) do return
+		engageStamp := ProfilerBegin("Warrior:Engage")
+		engaged := UnitWarriorEngage(w, unitSlot, state, deltaTime)
+		ProfilerEnd(engageStamp)
+		if engaged do return
 		state.target = TargetNone{}
 	}
 
@@ -108,19 +118,33 @@ UnitUpdateWarrior :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		// of building a world-sized flow field just to walk back to the hall.
 		homeRadius := max(patrolRadius*2, town.areaRadius)
 		if !UnitWarriorFarFromTown(w, unitSlot, kingdomSlot, townSlot, homeRadius) {
-			if kingdomSlot != NEUTRAL_KINGDOM && UnitWarriorEscort(w, unitSlot, state, deltaTime) do return
+			if kingdomSlot != NEUTRAL_KINGDOM {
+				escortStamp := ProfilerBegin("Warrior:Escort")
+				escorting := UnitWarriorEscort(w, unitSlot, state, deltaTime)
+				ProfilerEnd(escortStamp)
+				if escorting do return
+			}
 			state.activity = .Moving
+			patrolStamp := ProfilerBegin("Warrior:Patrol")
 			UnitWarriorPatrol(w, unitSlot, kingdomSlot, townSlot, patrolRadius, deltaTime, state)
+			ProfilerEnd(patrolStamp)
 			return
 		}
 		state.activity = .Moving
-		if UnitWarriorTravel(w, unitSlot, kingdomSlot, townSlot, deltaTime) == .Arrived {
+		travelStamp := ProfilerBegin("Warrior:Travel")
+		arrived := UnitWarriorTravel(w, unitSlot, kingdomSlot, townSlot, deltaTime)
+		ProfilerEnd(travelStamp)
+		if arrived == .Arrived {
 			unit.pathReady = false
+			patrolStamp := ProfilerBegin("Warrior:Patrol")
 			UnitWarriorPatrol(w, unitSlot, kingdomSlot, townSlot, patrolRadius, deltaTime, state)
+			ProfilerEnd(patrolStamp)
 		}
 	case WarriorAttack:
 		state.activity = .Moving
+		travelStamp := ProfilerBegin("Warrior:Travel")
 		result := UnitWarriorTravel(w, unitSlot, order.kingdom, order.town, deltaTime)
+		ProfilerEnd(travelStamp)
 		if result == .Arrived {
 			if hall := TownHallSlot(w, order.kingdom, order.town); hall >= 0 {
 				state.target = TargetBuilding{slot = hall}
@@ -143,11 +167,16 @@ UnitUpdateWarrior :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		if state.patrolSequence == 0 || UnitWarriorFarFromTown(w, unitSlot,
 			order.kingdom, order.town, WARRIOR_DEFEND_PATROL_RADIUS*2) {
 			state.activity = .Moving
-			if UnitWarriorTravel(w, unitSlot, order.kingdom, order.town, deltaTime) != .Arrived do return
+			travelStamp := ProfilerBegin("Warrior:Travel")
+			arrived := UnitWarriorTravel(w, unitSlot, order.kingdom, order.town, deltaTime)
+			ProfilerEnd(travelStamp)
+			if arrived != .Arrived do return
 			unit.pathReady = false
 			state.patrolSequence = max(1, state.patrolSequence)
 		}
+		patrolStamp := ProfilerBegin("Warrior:Patrol")
 		UnitWarriorPatrol(w, unitSlot, order.kingdom, order.town, WARRIOR_DEFEND_PATROL_RADIUS, deltaTime, state)
+		ProfilerEnd(patrolStamp)
 	}
 }
 
@@ -746,13 +775,40 @@ WarriorAreaUnitDamage :: proc(w: ^World, attackerSlot: int, state: ^StateWarrior
 	}
 }
 
+// Full-world flow fields are excellent for large shared marches, but they are
+// far too expensive for a single unit walking back to a nearby town.
+WARRIOR_LOCAL_PATH_DISTANCE :: 64
+WARRIOR_LOCAL_PATH_EXPANSIONS :: 1024
+
 UnitWarriorTravel :: proc(w: ^World, unitSlot, kingdomSlot, townSlot: int, deltaTime: f32) -> FlowFollowResult {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return .Unreachable
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	unit := &w.units[unitSlot]
+	deltaX := WorldShortestWrappedDelta(unit.x-(f32(town.x)+2), f32(w.maxX))
+	deltaY := WorldShortestWrappedDelta(unit.y-(f32(town.y)+2), f32(w.maxY))
+	if deltaX*deltaX+deltaY*deltaY <=
+		f32(WARRIOR_LOCAL_PATH_DISTANCE*WARRIOR_LOCAL_PATH_DISTANCE) {
+		localStamp := ProfilerBegin("Warrior:TravelLocal")
+		reached := UnitMoveToTarget(
+			w,
+			unitSlot,
+			deltaTime,
+			WARRIOR_LOCAL_PATH_EXPANSIONS,
+		)
+		ProfilerEnd(localStamp)
+		if reached do return .Arrived
+		if !unit.pathFound do return .Unreachable
+		return .Travelling
+	}
+
+	fieldStamp := ProfilerBegin("Warrior:TravelField")
+	defer ProfilerEnd(fieldStamp)
 	field, ok := FlowFieldGet(
 		w,
 		kingdomSlot,
 		townSlot,
-		w.units[unitSlot].type,
-		w.units[unitSlot].kingdome,
+		unit.type,
+		unit.kingdome,
 	)
 	if !ok do return .Unreachable
 	return UnitFollowFlowField(w, unitSlot, field, deltaTime)

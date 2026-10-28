@@ -733,6 +733,7 @@ WorldHazardSpawnCircle :: proc(
 	if spawned == 0 do return
 
 	w.navigationRevision += 1
+	w.pathRevision += 1
 	for _ in 0..<10 {
 		angle := PRandom(w)*6.2831853
 		distance := radius*math.sqrt(PRandom(w))*0.8
@@ -859,7 +860,10 @@ WorldHazardUpdate :: proc(w: ^World, deltaTime: f32) {
 			})
 		}
 	}
-	if changed do w.navigationRevision += 1
+	if changed {
+		w.navigationRevision += 1
+		w.pathRevision += 1
+	}
 
 	for unitSlot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] || w.units.type[unitSlot] == nil do continue

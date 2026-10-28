@@ -1,9 +1,15 @@
 package main
 
 import "core:math"
+import "core:slice"
 
 FLOW_FIELD_CAPACITY :: 16
 FLOW_FIELD_MAX_STEPS :: 8
+
+// BFS queue entries pack tile coordinates into one int, avoiding a division by
+// the world height for every visited tile.
+FLOW_QUEUE_SHIFT :: 16
+FLOW_QUEUE_MASK :: (1 << FLOW_QUEUE_SHIFT)-1
 
 // Path tiles are cheap to route through and slightly faster to walk on.
 PATH_SPEED_MULTIPLIER :: 1.25
@@ -35,7 +41,7 @@ FlowField :: struct {
 	unitKingdom: int,
 	hallX, hallY: int,
 	walkWater: bool,
-	navigationRevision: u64,
+	pathRevision: u64,
 	direction: []FlowDirection,
 	valid: bool,
 	stamp: u64,
@@ -50,7 +56,10 @@ WorldNavigationInit :: proc(w: ^World) -> bool {
 	w.navigationOpen = make([]bool, nodeCount)
 	w.navigationClosed = make([]bool, nodeCount)
 	w.navigationQueue = make([]int, nodeCount)
+	w.navigationHeapPos = make([]int, nodeCount)
 	w.navigationStamp = make([]u32, nodeCount)
+	w.navigationWalkable = make([]u8, nodeCount)
+	w.navigationWalkableKingdom = -1
 	return true
 }
 
@@ -61,13 +70,79 @@ WorldNavigationDeinit :: proc(w: ^World) {
 	delete(w.navigationOpen)
 	delete(w.navigationClosed)
 	delete(w.navigationQueue)
+	delete(w.navigationHeapPos)
 	delete(w.navigationStamp)
+	delete(w.navigationWalkable)
 	for &field in w.flowFields {
 		delete(field.direction)
 	}
 }
 
-AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, goalX, goalY: int, path: ^[dynamic]int) -> bool {
+AStarPriority :: #force_inline proc(
+	index, goalX, goalY, worldWidth, worldHeight: int,
+	gScore: []int,
+) -> int {
+	return gScore[index]+PATH_HEURISTIC_COST*WorldWrapHeuristic(
+		index/worldHeight,
+		index%worldHeight,
+		goalX,
+		goalY,
+		worldWidth,
+		worldHeight,
+	)
+}
+
+AStarHeapSwap :: #force_inline proc(heap, heapPos: []int, a, b: int) {
+	heap[a], heap[b] = heap[b], heap[a]
+	heapPos[heap[a]] = a
+	heapPos[heap[b]] = b
+}
+
+AStarHeapUp :: proc(
+	heap, heapPos: []int,
+	position, goalX, goalY, worldWidth, worldHeight: int,
+	gScore: []int,
+) {
+	current := position
+	for current > 0 {
+		parent := (current-1)/2
+		if AStarPriority(heap[current], goalX, goalY, worldWidth, worldHeight, gScore) >=
+			AStarPriority(heap[parent], goalX, goalY, worldWidth, worldHeight, gScore) {
+			break
+		}
+		AStarHeapSwap(heap, heapPos, current, parent)
+		current = parent
+	}
+}
+
+AStarHeapDown :: proc(
+	heap, heapPos: []int,
+	count, position, goalX, goalY, worldWidth, worldHeight: int,
+	gScore: []int,
+) {
+	current := position
+	for {
+		left := current*2+1
+		if left >= count do break
+		right := left+1
+		smallest := left
+		if right < count &&
+			AStarPriority(heap[right], goalX, goalY, worldWidth, worldHeight, gScore) <
+				AStarPriority(heap[left], goalX, goalY, worldWidth, worldHeight, gScore) {
+			smallest = right
+		}
+		if AStarPriority(heap[current], goalX, goalY, worldWidth, worldHeight, gScore) <=
+			AStarPriority(heap[smallest], goalX, goalY, worldWidth, worldHeight, gScore) {
+			break
+		}
+		AStarHeapSwap(heap, heapPos, current, smallest)
+		current = smallest
+	}
+}
+
+AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, goalX, goalY: int, path: ^[dynamic]int, maxExpansions := 0) -> bool {
+	profileStamp := ProfilerBegin("Nav:AStar")
+	defer ProfilerEnd(profileStamp)
 	clear(path)
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
@@ -94,6 +169,7 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 	isOpen := w.navigationOpen
 	isClosed := w.navigationClosed
 	openSet := w.navigationQueue
+	heapPos := w.navigationHeapPos
 	stamp := w.navigationStamp
 
 	// Stamp touched nodes instead of clearing the whole world for every path.
@@ -111,41 +187,34 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 	gScore[startIndex] = 0
 	isOpen[startIndex] = true
 	isClosed[startIndex] = false
-	openCount := 0
-	openSet[openCount] = startIndex
-	openCount += 1
+	heapPos[startIndex] = 0
+	openSet[0] = startIndex
+	openCount := 1
 
 	found := false
+	expansions := 0
 	for openCount > 0 {
-		bestPosition := 0
+		if maxExpansions > 0 && expansions >= maxExpansions do break
+		expansions += 1
 		bestIndex := openSet[0]
-		bestScore := gScore[bestIndex] + PATH_HEURISTIC_COST*WorldWrapHeuristic(
-			bestIndex/worldHeight,
-			bestIndex%worldHeight,
-			wrappedGoalX,
-			wrappedGoalY,
-			worldWidth,
-			worldHeight,
-		)
-		for position in 1..<openCount {
-			candidate := openSet[position]
-			candidateScore := gScore[candidate] + PATH_HEURISTIC_COST*WorldWrapHeuristic(
-				candidate/worldHeight,
-				candidate%worldHeight,
+		openCount -= 1
+		if openCount > 0 {
+			last := openSet[openCount]
+			openSet[0] = last
+			heapPos[last] = 0
+			AStarHeapDown(
+				openSet,
+				heapPos,
+				openCount,
+				0,
 				wrappedGoalX,
 				wrappedGoalY,
 				worldWidth,
 				worldHeight,
+				gScore,
 			)
-			if candidateScore < bestScore {
-				bestPosition = position
-				bestIndex = candidate
-				bestScore = candidateScore
-			}
 		}
-
-		openSet[bestPosition] = openSet[openCount-1]
-		openCount -= 1
+		heapPos[bestIndex] = -1
 		isOpen[bestIndex] = false
 		if bestIndex == goalIndex {
 			found = true
@@ -176,6 +245,7 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 				gScore[nextIndex] = infinity
 				isOpen[nextIndex] = false
 				isClosed[nextIndex] = false
+				heapPos[nextIndex] = -1
 			}
 			if isClosed[nextIndex] do continue
 			tentativeScore := gScore[bestIndex] + WorldStepCost(w, nextX, nextY)
@@ -183,10 +253,32 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 
 			cameFrom[nextIndex] = bestIndex
 			gScore[nextIndex] = tentativeScore
-			if !isOpen[nextIndex] && openCount < nodeCount {
+			if isOpen[nextIndex] {
+				AStarHeapUp(
+					openSet,
+					heapPos,
+					heapPos[nextIndex],
+					wrappedGoalX,
+					wrappedGoalY,
+					worldWidth,
+					worldHeight,
+					gScore,
+				)
+			} else if openCount < nodeCount {
 				isOpen[nextIndex] = true
+				heapPos[nextIndex] = openCount
 				openSet[openCount] = nextIndex
 				openCount += 1
+				AStarHeapUp(
+					openSet,
+					heapPos,
+					heapPos[nextIndex],
+					wrappedGoalX,
+					wrappedGoalY,
+					worldWidth,
+					worldHeight,
+					gScore,
+				)
 			}
 		}
 	}
@@ -307,7 +399,7 @@ UnitFindEscapePath :: proc(w: ^World, unitSlot: int, enemies: []UnitNearbyEnemy)
 	clear(&unit.path)
 	unit.pathFound = false
 	unit.pathReady = true
-	unit.pathRevision = w.navigationRevision
+	unit.pathRevision = w.pathRevision
 	unit.pathIndex = 0
 	// Cache failure until the primary threat changes tile or navigation changes.
 	unit.pathTargetX = int(WorldWrapPosition(w.units.x[enemies[0].slot], f32(width)))
@@ -394,7 +486,7 @@ UnitFleeEnemy :: proc(w: ^World, unitSlot, enemySlot: int, deltaTime: f32) -> bo
 	count := 1+UnitCollectNearbyEnemies(w, unitSlot, FLEE_THREAT_RADIUS, threats[1:])
 	enemies := threats[:count]
 	clearance := UnitFleeClearance(w, unit.x, unit.y, enemies)
-	replan := !unit.pathReady || unit.pathRevision != w.navigationRevision
+	replan := !unit.pathReady || unit.pathRevision != w.pathRevision
 	if !replan && !unit.pathFound {
 		replan = unit.pathTargetX != int(WorldWrapPosition(w.units.x[enemySlot], f32(w.maxX))) ||
 			unit.pathTargetY != int(WorldWrapPosition(w.units.y[enemySlot], f32(w.maxY)))
@@ -479,7 +571,7 @@ FlowFieldGet :: proc(w: ^World, kingdom, town: int, unitType: UnitType, unitKing
 	if field.targetKingdom == kingdom && field.targetTown == town &&
 		field.hallX == hallX && field.hallY == hallY &&
 		field.walkWater == walkWater && field.unitKingdom == unitKingdom &&
-		field.navigationRevision == w.navigationRevision {
+		field.pathRevision == w.pathRevision {
 		return field, field.valid
 	}
 
@@ -489,37 +581,65 @@ FlowFieldGet :: proc(w: ^World, kingdom, town: int, unitType: UnitType, unitKing
 	field.hallX = hallX
 	field.hallY = hallY
 	field.walkWater = walkWater
-	field.navigationRevision = w.navigationRevision
+	field.pathRevision = w.pathRevision
 	field.valid = FlowFieldCompute(w, field)
 	return field, field.valid
 }
 
+// The mask depends on the kingdom (friendly walls and water tech) and on the
+// unit class (turtles cross all water). It is reused by every field built for
+// the same key until the world geometry changes, so the BFS only ever reads
+// one tightly packed byte per tile.
+FlowFieldWalkMask :: proc(w: ^World, kingdom: int, walkWater: bool) -> []u8 {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	nodeCount := worldWidth*worldHeight
+	if nodeCount <= 0 || len(w.navigationWalkable) != nodeCount do return nil
+	if w.navigationWalkableKingdom == kingdom &&
+		w.navigationWalkableWater == walkWater &&
+		w.navigationWalkableRevision == w.pathRevision {
+		return w.navigationWalkable
+	}
+
+	profileStamp := ProfilerBegin("Nav:WalkMask")
+	defer ProfilerEnd(profileStamp)
+	walkType: UnitType = Knight{}
+	if walkWater do walkType = Turtle{}
+	mask := w.navigationWalkable
+	index := 0
+	for x in 0..<worldWidth {
+		for y in 0..<worldHeight {
+			mask[index] = WorldTileWalkableAt(w, index, x, y, walkType, kingdom, true) ? 1 : 0
+			index += 1
+		}
+	}
+	w.navigationWalkableKingdom = kingdom
+	w.navigationWalkableWater = walkWater
+	w.navigationWalkableRevision = w.pathRevision
+	return mask
+}
+
 FlowFieldCompute :: proc(w: ^World, field: ^FlowField) -> bool {
+	profileStamp := ProfilerBegin("Nav:FlowField")
+	defer ProfilerEnd(profileStamp)
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return false
 
+	if worldWidth > FLOW_QUEUE_MASK+1 || worldHeight > FLOW_QUEUE_MASK+1 do return false
 	nodeCount := worldWidth*worldHeight
-	if nodeCount > len(w.navigationDistance) || nodeCount > len(w.navigationQueue) {
-		return false
-	}
+	if nodeCount > len(w.navigationQueue) do return false
 	if len(field.direction) != nodeCount {
 		if field.direction != nil do delete(field.direction)
 		field.direction = make([]FlowDirection, nodeCount)
 	}
-	for i in 0..<nodeCount {
-		field.direction[i] = .Blocked
-	}
+	walkable := FlowFieldWalkMask(w, field.unitKingdom, field.walkWater)
+	if len(walkable) != nodeCount do return false
 
-	distance := w.navigationDistance
-	for i in 0..<nodeCount {
-		distance[i] = -1
-	}
+	direction := field.direction
+	slice.zero(direction)
 	queue := w.navigationQueue
 	head, tail := 0, 0
-
-	walkType: UnitType = Knight{}
-	if field.walkWater do walkType = Turtle{}
 
 	hallWidth, hallHeight := BuildingTileSize(TownHall{})
 	foundSource := false
@@ -535,12 +655,10 @@ FlowFieldCompute :: proc(w: ^World, field: ^FlowField) -> bool {
 				}
 				wrappedX := WorldWrapCoordinate(x, worldWidth)
 				wrappedY := WorldWrapCoordinate(y, worldHeight)
-				if !WorldTileWalkable(w, wrappedX, wrappedY, walkType, field.unitKingdom) do continue
 				index := wrappedX*worldHeight+wrappedY
-				if distance[index] == 0 do continue
-				distance[index] = 0
-				field.direction[index] = .None
-				queue[tail] = index
+				if walkable[index] == 0 || direction[index] != .Blocked do continue
+				direction[index] = .None
+				queue[tail] = wrappedX<<FLOW_QUEUE_SHIFT|wrappedY
 				tail += 1
 				foundSource = true
 			}
@@ -549,32 +667,39 @@ FlowFieldCompute :: proc(w: ^World, field: ^FlowField) -> bool {
 	}
 	if !foundSource do return false
 
+	// Queue entries pack x and y so the BFS never divides by the world height.
 	for head < tail {
-		index := queue[head]
+		entry := queue[head]
 		head += 1
-		currentX := index/worldHeight
-		currentY := index%worldHeight
-		for direction in 0..<4 {
-			nextX := currentX
-			nextY := currentY
-			switch direction {
-			case 0: nextX = WorldWrapCoordinate(currentX+1, worldWidth)
-			case 1: nextX = WorldWrapCoordinate(currentX-1, worldWidth)
-			case 2: nextY = WorldWrapCoordinate(currentY+1, worldHeight)
-			case 3: nextY = WorldWrapCoordinate(currentY-1, worldHeight)
+		x := entry>>FLOW_QUEUE_SHIFT
+		y := entry&FLOW_QUEUE_MASK
+
+		for directionIndex in 0..<4 {
+			nextX, nextY := x, y
+			step: FlowDirection
+			switch directionIndex {
+			case 0:
+				nextX += 1
+				if nextX >= worldWidth do nextX = 0
+				step = .West
+			case 1:
+				nextX -= 1
+				if nextX < 0 do nextX = worldWidth-1
+				step = .East
+			case 2:
+				nextY += 1
+				if nextY >= worldHeight do nextY = 0
+				step = .North
+			case 3:
+				nextY -= 1
+				if nextY < 0 do nextY = worldHeight-1
+				step = .South
 			}
-			if !WorldTileWalkable(w, nextX, nextY, walkType, field.unitKingdom) do continue
 
 			nextIndex := nextX*worldHeight+nextY
-			if distance[nextIndex] != -1 do continue
-			distance[nextIndex] = distance[index]+1
-			switch direction {
-			case 0: field.direction[nextIndex] = .West
-			case 1: field.direction[nextIndex] = .East
-			case 2: field.direction[nextIndex] = .North
-			case 3: field.direction[nextIndex] = .South
-			}
-			queue[tail] = nextIndex
+			if walkable[nextIndex] == 0 || direction[nextIndex] != .Blocked do continue
+			direction[nextIndex] = step
+			queue[tail] = nextX<<FLOW_QUEUE_SHIFT|nextY
 			tail += 1
 		}
 	}
@@ -627,17 +752,31 @@ UnitFollowFlowField :: proc(w: ^World, unitSlot: int, field: ^FlowField, deltaTi
 
 // Choose a reachable work point without routing through the proposed footprint.
 // This also works before the site is reserved (for founding-order validation).
+WORK_ACCESS_MAX_EXPANSIONS :: 256
+
 BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitType: UnitType, kingdom, startX, startY: int) -> (int, int, bool) {
 	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return 0, 0, false
 	workRadius := 0
+	fallbackX, fallbackY := 0, 0
+	fallbackDistance: int = max(int)
+	startTileX := WorldWrapCoordinate(startX, worldWidth)
+	startTileY := WorldWrapCoordinate(startY, worldHeight)
 	for radius in 1..=6 {
 		for tileX in x-radius..=x+width-1+radius {
 			for tileY in y-radius..=y+height-1+radius {
 				wrappedX := WorldWrapCoordinate(tileX, worldWidth)
 				wrappedY := WorldWrapCoordinate(tileY, worldHeight)
 				if BuildingAccessDistance(w, x, y, width, height, wrappedX, wrappedY) != radius do continue
-				if WorldTileWalkable(w, wrappedX, wrappedY, unitType, kingdom) do workRadius = radius
+				if !WorldTileWalkable(w, wrappedX, wrappedY, unitType, kingdom) do continue
+				workRadius = radius
+				deltaX := WorldShortestWrappedDelta(f32(wrappedX-startTileX), f32(worldWidth))
+				deltaY := WorldShortestWrappedDelta(f32(wrappedY-startTileY), f32(worldHeight))
+				distance := int(deltaX*deltaX+deltaY*deltaY)
+				if distance < fallbackDistance {
+					fallbackDistance = distance
+					fallbackX, fallbackY = wrappedX, wrappedY
+				}
 			}
 		}
 		if workRadius > 0 do break
@@ -653,7 +792,9 @@ BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitTyp
 	w.navigationQueue[0] = start
 	w.navigationStamp[start] = stamp
 	queueEnd := 1
-	for cursor := 0; cursor < queueEnd; cursor += 1 {
+	expansions := 0
+	for cursor := 0; cursor < queueEnd && expansions < WORK_ACCESS_MAX_EXPANSIONS; cursor += 1 {
+		expansions += 1
 		index := w.navigationQueue[cursor]
 		currentX, currentY := index/worldHeight, index%worldHeight
 		if BuildingAccessDistance(w, x, y, width, height, currentX, currentY) == workRadius &&
@@ -678,7 +819,7 @@ BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitTyp
 			queueEnd += 1
 		}
 	}
-	return 0, 0, false
+	return fallbackX, fallbackY, true
 }
 
 // Search through the footprint only, stopping at its first walkable exit. This
@@ -779,19 +920,46 @@ UnitStepTowards :: proc(w: ^World, unitSlot: int, targetX, targetY, distance: f3
 WorldTileWalkable :: proc(w: ^World, x, y: int, unitType: UnitType, unitKingdom: int) -> bool {
 	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return false
-	index := WorldWrapCoordinate(x, worldWidth)*worldHeight+WorldWrapCoordinate(y, worldHeight)
-	if w.tileConstructionBlocked[index] do return false
-	return WorldTileWalkableBase(w, x, y, unitType, unitKingdom)
+	wrappedX := WorldWrapCoordinate(x, worldWidth)
+	wrappedY := WorldWrapCoordinate(y, worldHeight)
+	return WorldTileWalkableAt(
+		w,
+		wrappedX*worldHeight+wrappedY,
+		wrappedX,
+		wrappedY,
+		unitType,
+		unitKingdom,
+		true,
+	)
 }
 
 // Used only when clearing an occupied footprint before reserving or completing it.
 WorldTileWalkableBase :: proc(w: ^World, x, y: int, unitType: UnitType, unitKingdom: int) -> bool {
-	worldWidth := int(w.maxX)
-	worldHeight := int(w.maxY)
+	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return false
 	wrappedX := WorldWrapCoordinate(x, worldWidth)
 	wrappedY := WorldWrapCoordinate(y, worldHeight)
-	index := wrappedX*worldHeight+wrappedY
+	return WorldTileWalkableAt(
+		w,
+		wrappedX*worldHeight+wrappedY,
+		wrappedX,
+		wrappedY,
+		unitType,
+		unitKingdom,
+		false,
+	)
+}
+
+// Coordinates must already be wrapped. Bulk passes can therefore walk the tile
+// arrays in index order without paying for a modulo per lookup.
+WorldTileWalkableAt :: proc(
+	w: ^World,
+	index, x, y: int,
+	unitType: UnitType,
+	unitKingdom: int,
+	checkConstruction: bool,
+) -> bool {
+	if checkConstruction && w.tileConstructionBlocked[index] do return false
 	if buildingSlot := w.tileBuilding[index]; buildingSlot >= 0 {
 		if BuildingKindOf(w.buildings[buildingSlot].type) == .Wall &&
 			w.buildings[buildingSlot].kingdom == unitKingdom {
@@ -799,8 +967,9 @@ WorldTileWalkableBase :: proc(w: ^World, x, y: int, unitType: UnitType, unitKing
 		}
 		return BuildingWalkable(w.buildings[buildingSlot].type)
 	}
-	if hazardKind, hasHazard := WorldHazardKindAt(w, wrappedX, wrappedY); hasHazard {
-		switch hazardKind {
+	if hazardSlot := w.hazardTile[index]; hazardSlot >= 0 && hazardSlot < HAZARD_CAPACITY &&
+		w.hazardUsed[hazardSlot] {
+		switch w.hazardCells.kind[hazardSlot] {
 		case .Ice:
 			return true
 		case .Flood:
@@ -808,7 +977,7 @@ WorldTileWalkableBase :: proc(w: ^World, x, y: int, unitType: UnitType, unitKing
 		case .None:
 		}
 	}
-	tile := w.ground[wrappedX][wrappedY].type
+	tile := w.ground[x][y].type
 	if UnitValidTileType(unitType, tile) do return true
 	if TileIsDeepWater(tile) && UnitCanCrossWater(w, unitType, unitKingdom) {
 		return true
@@ -873,9 +1042,10 @@ WorldWrapCoordinate :: proc(coordinate, size: int) -> int {
 
 WorldWrapPosition :: proc(position, size: f32) -> f32 {
 	if size <= 0 do return 0
-	wrapped := position
-	for wrapped < 0 { wrapped += size }
-	for wrapped >= size { wrapped -= size }
+	// Positions can grow far past the world size (weather time, drift), so a
+	// subtraction loop can spin for millions of iterations. Use fmod instead.
+	wrapped := math.mod(position, size)
+	if wrapped < 0 do wrapped += size
 	return wrapped
 }
 
