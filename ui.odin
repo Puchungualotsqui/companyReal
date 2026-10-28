@@ -80,6 +80,12 @@ UI_TEXT_SIZE : f32 : 20
 UI_TITLE_SIZE : f32 : 30
 UI_HEADER_H : f32 : 92
 UI_DESC_Y : f32 : 102
+UI_DESC_TEXT_SIZE : f32 : 20
+UI_DESC_TEXT_MIN_SIZE : f32 : 13
+UI_DESC_GAP : f32 : 4
+UI_DESC_MAX_LINES : int : 3
+UI_WRAP_MAX_LINES : int : 8
+UI_TEXT_BUFFER :: 512
 UI_STAT_Y : f32 : 136
 UI_STAT_H : f32 : 24
 UI_GROWTH_Y : f32 : 270
@@ -91,7 +97,7 @@ UI_SECTION_HEADER : f32 : 26
 UI_ROWS_TOP : f32 : 336
 UI_ROW_HEIGHT : f32 : 36
 UI_CONSTRUCTION_ROW_HEIGHT : f32 : 28
-UI_ERAS_ROW_H : f32 : 60
+UI_ERAS_ROW_H : f32 : 48
 UI_ERAS_ROW_GAP : f32 : 4
 UI_BUTTON : f32 : 20
 UI_TEXT_BUTTON_H : f32 : 26
@@ -166,8 +172,8 @@ UI_FONT_TITLE_DATA :: #load("assets/fonts/PixelifySans-Bold.ttf")
 
 @(private = "file")
 uiFonts: struct {
-	body, title, menu: rl.Font,
-	loaded:             bool,
+	body, small, title, menu: rl.Font,
+	loaded:                       bool,
 }
 
 // raylib rasterizes glyphs with anti-aliasing; the UI is pixel art, so the
@@ -215,6 +221,7 @@ UIFontLoad :: proc(data: []u8, size: i32) -> rl.Font {
 UIFontInit :: proc() {
 	if uiFonts.loaded do return
 	uiFonts.body = UIFontLoad(UI_FONT_BODY_DATA, i32(UI_TEXT_SIZE))
+	uiFonts.small = UIFontLoad(UI_FONT_BODY_DATA, 12)
 	uiFonts.title = UIFontLoad(UI_FONT_TITLE_DATA, i32(UI_TITLE_SIZE))
 	uiFonts.menu = UIFontLoad(UI_FONT_TITLE_DATA, 56)
 	uiFonts.loaded = true
@@ -223,6 +230,11 @@ UIFontInit :: proc() {
 UIFont :: proc() -> rl.Font {
 	UIFontInit()
 	return uiFonts.body
+}
+
+UISmallFont :: proc() -> rl.Font {
+	UIFontInit()
+	return uiFonts.small
 }
 
 UITitleFont :: proc() -> rl.Font {
@@ -240,6 +252,7 @@ WorldUIDeinit :: proc() {
 	// A failed load falls back to the shared default font, which must not be freed.
 	defaultTexture := rl.GetFontDefault().texture.id
 	if uiFonts.body.texture.id != defaultTexture do rl.UnloadFont(uiFonts.body)
+	if uiFonts.small.texture.id != defaultTexture do rl.UnloadFont(uiFonts.small)
 	if uiFonts.title.texture.id != defaultTexture do rl.UnloadFont(uiFonts.title)
 	if uiFonts.menu.texture.id != defaultTexture do rl.UnloadFont(uiFonts.menu)
 	uiFonts = {}
@@ -261,6 +274,116 @@ UITextRight :: proc(text: cstring, right, y: f32, color: rl.Color) {
 UITextCenter :: proc(text: cstring, centerX, y: f32, color: rl.Color) {
 	width := rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x
 	rl.DrawTextEx(UIFont(), text, rl.Vector2{centerX-width*0.5, y}, UI_TEXT_SIZE, 1, color)
+}
+
+// --- wrapped text ---------------------------------------------------------
+
+UILine :: struct {
+	start, end: int, // Byte offsets into the source string
+}
+
+UIWrapLayout :: struct {
+	lines:      [UI_WRAP_MAX_LINES]UILine,
+	count:      int,
+	size:       f32,
+	spacing:    f32,
+	lineHeight: f32,
+	height:     f32,
+}
+
+UITextWidth :: proc(text: string, size, spacing: f32) -> f32 {
+	return rl.MeasureTextEx(UIFont(), UITextCString(text), size, spacing).x
+}
+
+// Small stack-backed cstring for measuring and drawing slices without allocating.
+UITextCString :: proc(text: string) -> cstring {
+	@(static) buffer: [UI_TEXT_BUFFER]u8
+	length := min(len(text), UI_TEXT_BUFFER-1)
+	for i in 0..<length do buffer[i] = text[i]
+	buffer[length] = 0
+	return cstring(&buffer[0])
+}
+
+// Greedy word wrap. Lines are stored as byte ranges so no copy is needed.
+UIWrapText :: proc(text: cstring, size, spacing, maxWidth: f32) -> UIWrapLayout {
+	layout := UIWrapLayout{size = size, spacing = spacing}
+	src := string(text)
+	if len(src) == 0 || maxWidth <= 0 do return layout
+	layout.lineHeight = rl.MeasureTextEx(UIFont(), "Ag", size, spacing).y
+
+	cursor := 0
+	for layout.count < UI_WRAP_MAX_LINES && cursor < len(src) {
+		for cursor < len(src) && src[cursor] == ' ' do cursor += 1
+		if cursor >= len(src) do break
+		lineStart := cursor
+		lineEnd := cursor
+		for {
+			wordStart := cursor
+			for wordStart < len(src) && src[wordStart] == ' ' do wordStart += 1
+			if wordStart >= len(src) do break
+			wordEnd := wordStart
+			for wordEnd < len(src) && src[wordEnd] != ' ' do wordEnd += 1
+			if UITextWidth(src[lineStart:wordEnd], size, spacing) <= maxWidth {
+				lineEnd = wordEnd
+				cursor = wordEnd
+				continue
+			}
+			if lineEnd == lineStart {
+				// A single word is wider than the line; break it at a rune.
+				take := wordStart
+				for take < wordEnd {
+					next := take+1
+					for next < wordEnd && (src[next]&0xC0) == 0x80 do next += 1
+					if take > lineStart &&
+						UITextWidth(src[lineStart:next], size, spacing) > maxWidth {
+						break
+					}
+					take = next
+				}
+				lineEnd = take
+				cursor = take
+			}
+			break
+		}
+		if lineEnd > lineStart {
+			layout.lines[layout.count] = {lineStart, lineEnd}
+			layout.count += 1
+		}
+		if cursor <= lineStart do break
+	}
+
+	layout.height = f32(layout.count)*layout.lineHeight
+	return layout
+}
+
+// Picks the largest size that keeps the text within maxLines, down to minSize.
+UIFitWrappedText :: proc(
+	text: cstring,
+	maxWidth: f32,
+	maxLines: int,
+	maxSize, minSize: f32,
+) -> UIWrapLayout {
+	size := maxSize
+	for {
+		layout := UIWrapText(text, size, 1, maxWidth)
+		if layout.count <= maxLines || size <= minSize do return layout
+		size = max(minSize, size-1)
+	}
+}
+
+UIDrawWrappedText :: proc(text: cstring, layout: UIWrapLayout, x, y: f32, color: rl.Color) {
+	src := string(text)
+	for index in 0..<layout.count {
+		line := layout.lines[index]
+		rl.DrawTextEx(
+			UIFont(),
+			UITextCString(src[line.start:line.end]),
+			rl.Vector2{x, y+f32(index)*layout.lineHeight},
+			layout.size,
+			layout.spacing,
+			color,
+		)
+	}
 }
 
 UIUnitName :: proc(kind: UnitKind) -> cstring {
@@ -346,31 +469,31 @@ UIBuildingName :: proc(kind: BuildingKind) -> cstring {
 UIUnitDescription :: proc(kind: UnitKind) -> cstring {
 	switch kind {
 	case .Villager:
-		return "The realm's workforce."
+		return "The realm's hands. They raise homes, carry water and keep the old hearths burning."
 	case .Builder:
-		return "Raises and repairs buildings."
+		return "Stone-singers of the guild. They raise walls and mend what fire and war undo."
 	case .CombatBuilder:
-		return "Raises combat buildings in the field."
+		return "Guild masons who work beneath arrowfall, raising war-works where no road reaches."
 	case .WaterCollector:
-		return "Carries water from lakes, rivers or the sea."
+		return "Drawn to still water. They carry the river's memory back to thirsty streets."
 	case .Farmer:
-		return "Works the fields for food."
+		return "Servants of the soil, coaxing grain from ground the seasons have not yet claimed."
 	case .Knight:
-		return "Armoured melee infantry."
+		return "Oath-bound riders in old iron. Their charge breaks lines and old certainties alike."
 	case .Archer:
-		return "Ranged support. Fragile."
+		return "Eyes of the greenwood. Their arrows find seams in armour; their bodies are frail."
 	case .Mage:
-		return "Area damage from afar."
+		return "Keepers of the burning word. They unmake the air where enemies stand."
 	case .Giant:
-		return "Slow, huge, devastating."
+		return "Old as the hills and slow as winter. Each step is a sentence the ground obeys."
 	case .Turtle:
-		return "Armoured. Crosses water."
+		return "A living rampart. It crosses waters that would drown an army and shelters those behind."
 	case .Catapult:
-		return "Siege engine. Slow, long range."
+		return "A patient beast of timber and rope. It argues with walls from a safe distance."
 	case .Rogue:
-		return "Fast raider. Strikes and runs."
+		return "A shadow with a knife. It takes what war forgets and is gone before the answer."
 	case .Explorer:
-		return "Scouts the frontier through fog of war."
+		return "The realm's far sight. They walk into the untold dark and return carrying the map."
 	}
 	unreachable()
 }
@@ -378,47 +501,47 @@ UIUnitDescription :: proc(kind: UnitKind) -> cstring {
 UIBuildingDescription :: proc(kind: BuildingKind) -> cstring {
 	switch kind {
 	case .TownHall:
-		return "Seat of the town."
+		return "The town's first stone. Its bells bind neighbours into one stubborn will."
 	case .Home:
-		return "Houses the townsfolk."
+		return "A roof, a hearth, a name. Without these a people is only a crowd."
 	case .Farmland:
-		return "Produces food."
+		return "Furrows cut in hope. The soil remembers every harvest and every hunger."
 	case .Wall:
-		return "Blocks enemy movement."
+		return "Cold stone raised between what is ours and what has not yet been claimed."
 	case .Bridge:
-		return "Crosses water."
+		return "A bargain with the river. It grants passage, but never forgets the current."
 	case .Cannon:
-		return "Static gun emplacement."
+		return "A crouched iron throat. It speaks rarely, and the walls listen."
 	case .Watchtower:
-		return "Cheap ranged outpost. Sees far, hits light."
+		return "A lonely eye above the treeline. It sees far, warns early and dies first."
 	case .ArcheryRange:
-		return "Trains archers."
+		return "Where greenwood children learn to breathe, draw, and let the world go quiet."
 	case .MagicSchool:
-		return "Trains mages. Can call a Glacier Shell."
+		return "A hall of borrowed fire. Its scholars train mages and call down a Glacier Shell."
 	case .GiantPen:
-		return "Trains giants."
+		return "A high-walled pen for the hills' oldest children. The ropes are a courtesy."
 	case .SiegeWorkshop:
-		return "Trains catapults. Can trigger a Siege Tremor."
+		return "Sawdust, iron and patience. Here catapults are born; here Siege Tremors begin."
 	case .TurtlePen:
-		return "Trains turtles."
+		return "A shingle beach where the slow armoured ones are bred and bound to war."
 	case .ThievesGuild:
-		return "Trains rogues."
+		return "No sign above the door. Inside, knives learn manners and rogues learn silence."
 	case .Path:
-		return "A trodden road. Units move faster."
+		return "Worn earth made by many feet. An army moves only as fast as its roads."
 	case .DistrictHall:
-		return "A fused town's old hall. Its district grows the merged town."
+		return "The first hall of a swallowed town. Its district feeds the greater town that took it."
 	case .GiantMortar:
-		return "Order building. Bombards a chosen area."
+		return "A buried giant of iron. At its keepers' word the sky falls on a chosen field."
 	case .Harbor:
-		return "Coastal trade, vision and naval orders."
+		return "A raft of masts and ledgers. It watches the coast, trades, and strangles rivals."
 	case .Granary:
-		return "Improves food and town growth."
+		return "Grain kept dry against the lean months. A full silo pulls people home."
 	case .AlchemistWorkshop:
-		return "Brews the miasma used for poison barrages."
+		return "Brewers of green fog. Their poisons linger long after the battle forgets."
 	case .FireworksGuild:
-		return "Launches napalm barrages across the field."
+		return "Pyromancers in festival masks. Their celebrations leave the field black."
 	case .StarfallSpire:
-		return "Calls a meteor down on a chosen area."
+		return "A needle pointed at heaven, daring the dark to answer. It answers."
 	}
 	unreachable()
 }
@@ -452,25 +575,25 @@ UITownPathName :: proc(path: TownPath) -> cstring {
 UITownPathDescription :: proc(path: TownPath) -> cstring {
 	switch path {
 	case .Rangers:
-		return "Archers and field builders of the greenwood."
+		return "Greenwood archers, scouts and field builders."
 	case .Mystics:
-		return "Mages and cannons guided by arcane lore."
+		return "Lorekeepers of fire, iron and older words."
 	case .Beasts:
-		return "Giant handlers and towering watchtowers."
+		return "Hill-giant handlers and high watchtowers."
 	case .Siege:
-		return "Catapults, cannons and siege workshops."
+		return "Catapults, cannons and patient ruin."
 	case .Tide:
-		return "Turtle riders, pens and ocean bridges."
+		return "Turtle-riders, salt pens and sea bridges."
 	case .Shadows:
-		return "Rogues, hidden guilds and watchtowers."
+		return "Rogues, hidden guilds and quiet towers."
 	case .Bastion:
-		return "Veteran builders raise walls and towers."
+		return "Veteran masons who answer siege with stone."
 	case .Logistics:
-		return "Explorers, roads and river bridges."
+		return "Explorers, roads and bridges that bind realms."
 	case .Conquest:
-		return "Knights and catapults break the walls."
+		return "Knights and catapults breaking the walls."
 	case .Dominion:
-		return "Mages and giants claim the horizon."
+		return "Mages and giants claiming the horizon."
 	}
 	unreachable()
 }
@@ -886,33 +1009,67 @@ UIUnitEffectCount :: proc(w: ^World, unitSlot: int) -> int {
 	return count
 }
 
+UIDescriptionText :: proc(w: ^World, ui: ^UIState) -> cstring {
+	if !UISelectionValid(w, ui.selection) do return ""
+	switch ui.selection.kind {
+	case .Unit:
+		return UIUnitDescription(UnitKindOf(w.units[ui.selection.slot].type))
+	case .Building:
+		return UIBuildingDescription(BuildingKindOf(w.buildings[ui.selection.slot].type))
+	case .None:
+	}
+	return ""
+}
+
+UIDescriptionLayout :: proc(w: ^World, ui: ^UIState) -> UIWrapLayout {
+	return UIFitWrappedText(
+		UIDescriptionText(w, ui),
+		UI_PANEL_WIDTH-2*UI_PAD,
+		UI_DESC_MAX_LINES,
+		UI_DESC_TEXT_SIZE,
+		UI_DESC_TEXT_MIN_SIZE,
+	)
+}
+
+// Extra panel height needed when the description wraps past its base slot.
+UIDescriptionExtra :: proc(w: ^World, ui: ^UIState) -> f32 {
+	base := UI_STAT_Y-UI_DESC_Y-UI_DESC_GAP
+	return max(0, UIDescriptionLayout(w, ui).height-base)
+}
+
 UIPanelHeight :: proc(w: ^World, ui: ^UIState) -> f32 {
 	if ui.selection.kind == .None do return 0
+	height: f32
 	if UISelectionTownHall(w, ui.selection) {
 		kingdom, town := UISelectionTown(w, ui.selection)
+		height = UI_GROWTH_Y+UI_GROWTH_H+UI_PAD
 		if UICanControlKingdom(w, kingdom) {
 			switch ui.tab {
 			case .Town:
 				rows := UIConversionRowCount(w, ui.selection)
-				return UI_ROWS_TOP + f32(rows)*UI_ROW_HEIGHT + UI_PAD
+				height = UI_ROWS_TOP + f32(rows)*UI_ROW_HEIGHT + UI_PAD
 			case .Orders:
-				return UIOrdersPanelHeight(UITownOrderCount(w, kingdom, town))
+				height = UIOrdersPanelHeight(UITownOrderCount(w, kingdom, town))
 			case .Works:
-				return UIConstructionsPanelHeight(TownConstructionCount(w, kingdom, town))
+				height = UIConstructionsPanelHeight(TownConstructionCount(w, kingdom, town))
 			case .Eras:
-				return UIErasPanelHeight()
+				height = UIErasPanelHeight()
 			}
 		}
-		return UI_GROWTH_Y+UI_GROWTH_H+UI_PAD
+	} else {
+		height = UI_STAT_Y + f32(UIStatCount(w, ui.selection))*UI_STAT_H + UI_PAD
+		if ui.selection.kind == .Unit && UIUnitEffectCount(w, ui.selection.slot) > 0 {
+			height += UI_EFFECT_ROW_H
+		}
+		if ui.selection.kind == .Building && BuildingKindOf(w.buildings[ui.selection.slot].type) == .Home {
+			height += 72
+		}
 	}
-	height := UI_STAT_Y + f32(UIStatCount(w, ui.selection))*UI_STAT_H + UI_PAD
-	if ui.selection.kind == .Unit && UIUnitEffectCount(w, ui.selection.slot) > 0 {
-		height += UI_EFFECT_ROW_H
-	}
-	if ui.selection.kind == .Building && BuildingKindOf(w.buildings[ui.selection.slot].type) == .Home {
-		height += 72
-	}
-	return height
+	return height+UIDescriptionExtra(w, ui)
+}
+
+UIPanelContentRect :: proc(panel: rl.Rectangle, extra: f32) -> rl.Rectangle {
+	return {panel.x, panel.y+extra, panel.width, panel.height-extra}
 }
 
 UIPanelRect :: proc(w: ^World, ui: ^UIState) -> rl.Rectangle {
@@ -954,7 +1111,7 @@ UIConstructionsPanelHeight :: proc(sites: int) -> f32 {
 }
 
 UIErasPanelHeight :: proc() -> f32 {
-	return UI_ROWS_TOP+UI_SECTION_HEADER+
+	return UI_ROWS_TOP+
 		f32(TOWN_MILESTONE_TIER_COUNT)*UI_ERAS_ROW_H+
 		f32(TOWN_MILESTONE_TIER_COUNT-1)*UI_ERAS_ROW_GAP+UI_PAD
 }
@@ -1381,8 +1538,9 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 
 UIPanelClick :: proc(w: ^World, view: ^WorldView, panel: rl.Rectangle, mouse: rl.Vector2) {
 	ui := &view.ui
+	content := UIPanelContentRect(panel, UIDescriptionExtra(w, ui))
 	if UISelectionPlayerTownHall(w, ui.selection) {
-		for rect, index in UITabRects(panel) {
+		for rect, index in UITabRects(content) {
 			if rl.CheckCollisionPointRec(mouse, rect) {
 				ui.tab = UITownTab(index)
 				return
@@ -1391,9 +1549,9 @@ UIPanelClick :: proc(w: ^World, view: ^WorldView, panel: rl.Rectangle, mouse: rl
 
 		switch ui.tab {
 		case .Town:
-			UIConversionClick(w, view, panel, mouse)
+			UIConversionClick(w, view, content, mouse)
 		case .Orders:
-			UIOrdersClick(w, ui, panel, mouse)
+			UIOrdersClick(w, ui, content, mouse)
 		case .Works:
 			// Construction sites are automatic; the tab is read-only.
 		case .Eras:
@@ -1402,7 +1560,7 @@ UIPanelClick :: proc(w: ^World, view: ^WorldView, panel: rl.Rectangle, mouse: rl
 		return
 	}
 
-	UIConversionClick(w, view, panel, mouse)
+	UIConversionClick(w, view, content, mouse)
 }
 
 UIOrdersClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Vector2) {
@@ -1969,19 +2127,24 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 	UIDrawPortrait(w, renderer, ui, portrait)
 
 	titleX := portrait.x+portrait.width+12
+	title: cstring
 	switch ui.selection.kind {
 	case .Unit:
-		UITitle(UIUnitName(UnitKindOf(w.units[ui.selection.slot].type)), titleX, panel.y+10, UI_COLOR_GOLD)
+		title = UIUnitName(UnitKindOf(w.units[ui.selection.slot].type))
 	case .Building:
 		kind := BuildingKindOf(w.buildings[ui.selection.slot].type)
-		title := UIBuildingName(kind)
+		title = UIBuildingName(kind)
 		if kind == .DistrictHall do title = UIDistrictHallName(w, ui.selection.slot)
 		if kind == .TownHall && w.buildings[ui.selection.slot].kingdom == NEUTRAL_KINGDOM {
 			title = "Independent Hall"
 		}
-		UITitle(title, titleX, panel.y+10, UI_COLOR_GOLD)
 	case .None:
 	}
+	titleSpace := panel.x+panel.width-UI_PAD-titleX
+	titleSize := UI_TITLE_SIZE
+	titleWidth := rl.MeasureTextEx(UITitleFont(), title, titleSize, 1).x
+	if titleWidth > titleSpace do titleSize = max(16, titleSize*titleSpace/titleWidth)
+	rl.DrawTextEx(UITitleFont(), title, rl.Vector2{titleX, panel.y+10}, titleSize, 1, UI_COLOR_GOLD)
 	if WorldTownExists(w, kingdom, town) {
 		subtitle := fmt.ctprintf(
 			"%s  -  %s",
@@ -1999,25 +2162,25 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 		}
 	}
 
-	switch ui.selection.kind {
-	case .Unit:
-		UIText(UIUnitDescription(UnitKindOf(w.units[ui.selection.slot].type)), panel.x+UI_PAD, panel.y+UI_DESC_Y, UI_COLOR_TEXT)
-	case .Building:
-		UIText(UIBuildingDescription(BuildingKindOf(w.buildings[ui.selection.slot].type)), panel.x+UI_PAD, panel.y+UI_DESC_Y, UI_COLOR_TEXT)
-	case .None:
+	desc := UIDescriptionLayout(w, ui)
+	extra := UIDescriptionExtra(w, ui)
+	content := UIPanelContentRect(panel, extra)
+	descText := UIDescriptionText(w, ui)
+	if desc.count > 0 {
+		UIDrawWrappedText(descText, desc, panel.x+UI_PAD, panel.y+UI_DESC_Y, UI_COLOR_TEXT)
 	}
 
 	stats: [8]UIStat
 	statCount := UIFillStats(w, renderer, ui, &stats)
 	if UISelectionTownHall(w, ui.selection) {
-		leftLabelX := panel.x+UI_PAD
-		leftValueX := panel.x+UI_PAD+170
-		rightLabelX := panel.x+UI_PAD+186
-		rightValueX := panel.x+panel.width-UI_PAD
+		leftLabelX := content.x+UI_PAD
+		leftValueX := content.x+UI_PAD+170
+		rightLabelX := content.x+UI_PAD+186
+		rightValueX := content.x+content.width-UI_PAD
 		for i in 0..<statCount {
 			column := i/4
 			row := i%4
-			y := panel.y+UI_STAT_Y+f32(row)*UI_STAT_H
+			y := content.y+UI_STAT_Y+f32(row)*UI_STAT_H
 			valueColor := stats[i].color
 			if valueColor.a == 0 do valueColor = UI_COLOR_TEXT
 			if column == 0 {
@@ -2031,35 +2194,35 @@ UIDrawPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl
 
 	} else {
 		for i in 0..<statCount {
-			y := panel.y+UI_STAT_Y+f32(i)*UI_STAT_H
+			y := content.y+UI_STAT_Y+f32(i)*UI_STAT_H
 			valueColor := stats[i].color
 			if valueColor.a == 0 do valueColor = UI_COLOR_TEXT
-			UIDrawStatLabel(stats[i], panel.x+UI_PAD, y)
-			UIText(stats[i].value, panel.x+UI_PAD+104, y, valueColor)
+			UIDrawStatLabel(stats[i], content.x+UI_PAD, y)
+			UIText(stats[i].value, content.x+UI_PAD+104, y, valueColor)
 		}
 	}
 
 	if ui.selection.kind == .Unit {
-		UIDrawUnitEffects(w, renderer, panel, ui.selection.slot)
+		UIDrawUnitEffects(w, renderer, content, ui.selection.slot)
 	}
 	if ui.selection.kind == .Building && BuildingKindOf(w.buildings[ui.selection.slot].type) == .Home {
-		UIDrawHomeOccupant(w, renderer, panel, ui.selection.slot)
+		UIDrawHomeOccupant(w, renderer, content, ui.selection.slot)
 	}
 
 	if UISelectionTownHall(w, ui.selection) {
-		if kingdom != NEUTRAL_KINGDOM do UIDrawAegisBar(w, panel, kingdom, town)
-		if kingdom != NEUTRAL_KINGDOM do UIDrawGrowthBar(w, panel, kingdom, town)
+		if kingdom != NEUTRAL_KINGDOM do UIDrawAegisBar(w, content, kingdom, town)
+		if kingdom != NEUTRAL_KINGDOM do UIDrawGrowthBar(w, content, kingdom, town)
 		if UICanControlKingdom(w, kingdom) {
-			UIDrawTownTabs(w, ui, panel)
+			UIDrawTownTabs(w, ui, content)
 			switch ui.tab {
 			case .Town:
-				UIDrawConversions(w, renderer, ui, panel, kingdom, town)
+				UIDrawConversions(w, renderer, ui, content, kingdom, town)
 			case .Orders:
-				UIDrawOrdersTab(w, renderer, panel, kingdom, town)
+				UIDrawOrdersTab(w, renderer, content, kingdom, town)
 			case .Works:
-				UIDrawConstructionsTab(w, renderer, panel, kingdom, town)
+				UIDrawConstructionsTab(w, renderer, content, kingdom, town)
 			case .Eras:
-				UIDrawErasTab(w, renderer, panel, kingdom, town)
+				UIDrawErasTab(w, renderer, content, kingdom, town)
 			}
 		}
 	}
@@ -2389,11 +2552,11 @@ UIDrawUnitEffectTooltip :: proc(mouse: rl.Vector2, effect: UnitEffects) {
 	title := UIUnitEffectName(effect)
 	body := UIUnitEffectText(effect)
 	titleWidth := rl.MeasureTextEx(UIFont(), title, UI_TEXT_SIZE, 1).x
-	bodyWidth := rl.MeasureTextEx(UIFont(), body, UI_TEXT_SIZE, 1).x
 	padding: f32 = 8
 	lineHeight := UIHudLineHeight()
-	width := max(titleWidth, bodyWidth)+padding*2
-	height := lineHeight*2+padding*2+4
+	width := clamp(titleWidth+padding*2, 220, 360)
+	bodyLayout := UIFitWrappedText(body, width-2*padding, UI_DESC_MAX_LINES, 16, 12)
+	height := lineHeight+UI_DESC_GAP+bodyLayout.height+padding*2
 
 	x := mouse.x+16
 	y := mouse.y+16
@@ -2405,7 +2568,7 @@ UIDrawUnitEffectTooltip :: proc(mouse: rl.Vector2, effect: UnitEffects) {
 	rl.DrawRectangleRec(rl.Rectangle{x, y, width, height}, UI_COLOR_BG)
 	rl.DrawRectangleLinesEx(rl.Rectangle{x, y, width, height}, 1, UI_COLOR_GOLD)
 	UIText(title, x+padding, y+padding, UI_COLOR_GOLD)
-	UIText(body, x+padding, y+padding+lineHeight, UI_COLOR_TEXT)
+	UIDrawWrappedText(body, bodyLayout, x+padding, y+padding+lineHeight+UI_DESC_GAP, UI_COLOR_TEXT)
 }
 
 UIDrawAegisBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
@@ -2699,7 +2862,8 @@ UIEraReward :: struct {
 
 UIDrawEraRewardTooltip :: proc(item: UIEraReward, mouse: rl.Vector2) {
 	width: f32 = 330
-	height: f32 = 66
+	desc := UIFitWrappedText(item.description, width-20, UI_DESC_MAX_LINES, 13, 10)
+	height := 38+desc.height+8
 	x := clamp(mouse.x+16, UI_MARGIN, f32(rl.GetScreenWidth())-width-UI_MARGIN)
 	y := clamp(mouse.y+16, UI_MARGIN, f32(rl.GetScreenHeight())-height-UI_MARGIN)
 	box := rl.Rectangle{x, y, width, height}
@@ -2710,7 +2874,7 @@ UIDrawEraRewardTooltip :: proc(item: UIEraReward, mouse: rl.Vector2) {
 		rl.DrawTexturePro(item.texture, source, rl.Rectangle{x+10, y+10, 20, 20}, rl.Vector2{0, 0}, 0, rl.WHITE)
 	}
 	rl.DrawTextEx(UIFont(), item.name, rl.Vector2{x+38, y+9}, 15, 1, UI_COLOR_GOLD)
-	rl.DrawTextEx(UIFont(), item.description, rl.Vector2{x+10, y+38}, 13, 1, UI_COLOR_TEXT)
+	UIDrawWrappedText(item.description, desc, x+10, y+38, UI_COLOR_TEXT)
 }
 
 UIDrawEraRewards :: proc(renderer: ^WorldRenderer, row: rl.Rectangle, faction: int, option: MilestoneOption) {
@@ -2735,13 +2899,13 @@ UIDrawEraRewards :: proc(renderer: ^WorldRenderer, row: rl.Rectangle, faction: i
 	hovered := -1
 	x := row.x+48
 	right := row.x+row.width-8
-	y := row.y+42
+	y := row.y+22
 	for i in 0..<count {
-		nameWidth := rl.MeasureTextEx(UIFont(), items[i].name, 11, 1).x
+		nameWidth := rl.MeasureTextEx(UISmallFont(), items[i].name, 12, 1).x
 		itemWidth := 14+4+nameWidth
 		if x+itemWidth > right {
 			more := fmt.ctprintf("+%d", count-i)
-			rl.DrawTextEx(UIFont(), more, rl.Vector2{x, y+1}, 11, 1, UI_COLOR_DIM)
+			rl.DrawTextEx(UISmallFont(), more, rl.Vector2{x, y+1}, 12, 1, UI_COLOR_DIM)
 			break
 		}
 		chip := rl.Rectangle{x-3, y-2, itemWidth+6, 18}
@@ -2760,7 +2924,7 @@ UIDrawEraRewards :: proc(renderer: ^WorldRenderer, row: rl.Rectangle, faction: i
 				rl.WHITE,
 			)
 		}
-		rl.DrawTextEx(UIFont(), items[i].name, rl.Vector2{x+18, y+1}, 11, 1, UI_COLOR_DIM)
+		rl.DrawTextEx(UISmallFont(), items[i].name, rl.Vector2{x+18, y+1}, 12, 1, UI_COLOR_DIM)
 		x += itemWidth+10
 	}
 
@@ -2772,17 +2936,9 @@ UIDrawErasTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, 
 	t := &w.kingdoms[kingdom].towns[town]
 	top := panel.y+UI_ROWS_TOP
 
-	UIText("MILESTONE REWARDS", panel.x+UI_PAD, top, UI_COLOR_DIM)
-	UITextRight(
-		fmt.ctprintf("%d / %d chosen", t.milestonesChosen, TOWN_MILESTONE_TIER_COUNT),
-		panel.x+panel.width-UI_PAD,
-		top,
-		UI_COLOR_DIM,
-	)
-
 	faction := FactionSpriteIndex(kingdom)
 	for tier in 0..<TOWN_MILESTONE_TIER_COUNT {
-		rowY := top+UI_SECTION_HEADER+f32(tier)*(UI_ERAS_ROW_H+UI_ERAS_ROW_GAP)
+		rowY := top+f32(tier)*(UI_ERAS_ROW_H+UI_ERAS_ROW_GAP)
 		row := rl.Rectangle{
 			panel.x+UI_PAD,
 			rowY,
@@ -2812,18 +2968,10 @@ UIDrawErasTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, 
 			rl.DrawTextEx(
 				UITitleFont(),
 				UITownPathName(option.path),
-				rl.Vector2{row.x+48, row.y+4},
+				rl.Vector2{row.x+48, row.y+3},
 				16,
 				1,
 				UI_COLOR_GOLD,
-			)
-			rl.DrawTextEx(
-				UIFont(),
-				UITownPathDescription(option.path),
-				rl.Vector2{row.x+48, row.y+23},
-				12,
-				1,
-				UI_COLOR_TEXT,
 			)
 			UIDrawEraRewards(renderer, row, faction, option)
 		} else {
@@ -2848,12 +2996,11 @@ UIDrawErasTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, 
 			description: cstring
 			if pending {
 				title = "CHOOSE A PATH"
-				description = "A milestone reward is waiting to be chosen."
+				description = "A reward is waiting."
 			} else if tier == t.milestonesEarned {
 				description = fmt.ctprintf(
-					"Reach %d citizens.  %d now.",
+					"Reach %d citizens.",
 					TOWN_ERAS[tier+1].threshold,
-					t.citizens,
 				)
 			} else {
 				description = fmt.ctprintf("Reach %d citizens to unlock.", TOWN_ERAS[tier+1].threshold)
@@ -2861,15 +3008,15 @@ UIDrawErasTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, 
 			rl.DrawTextEx(
 				UITitleFont(),
 				title,
-				rl.Vector2{row.x+48, row.y+4},
+				rl.Vector2{row.x+48, row.y+3},
 				16,
 				1,
 				pending ? UI_COLOR_GOLD : UI_COLOR_DISABLED_TEXT,
 			)
 			rl.DrawTextEx(
-				UIFont(),
+				UISmallFont(),
 				description,
-				rl.Vector2{row.x+48, row.y+23},
+				rl.Vector2{row.x+48, row.y+20},
 				12,
 				1,
 				pending ? UI_COLOR_TEXT : UI_COLOR_DIM,
@@ -2877,12 +3024,12 @@ UIDrawErasTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle, 
 		}
 
 		eraText := fmt.ctprintf("ERA %s", UIEraNumeral(tier))
-		eraWidth := rl.MeasureTextEx(UIFont(), eraText, 11, 1).x
+		eraWidth := rl.MeasureTextEx(UISmallFont(), eraText, 12, 1).x
 		rl.DrawTextEx(
-			UIFont(),
+			UISmallFont(),
 			eraText,
 			rl.Vector2{row.x+row.width-8-eraWidth, row.y+6},
-			11,
+			12,
 			1,
 			chosen || pending ? UI_COLOR_GOLD : UI_COLOR_DIM,
 		)
@@ -3872,7 +4019,30 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 		status = fmt.ctprintf("Next ready in %ds  -  %d built", int(math.ceil(next)), total)
 	}
 
-	height: f32 = 148
+	detail: cstring
+	if kind == .Blockade {
+		detail = "Blockades for 90s, then a 180s cooldown."
+	} else if OrderDuration(kind) > 0 {
+		detail = fmt.ctprintf(
+			"Active for %ds, then %ds cooldown.",
+			int(OrderDuration(kind)),
+			int(OrderCooldownSeconds(kind)),
+		)
+	} else {
+		detail = fmt.ctprintf("Cooldown %ds.", int(OrderCooldownSeconds(kind)))
+	}
+
+	desc := UIFitWrappedText(
+		OrderDescription(kind),
+		UI_ORDER_TOOLTIP_W-2*UI_PAD,
+		UI_DESC_MAX_LINES,
+		UI_DESC_TEXT_SIZE,
+		UI_DESC_TEXT_MIN_SIZE,
+	)
+	lineHeight := UIHudLineHeight()
+	bodyCount := 3
+	if OrderWardCost(kind) > 0 do bodyCount += 1
+	height := 34+desc.height+UI_DESC_GAP+f32(bodyCount)*lineHeight+8
 	x := clamp(rect.x-UI_ORDER_TOOLTIP_W-12, UI_MARGIN, f32(rl.GetScreenWidth())-UI_ORDER_TOOLTIP_W-UI_MARGIN)
 	y := clamp(rect.y, UI_MARGIN, f32(rl.GetScreenHeight())-height-UI_MARGIN)
 	box := rl.Rectangle{x, y, UI_ORDER_TOOLTIP_W, height}
@@ -3884,26 +4054,14 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 		UI_COLOR_BORDER_INNER,
 	)
 	UIText(title, box.x+UI_PAD, box.y+8, UI_COLOR_GOLD)
-	UIText(OrderDescription(kind), box.x+UI_PAD, box.y+34, UI_COLOR_TEXT)
-	UIText(status, box.x+UI_PAD, box.y+58, warning > 0 ? UIOrderColor(kind) : active > 0 ? UI_COLOR_ATTACK : UI_COLOR_DIM)
-	if kind == .Blockade {
-		UIText("Blockades for 90s, then a 180s cooldown.", box.x+UI_PAD, box.y+80, UI_COLOR_DIM)
-	} else if OrderDuration(kind) > 0 {
-		UIText(
-			fmt.ctprintf("Active for %ds, then %ds cooldown.", int(OrderDuration(kind)), int(OrderCooldownSeconds(kind))),
-			box.x+UI_PAD,
-			box.y+80,
-			UI_COLOR_DIM,
-		)
-	} else {
-		UIText(
-			fmt.ctprintf("Cooldown %ds.", int(OrderCooldownSeconds(kind))),
-			box.x+UI_PAD,
-			box.y+80,
-			UI_COLOR_DIM,
-		)
-	}
-	UIText("Uses the nearest ready source.", box.x+UI_PAD, box.y+102, UI_COLOR_DIM)
+	UIDrawWrappedText(OrderDescription(kind), desc, box.x+UI_PAD, box.y+34, UI_COLOR_TEXT)
+	lineY := box.y+34+desc.height+UI_DESC_GAP
+	UIText(status, box.x+UI_PAD, lineY, warning > 0 ? UIOrderColor(kind) : active > 0 ? UI_COLOR_ATTACK : UI_COLOR_DIM)
+	lineY += lineHeight
+	UIText(detail, box.x+UI_PAD, lineY, UI_COLOR_DIM)
+	lineY += lineHeight
+	UIText("Uses the nearest ready source.", box.x+UI_PAD, lineY, UI_COLOR_DIM)
+	lineY += lineHeight
 	if OrderWardCost(kind) > 0 {
 		UIText(
 			fmt.ctprintf(
@@ -3911,7 +4069,7 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 				int(TOWN_AEGIS_MAX_MITIGATION*100),
 			),
 			box.x+UI_PAD,
-			box.y+124,
+			lineY,
 			UI_COLOR_DEFEND,
 		)
 	}
@@ -4510,9 +4668,12 @@ UIDrawCrownTooltip :: proc(renderer: ^WorldRenderer, tech: CrownTech, mouse: rl.
 	name := CrownTechName(tech)
 	description := CrownTechDescription(tech)
 	nameWidth := rl.MeasureTextEx(UIFont(), name, UI_CROWN_NAME_SIZE, 1).x
-	descriptionWidth := rl.MeasureTextEx(UIFont(), description, 15, 1).x
-	tooltipWidth := clamp(max(nameWidth+52+86, descriptionWidth+24), 280, 520)
-	tooltipHeight: f32 = 78
+	tooltipWidth := clamp(max(nameWidth+52+86, 360), 280, 520)
+	nameSpace := tooltipWidth-52-86
+	nameSize := UI_CROWN_NAME_SIZE
+	if nameWidth > nameSpace do nameSize = max(11, nameSize*nameSpace/nameWidth)
+	desc := UIFitWrappedText(description, tooltipWidth-24, UI_DESC_MAX_LINES, 15, 10)
+	tooltipHeight := 48+desc.height+10
 	tooltipX := clamp(mouse.x+18, UI_MARGIN, f32(rl.GetScreenWidth())-tooltipWidth-UI_MARGIN)
 	tooltipY := clamp(mouse.y+18, UI_MARGIN, f32(rl.GetScreenHeight())-tooltipHeight-UI_MARGIN)
 	tooltip := rl.Rectangle{tooltipX, tooltipY, tooltipWidth, tooltipHeight}
@@ -4527,7 +4688,7 @@ UIDrawCrownTooltip :: proc(renderer: ^WorldRenderer, tech: CrownTech, mouse: rl.
 		UIFont(),
 		name,
 		rl.Vector2{tooltip.x+52, tooltip.y+10},
-		UI_CROWN_NAME_SIZE,
+		nameSize,
 		1,
 		UI_COLOR_GOLD,
 	)
@@ -4549,14 +4710,7 @@ UIDrawCrownTooltip :: proc(renderer: ^WorldRenderer, tech: CrownTech, mouse: rl.
 		rl.WHITE,
 	)
 
-	rl.DrawTextEx(
-		UIFont(),
-		description,
-		rl.Vector2{tooltip.x+12, tooltip.y+48},
-		15,
-		1,
-		UI_COLOR_TEXT,
-	)
+	UIDrawWrappedText(description, desc, tooltip.x+12, tooltip.y+48, UI_COLOR_TEXT)
 }
 
 UIDrawSurveyOverlay :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
@@ -5124,7 +5278,9 @@ UIDrawTileInfo :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 	padding: f32 = 8
 	width: f32 = 360
 	bodyStep: f32 = 22
+	scarDesc := UIFitWrappedText(TerrainScarDescription(tile.scar), width-2*padding, 2, 16, 12)
 	height := padding*2+24+bodyStep*2
+	if hasScar do height = padding*2+24+bodyStep+scarDesc.height
 
 	screenWidth := f32(rl.GetScreenWidth())
 	screenHeight := f32(rl.GetScreenHeight())
@@ -5152,7 +5308,7 @@ UIDrawTileInfo :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 			int(math.ceil(tile.scarTimer)),
 		)
 		UIText(label, box.x+padding, bodyY, scarColor)
-		UIText(TerrainScarDescription(tile.scar), box.x+padding, bodyY+bodyStep, UI_COLOR_DIM)
+		UIDrawWrappedText(TerrainScarDescription(tile.scar), scarDesc, box.x+padding, bodyY+bodyStep, UI_COLOR_DIM)
 	} else {
 		def := TILE_DEFS[tile.type]
 		UIText(

@@ -944,17 +944,17 @@ TerrainScarDescription :: proc(scar: TerrainScar) -> cstring {
 	case .None:
 		return ""
 	case .Scorched:
-		return "Burned ground; forest regrows."
+		return "Ash where the forest stood. Green returns, but slowly, and not the same."
 	case .Enriched:
-		return "Flood silt; richer soil for good."
+		return "Silt left by the flood: the soil is richer, and stays so."
 	case .Parched:
-		return "Dried by drought; rain restores it."
+		return "Thirst cracked the ground. The rain remembers how to heal it."
 	case .Frozen:
-		return "Frozen over; thaws with the cold."
+		return "The cold holds the land in glass until warmth loosens its grip."
 	case .Volcanic:
-		return "Lava; lethal until it cools to ash."
+		return "New stone still glowing. It kills until it cools into ash."
 	case .Cleft:
-		return "Tremor cracks; settles into hills."
+		return "The tremor left a wound. In time its edges settle into hills."
 	}
 	unreachable()
 }

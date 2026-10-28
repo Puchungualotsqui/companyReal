@@ -96,21 +96,21 @@ OrderName :: proc(kind: OrderKind) -> cstring {
 OrderDescription :: proc(kind: OrderKind) -> cstring {
 	switch kind {
 	case .GiantMortar:
-		return "Bombards a chosen area for 10 seconds."
+		return "For ten breaths the sky falls, and the chosen ground is no longer ground."
 	case .Blockade:
-		return "Cuts an enemy coastal town's food, water and growth."
+		return "No sail, no grain, no water. A coastal town is slowly squeezed into silence."
 	case .GlacierShell:
-		return "Freezes a wide area into ice that melts unevenly."
+		return "The air turns to glass. For a while, everything beneath it belongs to winter."
 	case .SiegeTremor:
-		return "Shakes the ground, shattering walls and towers."
+		return "The land remembers old fractures. Walls and towers forget why they stood."
 	case .Starfall:
-		return "Calls a meteor down on a chosen spot."
+		return "A star is asked to come down. It does not stop to choose what it strikes."
 	case .WaterBomber:
-		return "Floods an area. Land-bound units drown."
+		return "The river is lifted and dropped. Those who cannot swim are returned to it."
 	case .MiasmaBarrage:
-		return "Leaves a lingering cloud that poisons units."
+		return "A green breath settles and stays. It does not care whose lungs it finds."
 	case .NapalmBarrage:
-		return "Rains burning shells across a wide area."
+		return "Fire in jars, sown from above. The earth keeps the heat long after."
 	}
 	unreachable()
 }
