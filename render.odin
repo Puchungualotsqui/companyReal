@@ -644,11 +644,20 @@ WorldRenderEnvironmentEvent :: proc(w: ^World, camera: rl.Camera2D) {
 DECORATION_MIN_ZOOM : f32 : 4
 
 // Position used for drawing and picking, interpolated between simulation ticks.
+// Units update in slices, so the interpolation window covers the whole slice
+// cycle and the previous position intentionally stays put on skipped ticks.
 UnitRenderPosition :: proc(w: ^World, unitSlot: int) -> (x, y: f32) {
 	x = w.units.x[unitSlot]
 	y = w.units.y[unitSlot]
-	alpha := clamp(w.simulationAccumulator/TOWN_SIMULATION_STEP, 0, 1)
-	if alpha <= 0 do return
+	tick := int(w.simulationTime/TOWN_SIMULATION_STEP)
+	phase := (tick%UNIT_UPDATE_SLICES-UnitUpdateSliceOf(unitSlot)+UNIT_UPDATE_SLICES) %
+		UNIT_UPDATE_SLICES
+	alpha := clamp(
+		(f32(phase)+clamp(w.simulationAccumulator/TOWN_SIMULATION_STEP, 0, 1)) /
+			f32(UNIT_UPDATE_SLICES),
+		0,
+		1,
+	)
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
 	x = WorldWrapPosition(

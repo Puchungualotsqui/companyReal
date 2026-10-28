@@ -21,6 +21,7 @@ main :: proc() {
 	crazyWorld := CommandLineFlagPresent(CRAZY_WORLD_FLAG)
 	if crazyWorld {
 		app.crazyWorld = true
+		app.config.seed = CRAZY_WORLD_SEED
 		app.config.kingdomCount = APP_MAX_KINGDOMS
 		app.config.mapSizeIndex = len(APP_MAP_SIZES)-1
 		app.config.spectator = false

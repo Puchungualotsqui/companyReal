@@ -215,6 +215,8 @@ TOWN_CONSTRUCTION_STARTS_PER_TICK :: 1
 // Towns take turns planning so a large realm does not run site searches for
 // every town in the same simulation step.
 TOWN_CONSTRUCTION_ATTEMPT_INTERVAL :: 4
+// A town that cannot place anything waits before sampling the whole area again.
+TOWN_CONSTRUCTION_FAIL_COOLDOWN :: 2.0
 
 TownDistrict :: struct {
 	x, y:   int,
@@ -231,8 +233,13 @@ Town :: struct {
 	growthCooldown, growthInterval, growthRate, growthSpeed: f32,
 	growthBatch, growthBatchBonus, growthPending: int,
 	constructionProgress: f32,
+	constructionFailUntil: f32, // Skip site searches until this time
 	constructions: [TOWN_CONSTRUCTION_CAPACITY]ConstructionSite,
 	builders, waterCollectors, farmers, villagers: int,
+	buildersBySlice:         [UNIT_UPDATE_SLICES]int, // Last sample per unit slice
+	waterCollectorsBySlice:  [UNIT_UPDATE_SLICES]int,
+	farmersBySlice:          [UNIT_UPDATE_SLICES]int,
+	villagersBySlice:        [UNIT_UPDATE_SLICES]int,
 	homes, farmlands: int,
 	farmlandOutput: f32,
 	foodPotential, waterPotential: f32,

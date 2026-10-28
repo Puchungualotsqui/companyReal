@@ -10,6 +10,14 @@ FLOW_FIELD_MAX_STEPS :: 8
 // the world height for every visited tile.
 FLOW_QUEUE_SHIFT :: 16
 FLOW_QUEUE_MASK :: (1 << FLOW_QUEUE_SHIFT)-1
+// Tiles (or BFS pops) a single field may advance per simulation tick. A field
+// is shared by every unit marching to the same town, so spreading its build
+// over several ticks removes the world-sized one-frame stall.
+FLOW_FIELD_BUILD_BUDGET :: 262_144
+// Completed fields keep serving for a while even if the world revision moved.
+// This guarantees a build can finish and stops constant invalidation during
+// battles. Unit movement validates each step, so slightly stale fields are safe.
+FLOW_FIELD_REFRESH_SECONDS :: 8.0
 
 // Path tiles are cheap to route through and slightly faster to walk on.
 PATH_SPEED_MULTIPLIER :: 1.25
@@ -41,10 +49,25 @@ FlowField :: struct {
 	unitKingdom: int,
 	hallX, hallY: int,
 	walkWater: bool,
-	pathRevision: u64,
 	direction: []FlowDirection,
 	valid: bool,
 	stamp: u64,
+	builtAt: f32, // Simulation time the field last completed
+
+	// Resumable build state. The walk mask and BFS advance a bounded number
+	// of tiles per tick instead of blocking a whole frame.
+	building: bool,      // Field is still being built
+	queued: bool,        // Already present in the world build queue
+	buildMask: bool,     // Mask phase precedes the BFS phase
+	maskIndex: int,      // Linear progress through the walk mask
+	maskX, maskY: int,   // Cursor for the sequential mask scan
+	buildHead: int,      // BFS queue head
+	buildTail: int,      // BFS queue tail
+	seeded: bool,        // Source ring has been enqueued
+	maskKingdom: int,    // Kingdom the mask was built for
+	maskWater: bool,     // Mask includes deep water
+	maskRevision: u64,   // pathRevision the mask was built for
+	walkMask: []u8,      // 1 when a tile is walkable
 }
 
 WorldNavigationInit :: proc(w: ^World) -> bool {
@@ -58,8 +81,7 @@ WorldNavigationInit :: proc(w: ^World) -> bool {
 	w.navigationQueue = make([]int, nodeCount)
 	w.navigationHeapPos = make([]int, nodeCount)
 	w.navigationStamp = make([]u32, nodeCount)
-	w.navigationWalkable = make([]u8, nodeCount)
-	w.navigationWalkableKingdom = -1
+	w.flowQueue = make([]int, nodeCount)
 	return true
 }
 
@@ -72,9 +94,10 @@ WorldNavigationDeinit :: proc(w: ^World) {
 	delete(w.navigationQueue)
 	delete(w.navigationHeapPos)
 	delete(w.navigationStamp)
-	delete(w.navigationWalkable)
+	delete(w.flowQueue)
 	for &field in w.flowFields {
 		delete(field.direction)
+		delete(field.walkMask)
 	}
 }
 
@@ -486,7 +509,9 @@ UnitFleeEnemy :: proc(w: ^World, unitSlot, enemySlot: int, deltaTime: f32) -> bo
 	count := 1+UnitCollectNearbyEnemies(w, unitSlot, FLEE_THREAT_RADIUS, threats[1:])
 	enemies := threats[:count]
 	clearance := UnitFleeClearance(w, unit.x, unit.y, enemies)
-	replan := !unit.pathReady || unit.pathRevision != w.pathRevision
+	// Do not replan just because the world changed somewhere else; the route
+	// checks below detect an actual blockage or a worse local escape.
+	replan := !unit.pathReady
 	if !replan && !unit.pathFound {
 		replan = unit.pathTargetX != int(WorldWrapPosition(w.units.x[enemySlot], f32(w.maxX))) ||
 			unit.pathTargetY != int(WorldWrapPosition(w.units.y[enemySlot], f32(w.maxY)))
@@ -530,29 +555,45 @@ UnitFleeEnemy :: proc(w: ^World, unitSlot, enemySlot: int, deltaTime: f32) -> bo
 // Every warrior heading to that town follows the same field instead of
 // running its own A* search, so pathing cost is independent of unit count.
 // Knights and giants share walkability, so one field serves both.
-FlowFieldGet :: proc(w: ^World, kingdom, town: int, unitType: UnitType, unitKingdom: int) -> (^FlowField, bool) {
+FlowFieldGet :: proc(
+	w: ^World,
+	kingdom, town: int,
+	unitType: UnitType,
+	unitKingdom: int,
+) -> (field: ^FlowField, ready: bool) {
 	if !WorldTownExists(w, kingdom, town) do return nil, false
 	if TownHallSlot(w, kingdom, town) < 0 do return nil, false
 	hallX := w.kingdoms[kingdom].towns[town].x
 	hallY := w.kingdoms[kingdom].towns[town].y
-	walkWater := UnitValidTileType(unitType, .Ocean) || UnitCanCrossWater(w, unitType, unitKingdom)
+	walkWater := UnitValidTileType(unitType, .Ocean) ||
+		UnitCanCrossWater(w, unitType, unitKingdom)
 
 	slot := -1
 	for i in 0..<FLOW_FIELD_CAPACITY {
-		field := &w.flowFields[i]
-		if field.targetKingdom == kingdom && field.targetTown == town &&
-			field.hallX == hallX && field.hallY == hallY &&
-			field.walkWater == walkWater && field.unitKingdom == unitKingdom {
+		candidate := &w.flowFields[i]
+		if candidate.targetKingdom == kingdom && candidate.targetTown == town &&
+			candidate.hallX == hallX && candidate.hallY == hallY &&
+			candidate.walkWater == walkWater && candidate.unitKingdom == unitKingdom {
 			slot = i
 			break
 		}
 	}
-	if slot < 0 {
-		for i in 0..<FLOW_FIELD_CAPACITY {
-			if w.flowFields[i].targetKingdom < 0 {
-				slot = i
-				break
-			}
+	if slot >= 0 {
+		field = &w.flowFields[slot]
+		w.flowFieldStamp += 1
+		field.stamp = w.flowFieldStamp
+		if field.building do return field, false
+		if w.simulationTime-field.builtAt < FLOW_FIELD_REFRESH_SECONDS {
+			return field, field.valid
+		}
+		FlowFieldBegin(w, slot)
+		return field, false
+	}
+
+	for i in 0..<FLOW_FIELD_CAPACITY {
+		if w.flowFields[i].targetKingdom < 0 {
+			slot = i
+			break
 		}
 	}
 	if slot < 0 {
@@ -565,89 +606,79 @@ FlowFieldGet :: proc(w: ^World, kingdom, town: int, unitType: UnitType, unitKing
 		}
 	}
 
-	field := &w.flowFields[slot]
-	w.flowFieldStamp += 1
-	field.stamp = w.flowFieldStamp
-	if field.targetKingdom == kingdom && field.targetTown == town &&
-		field.hallX == hallX && field.hallY == hallY &&
-		field.walkWater == walkWater && field.unitKingdom == unitKingdom &&
-		field.pathRevision == w.pathRevision {
-		return field, field.valid
-	}
-
+	field = &w.flowFields[slot]
 	field.targetKingdom = kingdom
 	field.targetTown = town
 	field.unitKingdom = unitKingdom
 	field.hallX = hallX
 	field.hallY = hallY
 	field.walkWater = walkWater
-	field.pathRevision = w.pathRevision
-	field.valid = FlowFieldCompute(w, field)
-	return field, field.valid
+	w.flowFieldStamp += 1
+	field.stamp = w.flowFieldStamp
+	FlowFieldBegin(w, slot)
+	return field, false
 }
 
-// The mask depends on the kingdom (friendly walls and water tech) and on the
-// unit class (turtles cross all water). It is reused by every field built for
-// the same key until the world geometry changes, so the BFS only ever reads
-// one tightly packed byte per tile.
-FlowFieldWalkMask :: proc(w: ^World, kingdom: int, walkWater: bool) -> []u8 {
+FlowFieldMaskReady :: proc(w: ^World, field: ^FlowField) -> bool {
+	nodeCount := int(w.maxX)*int(w.maxY)
+	return len(field.walkMask) == nodeCount &&
+		field.maskKingdom == field.unitKingdom &&
+		field.maskWater == field.walkWater &&
+		field.maskRevision == w.pathRevision
+}
+
+// Starts or restarts a field build. The mask and BFS are advanced later by
+// FlowFieldBuildStep, at most one field per simulation tick.
+FlowFieldBegin :: proc(w: ^World, slot: int) {
+	field := &w.flowFields[slot]
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	nodeCount := worldWidth*worldHeight
-	if nodeCount <= 0 || len(w.navigationWalkable) != nodeCount do return nil
-	if w.navigationWalkableKingdom == kingdom &&
-		w.navigationWalkableWater == walkWater &&
-		w.navigationWalkableRevision == w.pathRevision {
-		return w.navigationWalkable
-	}
+	if nodeCount <= 0 || nodeCount > len(w.flowQueue) do return
+	if worldWidth > FLOW_QUEUE_MASK+1 || worldHeight > FLOW_QUEUE_MASK+1 do return
 
-	profileStamp := ProfilerBegin("Nav:WalkMask")
-	defer ProfilerEnd(profileStamp)
-	walkType: UnitType = Knight{}
-	if walkWater do walkType = Turtle{}
-	mask := w.navigationWalkable
-	index := 0
-	for x in 0..<worldWidth {
-		for y in 0..<worldHeight {
-			mask[index] = WorldTileWalkableAt(w, index, x, y, walkType, kingdom, true) ? 1 : 0
-			index += 1
-		}
-	}
-	w.navigationWalkableKingdom = kingdom
-	w.navigationWalkableWater = walkWater
-	w.navigationWalkableRevision = w.pathRevision
-	return mask
-}
-
-FlowFieldCompute :: proc(w: ^World, field: ^FlowField) -> bool {
-	profileStamp := ProfilerBegin("Nav:FlowField")
-	defer ProfilerEnd(profileStamp)
-	worldWidth := int(w.maxX)
-	worldHeight := int(w.maxY)
-	if worldWidth <= 0 || worldHeight <= 0 do return false
-
-	if worldWidth > FLOW_QUEUE_MASK+1 || worldHeight > FLOW_QUEUE_MASK+1 do return false
-	nodeCount := worldWidth*worldHeight
-	if nodeCount > len(w.navigationQueue) do return false
 	if len(field.direction) != nodeCount {
 		if field.direction != nil do delete(field.direction)
 		field.direction = make([]FlowDirection, nodeCount)
 	}
-	walkable := FlowFieldWalkMask(w, field.unitKingdom, field.walkWater)
-	if len(walkable) != nodeCount do return false
+	slice.zero(field.direction)
+	field.valid = false
+	field.building = true
+	field.seeded = false
+	field.buildHead = 0
+	field.buildTail = 0
+	field.buildMask = !FlowFieldMaskReady(w, field)
+	if field.buildMask {
+		if len(field.walkMask) != nodeCount {
+			if field.walkMask != nil do delete(field.walkMask)
+			field.walkMask = make([]u8, nodeCount)
+		}
+		field.maskIndex = 0
+		field.maskX = 0
+		field.maskY = 0
+	}
+	if !field.queued && w.flowBuildCount < FLOW_FIELD_CAPACITY {
+		queueIndex := (w.flowBuildHead+w.flowBuildCount)%FLOW_FIELD_CAPACITY
+		w.flowBuildQueue[queueIndex] = slot
+		w.flowBuildCount += 1
+		field.queued = true
+	}
+}
 
-	direction := field.direction
-	slice.zero(direction)
-	queue := w.navigationQueue
-	head, tail := 0, 0
-
+FlowFieldSeed :: proc(w: ^World, field: ^FlowField) -> bool {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
 	hallWidth, hallHeight := BuildingTileSize(TownHall{})
-	foundSource := false
+	walkable := field.walkMask
+	direction := field.direction
+	queue := w.flowQueue
+	tail := 0
 	for radius in 1..=4 {
 		ringMinX := field.hallX-radius+1
 		ringMaxX := field.hallX+hallWidth-1+radius-1
 		ringMinY := field.hallY-radius+1
 		ringMaxY := field.hallY+hallHeight-1+radius-1
+		found := false
 		for x in field.hallX-radius ..= field.hallX+hallWidth-1+radius {
 			for y in field.hallY-radius ..= field.hallY+hallHeight-1+radius {
 				if x >= ringMinX && x <= ringMaxX && y >= ringMinY && y <= ringMaxY {
@@ -660,17 +691,73 @@ FlowFieldCompute :: proc(w: ^World, field: ^FlowField) -> bool {
 				direction[index] = .None
 				queue[tail] = wrappedX<<FLOW_QUEUE_SHIFT|wrappedY
 				tail += 1
-				foundSource = true
+				found = true
 			}
 		}
-		if foundSource do break
+		if found do break
 	}
-	if !foundSource do return false
+	field.buildHead = 0
+	field.buildTail = tail
+	return tail > 0
+}
 
+// Advances the current build by at most budget tiles. Returns true once the
+// field is complete (reachable or provably unreachable).
+FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int) -> bool {
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return true
+
+	if field.buildMask {
+		stamp := ProfilerBegin("Nav:WalkMask")
+		mask := field.walkMask
+		walkType: UnitType = Knight{}
+		if field.walkWater do walkType = Turtle{}
+		x := field.maskX
+		y := field.maskY
+		index := field.maskIndex
+		for budget^ > 0 && x < worldWidth {
+			mask[index] =
+				WorldTileWalkableAt(w, index, x, y, walkType, field.unitKingdom, true) ? 1 : 0
+			budget^ -= 1
+			index += 1
+			y += 1
+			if y >= worldHeight {
+				y = 0
+				x += 1
+			}
+		}
+		field.maskX, field.maskY, field.maskIndex = x, y, index
+		ProfilerEnd(stamp)
+		if x < worldWidth do return false
+		field.maskKingdom = field.unitKingdom
+		field.maskWater = field.walkWater
+		field.maskRevision = w.pathRevision
+		field.buildMask = false
+	}
+
+	if !field.seeded {
+		if !FlowFieldSeed(w, field) {
+			field.valid = false
+			field.building = false
+			field.builtAt = w.simulationTime
+			return true
+		}
+		field.seeded = true
+	}
+
+	stamp := ProfilerBegin("Nav:FlowFieldBfs")
+	defer ProfilerEnd(stamp)
+	queue := w.flowQueue
+	head := field.buildHead
+	tail := field.buildTail
+	walkable := field.walkMask
+	direction := field.direction
 	// Queue entries pack x and y so the BFS never divides by the world height.
-	for head < tail {
+	for head < tail && budget^ > 0 {
 		entry := queue[head]
 		head += 1
+		budget^ -= 1
 		x := entry>>FLOW_QUEUE_SHIFT
 		y := entry&FLOW_QUEUE_MASK
 
@@ -703,7 +790,25 @@ FlowFieldCompute :: proc(w: ^World, field: ^FlowField) -> bool {
 			tail += 1
 		}
 	}
+	field.buildHead, field.buildTail = head, tail
+	if head < tail do return false
+	field.valid = true
+	field.building = false
+	field.builtAt = w.simulationTime
 	return true
+}
+
+WorldFlowFieldUpdate :: proc(w: ^World) {
+	if w.flowBuildCount <= 0 do return
+	slot := w.flowBuildQueue[w.flowBuildHead]
+	field := &w.flowFields[slot]
+	if field.building {
+		budget := FLOW_FIELD_BUILD_BUDGET
+		if !FlowFieldBuildStep(w, field, &budget) do return
+	}
+	field.queued = false
+	w.flowBuildHead = (w.flowBuildHead+1)%FLOW_FIELD_CAPACITY
+	w.flowBuildCount -= 1
 }
 
 UnitFollowFlowField :: proc(w: ^World, unitSlot: int, field: ^FlowField, deltaTime: f32) -> FlowFollowResult {

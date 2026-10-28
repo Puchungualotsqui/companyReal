@@ -803,15 +803,29 @@ UnitWarriorTravel :: proc(w: ^World, unitSlot, kingdomSlot, townSlot: int, delta
 
 	fieldStamp := ProfilerBegin("Warrior:TravelField")
 	defer ProfilerEnd(fieldStamp)
-	field, ok := FlowFieldGet(
+	field, ready := FlowFieldGet(
 		w,
 		kingdomSlot,
 		townSlot,
 		unit.type,
 		unit.kingdome,
 	)
-	if !ok do return .Unreachable
-	return UnitFollowFlowField(w, unitSlot, field, deltaTime)
+	if ready do return UnitFollowFlowField(w, unitSlot, field, deltaTime)
+	if field != nil && field.building {
+		// The shared field is built a little each tick. Walk straight toward the
+		// hall meanwhile instead of running an A* burst for every warrior.
+		speed := UnitMoveSpeed(w, unitSlot, UnitDefaultSpeed(unit.type))
+		reached, _, _ := UnitStepTowards(
+			w,
+			unitSlot,
+			f32(town.x+2)+0.5,
+			f32(town.y+2)+0.5,
+			speed*deltaTime,
+		)
+		if reached do return .Arrived
+		return .Travelling
+	}
+	return .Unreachable
 }
 
 UnitWarriorFarFromTown :: proc(w: ^World, unitSlot, kingdomSlot, townSlot: int, radius: int = WARRIOR_HOME_PATROL_RADIUS*2) -> bool {

@@ -246,12 +246,15 @@ ProfilerReport :: proc(w: ^World) {
 	rows := min(orderCount, PROFILER_REPORT_ROWS)
 	for row in 0..<rows {
 		entry := &profiler.entries[order[row]]
+		perCall := f64(0)
+		if entry.reportCalls > 0 do perCall = entry.reportTotal/f64(entry.reportCalls)*1000
 		fmt.sbprintfln(
 			&report,
-			"  %-24s avg=%.2fms  peak=%.2fms  calls/frame=%.1f",
+			"  %-24s avg=%.2fms  peak=%.2fms  per_call=%.3fms  calls/frame=%.2f",
 			entry.name,
 			entry.reportTotal/f64(frames)*1000,
 			entry.reportPeak*1000,
+			perCall,
 			f64(entry.reportCalls)/f64(frames),
 		)
 	}

@@ -5,6 +5,8 @@ import "core:math"
 // Debug stress world: every kingdom starts fully teched, with many towns, a
 // large mixed army and a dense spread of buildings. Launched with -crazy_world.
 CRAZY_WORLD_FLAG :: "-crazy_world"
+// Fixed seed so profiling runs are comparable.
+CRAZY_WORLD_SEED :: 0xC0FFEE_1234
 CRAZY_WORLD_TOWNS_PER_KINGDOM :: 10
 CRAZY_WORLD_TOWN_MIN_RADIUS :: 24
 CRAZY_WORLD_TOWN_MAX_RADIUS :: 200

@@ -61,7 +61,7 @@ UnitUpdateVillager :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	kingdomSlot := w.units[unitSlot].kingdome
 	townSlot := w.units[unitSlot].town
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return
-	w.kingdoms[kingdomSlot].towns[townSlot].villagers += 1
+	w.kingdoms[kingdomSlot].towns[townSlot].villagersBySlice[UnitUpdateSlice(w)] += 1
 	if UnitUpdatePacificSleep(w, unitSlot, deltaTime) do return
 	if UnitTryExtinguish(w, unitSlot, deltaTime) do return
 	UnitUpdateRoaming(w, unitSlot, deltaTime)
@@ -189,7 +189,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	// Builders gathering wood are still available to switch to a construction
 	// site, so the town plans with the whole awake builder workforce.
-	town.builders += 1
+	town.buildersBySlice[UnitUpdateSlice(w)] += 1
 	if state^ == .Roaming && builder.carriedResource > 0 {
 		if x, y, found := UnitFindTownReturnPoint(w, kingdomSlot, townSlot); found {
 			w.units[unitSlot].pathTargetX = x
@@ -361,7 +361,7 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	state := &unit.state.(StatePacific)
 
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return
-	w.kingdoms[kingdomSlot].towns[townSlot].waterCollectors += 1
+	w.kingdoms[kingdomSlot].towns[townSlot].waterCollectorsBySlice[UnitUpdateSlice(w)] += 1
 	if UnitUpdatePacificSleep(w, unitSlot, deltaTime) do return
 	if UnitTryExtinguish(w, unitSlot, deltaTime) do return
 
@@ -400,7 +400,14 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	case .Roaming:
 		UnitUpdateRoaming(w, unitSlot, deltaTime)
 	case .Traveling:
-		if UnitMove(w, unitSlot, unit.pathTargetX, unit.pathTargetY, deltaTime) {
+		if UnitMove(
+			w,
+			unitSlot,
+			unit.pathTargetX,
+			unit.pathTargetY,
+			deltaTime,
+			CIVILIAN_PATH_EXPANSIONS,
+		) {
 			state^ = .Working
 			unit.pathReady = false
 			w.units[unitSlot].cooldown = f32(WORLD_DAY_LENGTH_SECONDS)/48
@@ -424,7 +431,14 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			}
 		}
 	case .Returning:
-		reached := UnitMove(w, unitSlot, unit.pathTargetX, unit.pathTargetY, deltaTime)
+		reached := UnitMove(
+			w,
+			unitSlot,
+			unit.pathTargetX,
+			unit.pathTargetY,
+			deltaTime,
+			CIVILIAN_PATH_EXPANSIONS,
+		)
 		if reached || !w.units[unitSlot].pathFound {
 			collector.carriedResource = 0
 			collector.taskSequence += 1
@@ -446,7 +460,7 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		farmer.workDay = w.dayNumber
 		farmer.workedToday = false
 	}
-	w.kingdoms[kingdomSlot].towns[townSlot].farmers += 1
+	w.kingdoms[kingdomSlot].towns[townSlot].farmersBySlice[UnitUpdateSlice(w)] += 1
 	if UnitUpdatePacificSleep(w, unitSlot, deltaTime) do return
 	if UnitTryExtinguish(w, unitSlot, deltaTime) do return
 
@@ -1007,6 +1021,13 @@ UnitFindResourceTarget :: proc(w: ^World, unitSlot, taskSequence: int) -> (int, 
 // is not itself a delivery zone: accepting it lets collectors stay at the shore.
 // An absent target can require O(world tiles) work; callers must delay retries.
 // Stamps and the queue are shared with A*, with no new allocation.
+// The search fans out from the unit, so an unlucky collector far from water
+// can otherwise walk the whole landmass before giving up. Retry later instead.
+COLLECTOR_SEARCH_MAX_EXPANSIONS :: 4096
+// Civilian errands are local. A capped search keeps one trapped unit from
+// running a world-sized A* while still covering any normal town approach.
+CIVILIAN_PATH_EXPANSIONS :: 8192
+
 UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomSlot := -1, townSlot := -1) -> (int, int, bool) {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
@@ -1048,7 +1069,9 @@ UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomS
 	w.navigationQueue[0] = start
 	head, tail := 0, 1
 	directionOffset := WorldWrapCoordinate(unitSlot+taskSequence, 4)
-	for head < tail {
+	expansions := 0
+	for head < tail && expansions < COLLECTOR_SEARCH_MAX_EXPANSIONS {
+		expansions += 1
 		index := w.navigationQueue[head]
 		head += 1
 		x, y := index/worldHeight, index%worldHeight

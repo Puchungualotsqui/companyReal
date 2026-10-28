@@ -6,6 +6,10 @@ import rl "vendor:raylib"
 TOWN_SIMULATION_STEP :: 0.25
 // A long render/load frame must not trigger a burst of catch-up ticks.
 WORLD_MAX_FRAME_DELTA :: 0.25
+// Units update in alternating slices. Each slice receives dt*UNIT_UPDATE_SLICES
+// so speeds and cooldowns stay the same while per-tick CPU drops by the same
+// factor. Rendering interpolates across the full slice window.
+UNIT_UPDATE_SLICES :: 2
 TOWN_ALARM_AREA_FACTOR :: 1.25
 WORLD_DAY_LENGTH_SECONDS :: 7*60.0
 
@@ -1161,6 +1165,9 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 		stamp = ProfilerBegin("Sim:Environment")
 		WorldEnvironmentUpdate(w, TOWN_SIMULATION_STEP)
 		ProfilerEnd(stamp)
+		stamp = ProfilerBegin("Sim:FlowFields")
+		WorldFlowFieldUpdate(w)
+		ProfilerEnd(stamp)
 		stamp = ProfilerBegin("Sim:Units")
 		WorldUnitUpdate(w, TOWN_SIMULATION_STEP)
 		ProfilerEnd(stamp)
@@ -1280,6 +1287,16 @@ TownHasNearbyEnemy :: proc(w: ^World, kingdom, townSlot: int) -> bool {
 	return false
 }
 
+UnitUpdateSlice :: proc(w: ^World) -> int {
+	return int(w.simulationTime/TOWN_SIMULATION_STEP)%UNIT_UPDATE_SLICES
+}
+
+// Hash the slot so contiguous spawn batches of one unit kind do not all land
+// in the same slice.
+UnitUpdateSliceOf :: proc(unitSlot: int) -> int {
+	return int((u64(unitSlot)*0x9E3779B97F4A7C15)>>32)%UNIT_UPDATE_SLICES
+}
+
 WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 	stamp := ProfilerBegin("Unit:Housing")
 	WorldHousingUpdate(w)
@@ -1287,27 +1304,27 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 	stamp = ProfilerBegin("Unit:Alarm")
 	WorldTownAlarmUpdate(w)
 	ProfilerEnd(stamp)
-	stamp = ProfilerBegin("Unit:Loop")
-	for unitSlot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unitSlot] do continue
-		w.units.previousX[unitSlot] = w.units.x[unitSlot]
-		w.units.previousY[unitSlot] = w.units.y[unitSlot]
-	}
 
+	slice := UnitUpdateSlice(w)
+	unitDelta := deltaTime*f32(UNIT_UPDATE_SLICES)
+	stamp = ProfilerBegin("Unit:Loop")
 	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdomSlot] do continue
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			town.builders = 0
-			town.waterCollectors = 0
-			town.farmers = 0
-			town.villagers = 0
+			town.buildersBySlice[slice] = 0
+			town.waterCollectorsBySlice[slice] = 0
+			town.farmersBySlice[slice] = 0
+			town.villagersBySlice[slice] = 0
 		}
 	}
 
 	for unitSlot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] do continue
+		if UnitUpdateSliceOf(unitSlot) != slice do continue
+		w.units.previousX[unitSlot] = w.units.x[unitSlot]
+		w.units.previousY[unitSlot] = w.units.y[unitSlot]
 		unitKind := UnitKindOf(w.units[unitSlot].type)
 		profileIndex := -1
 		if profiler.enabled do profileIndex = profiler.unitKindIndex[unitKind]
@@ -1317,29 +1334,29 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		converting := false
 		if _, isConverting := w.units[unitSlot].state.(StateConverting); isConverting {
 			converting = true
-			if !UnitUpdatePacificSafety(w, unitSlot, deltaTime) {
-				UnitUpdateConverting(w, unitSlot, deltaTime)
+			if !UnitUpdatePacificSafety(w, unitSlot, unitDelta) {
+				UnitUpdateConverting(w, unitSlot, unitDelta)
 			}
 		}
 		if !converting {
 			switch _ in w.units[unitSlot].type {
 			case Villager:
-				UnitUpdateVillager(w, unitSlot, deltaTime)
+				UnitUpdateVillager(w, unitSlot, unitDelta)
 			case Builder:
-				UnitUpdateBuilder(w, unitSlot, deltaTime)
+				UnitUpdateBuilder(w, unitSlot, unitDelta)
 			case CombatBuilder:
-				CombatBuilderUpdate(w, unitSlot, deltaTime)
+				CombatBuilderUpdate(w, unitSlot, unitDelta)
 			case WaterCollector:
-				UnitUpdateWaterCollector(w, unitSlot, deltaTime)
+				UnitUpdateWaterCollector(w, unitSlot, unitDelta)
 			case Farmer:
-				UnitUpdateFarmer(w, unitSlot, deltaTime)
+				UnitUpdateFarmer(w, unitSlot, unitDelta)
 			case Explorer:
-				UnitUpdateExplorer(w, unitSlot, deltaTime)
+				UnitUpdateExplorer(w, unitSlot, unitDelta)
 			case Knight, Archer, Mage, Giant, Turtle, Catapult, Rogue:
-				UnitUpdateWarrior(w, unitSlot, deltaTime)
+				UnitUpdateWarrior(w, unitSlot, unitDelta)
 			}
 			if w.unitUsed[unitSlot] {
-				BloodBleedTick(w, unitSlot, deltaTime)
+				BloodBleedTick(w, unitSlot, unitDelta)
 				if w.units.previousX[unitSlot] != w.units.x[unitSlot] ||
 					w.units.previousY[unitSlot] != w.units.y[unitSlot] {
 					UnitWaterWake(w, unitSlot)
@@ -1348,6 +1365,26 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		}
 		if profileIndex < 0 do continue
 		ProfilerAdd(profileIndex, rl.GetTime()-unitStart)
+	}
+
+	// Combine the latest worker sample from every slice. Each slice refreshes
+	// its own entry when it runs, so a skipped unit keeps its last count.
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			town := &w.kingdoms[kingdomSlot].towns[townSlot]
+			town.builders = 0
+			town.waterCollectors = 0
+			town.farmers = 0
+			town.villagers = 0
+			for sliceIndex in 0..<UNIT_UPDATE_SLICES {
+				town.builders += town.buildersBySlice[sliceIndex]
+				town.waterCollectors += town.waterCollectorsBySlice[sliceIndex]
+				town.farmers += town.farmersBySlice[sliceIndex]
+				town.villagers += town.villagersBySlice[sliceIndex]
+			}
+		}
 	}
 	ProfilerEnd(stamp)
 	stamp = ProfilerBegin("Unit:Separation")
@@ -1630,12 +1667,16 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 		town.constructionProgress += f32(town.builders)*deltaTime
 		tick := int(w.simulationTime/TOWN_SIMULATION_STEP)
 		phase := (tick+kingdomSlot*TOWN_CAPACITY+townSlot)%TOWN_CONSTRUCTION_ATTEMPT_INTERVAL
-		if town.constructionProgress >= 3 && phase == 0 {
+		if w.simulationTime >= town.constructionFailUntil &&
+			town.constructionProgress >= 3 && phase == 0 {
 			constructionStamp := ProfilerBegin("Town:Construction")
 			if TownBuilderConstruct(w, kingdomSlot, townSlot, canGrow) {
 				town.constructionProgress -= 3
+				town.constructionFailUntil = 0
 			} else {
 				town.constructionProgress = min(town.constructionProgress, 3)
+				town.constructionFailUntil = w.simulationTime+
+					TOWN_CONSTRUCTION_FAIL_COOLDOWN
 			}
 			ProfilerEnd(constructionStamp)
 		} else {
