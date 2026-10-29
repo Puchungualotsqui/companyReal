@@ -20,6 +20,8 @@ main :: proc() {
 	defer AppDeinit(&app)
 	ParallelInit()
 	defer ParallelDeinit()
+	ProfilerInit()
+	defer ProfilerDeinit()
 	crazyWorld := CommandLineFlagPresent(CRAZY_WORLD_FLAG)
 	if crazyWorld {
 		app.crazyWorld = true
@@ -30,8 +32,6 @@ main :: proc() {
 		_ = AppStartGame(&app)
 		app.crazyWorld = false
 	}
-	ProfilerInit()
-	defer ProfilerDeinit()
 
 	for !rl.WindowShouldClose() && !app.quitRequested {
 		updateStamp := ProfilerBegin("Update")

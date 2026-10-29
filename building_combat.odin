@@ -402,6 +402,8 @@ CombatBuilderFindEnemy :: proc(w: ^World, unitSlot: int, radius: f32) -> int {
 		for offsetY in -chunkRadius..=chunkRadius {
 			chunkY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
 			chunk := chunkX*w.spatial.chunksY+chunkY
+			// Nothing to defend against in a chunk without hostile units.
+			if !SpatialChunkHasEnemy(w, chunk, unit.kingdome) do continue
 			for otherSlot := w.spatial.unitHead[chunk]; otherSlot >= 0;
 				otherSlot = w.spatial.unitNext[otherSlot] {
 				if otherSlot == unitSlot do continue

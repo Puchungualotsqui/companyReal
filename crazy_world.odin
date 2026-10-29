@@ -1,19 +1,28 @@
 package main
 
+import "core:fmt"
 import "core:math"
+import rl "vendor:raylib"
 
 // Debug stress world: every kingdom starts fully teched, with many towns, a
 // large mixed army and a dense spread of buildings. Launched with -crazy_world.
 CRAZY_WORLD_FLAG :: "-crazy_world"
 // Fixed seed so profiling runs are comparable.
 CRAZY_WORLD_SEED :: 0xC0FFEE_1234
-CRAZY_WORLD_TOWNS_PER_KINGDOM :: 10
+// A 2048 map leaves room for 500 towns at the normal founding spacing while
+// the dense unit spread stays inside each town's neighbourhood.
+CRAZY_WORLD_MAP_SIZE :: 2048
+CRAZY_WORLD_TOWNS_PER_KINGDOM :: 20
+// Per-town multiplier tuned so the world spawns ~100k units.
+CRAZY_WORLD_UNIT_SCALE :: 6.3
+// Extra room around the town area so every planned unit finds a tile.
+CRAZY_WORLD_UNIT_SPREAD_SLACK :: 1.6
 CRAZY_WORLD_TOWN_MIN_RADIUS :: 24
-CRAZY_WORLD_TOWN_MAX_RADIUS :: 200
+CRAZY_WORLD_TOWN_MAX_RADIUS :: 420
 CRAZY_WORLD_TOWN_SITE_ATTEMPTS :: 4096
 CRAZY_WORLD_FOUNDING_SETTLERS :: 8
 CRAZY_WORLD_BUILDING_ATTEMPTS :: 512
-CRAZY_WORLD_UNIT_ATTEMPTS :: 96
+CRAZY_WORLD_UNIT_ATTEMPTS :: 48
 CRAZY_WORLD_INITIAL_WOOD :: 4000
 CRAZY_WORLD_INITIAL_INSIGHT :: 500
 CRAZY_WORLD_DAY_NUMBER :: 90
@@ -69,6 +78,10 @@ CRAZY_WORLD_UNITS := [?]CrazyWorldUnits{
 
 
 WorldCrazyWorldPopulate :: proc(w: ^World) {
+	start := rl.GetTime()
+	phaseStart := start
+	if PROFILING_ENABLED do ProfilerWrite("CRAZYWORLD generation\n")
+
 	for kingdom in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom] do continue
 		w.kingdoms[kingdom].insight = CRAZY_WORLD_INITIAL_INSIGHT
@@ -76,6 +89,7 @@ WorldCrazyWorldPopulate :: proc(w: ^World) {
 			_ = KingdomUnlockTech(w, kingdom, tech)
 		}
 	}
+	CrazyWorldLogPhase("techs", &phaseStart)
 
 	for kingdom in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom] do continue
@@ -85,11 +99,13 @@ WorldCrazyWorldPopulate :: proc(w: ^World) {
 			}
 		}
 	}
+	CrazyWorldLogPhase("advance towns", &phaseStart)
 
 	for kingdom in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom] do continue
 		CrazyWorldFoundTowns(w, kingdom)
 	}
+	CrazyWorldLogPhase("found towns", &phaseStart)
 
 	for kingdom in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom] do continue
@@ -98,6 +114,7 @@ WorldCrazyWorldPopulate :: proc(w: ^World) {
 			CrazyWorldPlaceBuildings(w, kingdom, townSlot)
 		}
 	}
+	CrazyWorldLogPhase("buildings", &phaseStart)
 
 	for kingdom in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom] do continue
@@ -106,11 +123,37 @@ WorldCrazyWorldPopulate :: proc(w: ^World) {
 			CrazyWorldSpawnUnits(w, kingdom, townSlot)
 		}
 	}
+	CrazyWorldLogPhase("units", &phaseStart)
 
 	w.dayNumber = CRAZY_WORLD_DAY_NUMBER
 	w.simulationTime = f32(w.dayNumber)*f32(WORLD_DAY_LENGTH_SECONDS)
 	WorldConstructionChanged(w)
 	FogUpdate(w)
+	CrazyWorldLogPhase("fog", &phaseStart)
+
+	if PROFILING_ENABLED {
+		buffer: [128]u8
+		ProfilerWrite(
+			fmt.bprintf(
+				buffer[:],
+				"  %s = %d ms (units=%d)\n",
+				"total",
+				int((rl.GetTime()-start)*1000),
+				w.unitCount,
+			),
+		)
+	}
+}
+
+CrazyWorldLogPhase :: proc(name: cstring, start: ^f64) {
+	now := rl.GetTime()
+	if PROFILING_ENABLED {
+		buffer: [128]u8
+		ProfilerWrite(
+			fmt.bprintf(buffer[:], "  %s = %d ms\n", name, int((now-start^)*1000)),
+		)
+	}
+	start^ = now
 }
 
 CrazyWorldAdvanceTown :: proc(w: ^World, kingdom, townSlot: int) {
@@ -212,7 +255,13 @@ CrazyWorldPlaceBuilding :: proc(
 
 CrazyWorldSpawnUnits :: proc(w: ^World, kingdom, townSlot: int) {
 	for plan in CRAZY_WORLD_UNITS {
-		CrazyWorldSpawnUnitKind(w, kingdom, townSlot, plan.kind, plan.count)
+		CrazyWorldSpawnUnitKind(
+			w,
+			kingdom,
+			townSlot,
+			plan.kind,
+			int(f32(plan.count)*CRAZY_WORLD_UNIT_SCALE+0.5),
+		)
 	}
 }
 
@@ -224,9 +273,14 @@ CrazyWorldSpawnUnitKind :: proc(
 ) {
 	town := &w.kingdoms[kingdom].towns[townSlot]
 	role := UnitTypeFromKind(kind)
-	radius := f32(town.areaRadius)
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
+	// The plan is dense: spread units over a disc that is large enough to hold
+	// them at one unit per tile instead of cramming the town area.
+	spread := max(
+		f32(town.areaRadius),
+		math.sqrt(f32(max(count, 1))/math.PI)*CRAZY_WORLD_UNIT_SPREAD_SLACK,
+	)
 	seed := w.seed ~
 		u64(kingdom*TOWN_CAPACITY+townSlot+1)*0x9E3779B97F4A7C15 ~
 		(u64(kind)+1)*0xBF58476D1CE4E5B9
@@ -236,10 +290,9 @@ CrazyWorldSpawnUnitKind :: proc(
 			seq := index*CRAZY_WORLD_UNIT_ATTEMPTS+attempt
 			angle := WorldNoiseHash(seq, kingdom*131+townSlot*7+1, seed+11)*2*math.PI
 			distance := math.sqrt(WorldNoiseHash(seq, kingdom*131+townSlot*7+2, seed+23))*
-				radius
+				spread
 			x := WorldWrapCoordinate(town.x+2+int(math.cos(angle)*distance), worldWidth)
 			y := WorldWrapCoordinate(town.y+2+int(math.sin(angle)*distance), worldHeight)
-			if !TownPointInArea(w, kingdom, townSlot, x, y) do continue
 			if !UnitValidTileType(role, w.ground[x][y].type) do continue
 			if WorldTileOccupied(w, x, y) do continue
 			if WorldUnitAtTile(w, x, y) do continue

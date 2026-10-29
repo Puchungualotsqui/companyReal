@@ -251,6 +251,16 @@ Town :: struct {
 	constructionFailUntil: f32, // Skip all site searches until this time
 	siteFailUntil: [BuildingKind]f32, // Per-kind retry time after a failed search
 	pathSearchFailUntil: f32, // Street extension search retry time
+	woodSearchFailUntil: f32, // Tree search retry time when the town is bare
+	// Water collectors share one shore and one hall entrance until the terrain
+	// changes, so their searches run once per town instead of once per unit.
+	waterSourceX, waterSourceY: int,
+	waterSourceRevision: u64,
+	waterSourceReady: bool,
+	waterSearchFailUntil: f32,
+	returnPointX, returnPointY: int,
+	returnPointRevision: u64,
+	returnPointReady: bool,
 	sitePool:      [TOWN_SITE_POOL_CAPACITY]TownSiteCandidate, // Reusable valid sites
 	sitePoolCount: int,
 	constructions: [TOWN_CONSTRUCTION_CAPACITY]ConstructionSite,

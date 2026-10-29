@@ -10,6 +10,8 @@ Building :: struct {
 	kingdom: int,
 	town: int,
 	homeResident: int, 	// Zero means vacant; otherwise the assigned citizen slot plus one
+	output: f32, // Cached farmland fertility
+	outputRevision: u64, // Terrain revision the cache was built at
 }
 
 BuildingKind :: enum {
@@ -1180,7 +1182,8 @@ UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32, maxExpa
 	if needsPath {
 		startX := WorldWrapCoordinate(int(unitX), worldWidth)
 		startY := WorldWrapCoordinate(int(unitY), worldHeight)
-		unit.pathFound = AStar(
+		// Nearby errands skip the search entirely; A* is only for real detours.
+		unit.pathFound = UnitDirectPath(
 			w,
 			unit.type,
 			unit.kingdome,
@@ -1189,8 +1192,20 @@ UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32, maxExpa
 			targetX,
 			targetY,
 			&unit.path,
-			maxExpansions,
 		)
+		if !unit.pathFound {
+			unit.pathFound = AStar(
+				w,
+				unit.type,
+				unit.kingdome,
+				startX,
+				startY,
+				targetX,
+				targetY,
+				&unit.path,
+				maxExpansions,
+			)
+		}
 		unit.pathTargetX = targetX
 		unit.pathTargetY = targetY
 		unit.pathRevision = w.pathRevision

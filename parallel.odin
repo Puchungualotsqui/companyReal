@@ -205,6 +205,35 @@ PendingDamage :: struct {
 pendingDamage: [PARALLEL_MAX_THREADS][PARALLEL_PENDING_DAMAGE]PendingDamage
 pendingDamageCount: [PARALLEL_MAX_THREADS]int
 
+// Construction work is accumulated per worker and applied in one serial pass.
+// Taking the shared unit lock for every builder update serialized every builder
+// in the world at high populations.
+PARALLEL_PENDING_CONSTRUCTION :: 512
+
+PendingConstruction :: struct {
+	kingdom, town, site: int,
+	amount:             f32,
+}
+
+pendingConstruction: [PARALLEL_MAX_THREADS][PARALLEL_PENDING_CONSTRUCTION]PendingConstruction
+pendingConstructionCount: [PARALLEL_MAX_THREADS]int
+
+ParallelQueueConstruction :: proc(
+	kingdom, town, site: int,
+	amount: f32,
+) {
+	slot := parallelThreadSlot
+	count := pendingConstructionCount[slot]
+	if count >= PARALLEL_PENDING_CONSTRUCTION do return
+	pendingConstruction[slot][count] = PendingConstruction {
+		kingdom = kingdom,
+		town    = town,
+		site    = site,
+		amount  = amount,
+	}
+	pendingConstructionCount[slot] = count+1
+}
+
 parallelRunJob :: proc(task: thread.Task) {
 	job := cast(^ParallelJob)task.data
 	job.body(job.ctx, job.start, job.end, job.worker)

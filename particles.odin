@@ -136,11 +136,15 @@ UnitWaterWake :: proc(w: ^World, unitSlot: int) {
 ParticleSpawn :: proc(w: ^World, p: Particle) -> int {
 	RecursiveLockGuard(&w.effectsMutex)
 	slot := -1
-	for step in 0 ..< PARTICLE_CAPACITY {
-		candidate := (w.particleCursor+step)%PARTICLE_CAPACITY
-		if !w.particleUsed[candidate] {
-			slot = candidate
-			break
+	// A saturated pool is the common case in big battles. Scanning all slots
+	// when every one is used made every spawn O(capacity) under a lock.
+	if w.particleCount < PARTICLE_CAPACITY {
+		for step in 0 ..< PARTICLE_CAPACITY {
+			candidate := (w.particleCursor+step)%PARTICLE_CAPACITY
+			if !w.particleUsed[candidate] {
+				slot = candidate
+				break
+			}
 		}
 	}
 	if slot < 0 {

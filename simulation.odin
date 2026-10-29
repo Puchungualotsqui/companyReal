@@ -1191,7 +1191,11 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 		WorldTerrainAftermathUpdate(w, TOWN_SIMULATION_STEP)
 		ProfilerEnd(stamp)
 		stamp = ProfilerBegin("Sim:Lava")
-		WorldTerrainLavaUpdate(w, TOWN_SIMULATION_STEP)
+		// Lava damage is a slow environmental effect; a quarter of the rate keeps
+		// the same total damage without scanning every unit each tick.
+		if int(w.simulationTime/TOWN_SIMULATION_STEP)%4 == 0 {
+			WorldTerrainLavaUpdate(w, TOWN_SIMULATION_STEP*4)
+		}
 		ProfilerEnd(stamp)
 		stamp = ProfilerBegin("Sim:Decorations")
 		WorldDecorationUpdate(w, TOWN_SIMULATION_STEP)
@@ -1219,9 +1223,6 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 		w.simulationAccumulator -= TOWN_SIMULATION_STEP
 		ProfilerEnd(tickStamp)
 	}
-	stamp = ProfilerBegin("Sim:Animation")
-	WorldUnitAnimationUpdate(w, stepTime)
-	ProfilerEnd(stamp)
 	stamp = ProfilerBegin("Sim:GameEnd")
 	WorldCheckGameEnd(w)
 	ProfilerEnd(stamp)
@@ -1288,6 +1289,8 @@ TownHasNearbyEnemy :: proc(
 			for offsetY in 0..<min(chunkRadius*2+1, w.spatial.chunksY) {
 				chunkY := WorldWrapCoordinate(centerChunkY-chunkRadius+offsetY, w.spatial.chunksY)
 				chunk := chunkX*w.spatial.chunksY+chunkY
+				// The cached presence mask skips chunks that hold no enemy at all.
+				if !SpatialChunkHasEnemy(w, chunk, kingdom) do continue
 				for unit := w.spatial.unitHead[chunk]; unit >= 0; unit = w.spatial.unitNext[unit] {
 					if !w.unitUsed[unit] || UnitHiddenInside(w, unit) do continue
 					if !KingdomAtWar(w, kingdom, w.units[unit].kingdome) do continue
@@ -1320,12 +1323,13 @@ UnitUpdateSliceOf :: proc(unitSlot: int) -> int {
 // construction and particles still share locks, which is the remaining
 // serialization in this pass.
 UnitLoopJob :: struct {
-	w:         ^World,
-	slice:     int,
-	tick:      int,
-	deltaTime: f32,
-	kindTime:  [PARALLEL_MAX_CHUNKS][UnitKind]f64,
-	kindCalls: [PARALLEL_MAX_CHUNKS][UnitKind]int,
+	w:             ^World,
+	slice:         int,
+	tick:          int,
+	deltaTime:     f32,
+	shortageEpoch: int,
+	kindTime:      [PARALLEL_MAX_CHUNKS][UnitKind]f64,
+	kindCalls:     [PARALLEL_MAX_CHUNKS][UnitKind]int,
 }
 
 UnitLoopChunk :: proc(ctx: rawptr, start, end, worker: int) {
@@ -1350,6 +1354,9 @@ UnitLoopChunk :: proc(ctx: rawptr, start, end, worker: int) {
 		w.units.previousY[unitSlot] = w.units.y[unitSlot]
 		w.units.updateTime[unitSlot] = w.simulationTime
 		w.units.updateInterval[unitSlot] = unitDelta
+		// Town upkeep rides along with the unit's own slice instead of a second
+		// full-capacity scan in the kingdom pass.
+		UnitUpdateTownUpkeep(w, unitSlot, job.shortageEpoch, unitDelta)
 		w.units.decisionTimer[unitSlot] -= unitDelta
 		w.units.decisionReady[unitSlot] = w.units.decisionTimer[unitSlot] <= 0
 		if w.units.decisionReady[unitSlot] {
@@ -1428,10 +1435,11 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 	}
 
 	job := UnitLoopJob {
-		w         = w,
-		slice     = slice,
-		tick      = tick,
-		deltaTime = deltaTime,
+		w             = w,
+		slice         = slice,
+		tick          = tick,
+		deltaTime     = deltaTime,
+		shortageEpoch = int(w.simulationTime/5),
 	}
 	// Units of one slot only touch themselves, so the loop splits by slot. The
 	// few cross-unit mutations (damage, construction work, spatial links) take
@@ -1440,6 +1448,42 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 	profiler.parallel = true
 	ParallelFor(UNIT_CAPACITY, &job, UnitLoopChunk)
 	profiler.parallel = false
+
+	// Work queued by builders is applied here, in one serial pass, so the unit
+	// loop never has to take the shared lock. Several builders often work the
+	// same site, so their shares are merged before it is evaluated.
+	constructionStamp := ProfilerBegin("Unit:Construction")
+	CONSTRUCTION_PENDING_SITES :: KINGDOM_SLOTS*TOWN_CAPACITY*TOWN_CONSTRUCTION_CAPACITY
+	constructionWork: [CONSTRUCTION_PENDING_SITES]f32
+	constructionTouched: [CONSTRUCTION_PENDING_SITES]int
+	touchedCount := 0
+	for threadSlot in 0..<PARALLEL_MAX_THREADS {
+		count := pendingConstructionCount[threadSlot]
+		for index in 0..<count {
+			entry := pendingConstruction[threadSlot][index]
+			id := ConstructionBlockerId(entry.kingdom, entry.town, entry.site)
+			if id < 0 || id >= CONSTRUCTION_PENDING_SITES do continue
+			if constructionWork[id] == 0 {
+				constructionTouched[touchedCount] = id
+				touchedCount += 1
+			}
+			constructionWork[id] += entry.amount
+		}
+		pendingConstructionCount[threadSlot] = 0
+	}
+	for index in 0..<touchedCount {
+		id := constructionTouched[index]
+		kingdomSlot := id/(TOWN_CAPACITY*TOWN_CONSTRUCTION_CAPACITY)
+		rest := id%(TOWN_CAPACITY*TOWN_CONSTRUCTION_CAPACITY)
+		TownConstructionWork(
+			w,
+			kingdomSlot,
+			rest/TOWN_CONSTRUCTION_CAPACITY,
+			rest%TOWN_CONSTRUCTION_CAPACITY,
+			constructionWork[id],
+		)
+	}
+	ProfilerEnd(constructionStamp)
 
 	// Apply the hits collected by the workers, then let the resulting deaths
 	// despawn in the same order as before.
@@ -1531,27 +1575,9 @@ WorldKingdomUpdate :: proc(w: ^World, deltaTime: f32) {
 	}
 	ProfilerEnd(stamp)
 
-	stamp = ProfilerBegin("Kingdom:Housing")
-	WorldHousingUpdate(w)
-	ProfilerEnd(stamp)
-	stamp = ProfilerBegin("Kingdom:Effects")
-	shortageEpoch := int(w.simulationTime / 5)
-	for unitSlot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unitSlot] do continue
-		kingdomSlot := w.units[unitSlot].kingdome
-		townSlot := w.units[unitSlot].town
-		if !WorldTownExists(w, kingdomSlot, townSlot) {
-			UnitClearTownEffects(w, unitSlot)
-			continue
-		}
-
-		isHoused := UnitHome(w, unitSlot) >= 0
-		UnitApplyTownEffects(w, unitSlot, isHoused, shortageEpoch, deltaTime)
-	}
-	ProfilerEnd(stamp)
-
 	stamp = ProfilerBegin("Kingdom:Conversions")
-	WorldConversionAssign(w)
+	// Job assignment only needs to happen once per town update cycle.
+	if townSlice == 0 do WorldConversionAssign(w)
 	ProfilerEnd(stamp)
 }
 
@@ -1584,7 +1610,8 @@ WorldHousingUpdate :: proc(w: ^World) {
 
 	freeHome: [KINGDOM_SLOTS][TOWN_CAPACITY]int
 	for &kingdom in freeHome do for &town in kingdom do town = -1
-	nextHome: [BUILDING_CAPACITY]int
+	nextHome := make([]int, BUILDING_CAPACITY)
+	defer delete(nextHome)
 	for home in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[home] do continue
 		building := &w.buildings[home]

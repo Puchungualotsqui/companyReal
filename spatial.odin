@@ -24,6 +24,8 @@ SpatialIndex :: struct {
 	fireChunk:        [FIRE_CAPACITY]int,
 	presentKingdoms:  []u8, // Kingdom bitmask with visible units per chunk
 	presentStamp:     []u32, // Tick the presence bitmask was computed for
+	buildingKingdoms: []u8, // Kingdom bitmask with buildings per chunk
+	buildingStamp:    []u32, // Tick the building bitmask was computed for
 	presentRevision:  u32,
 	enemyMask:        [KINGDOMS_CAPACITY]u8,
 	enemyMaskRevision: u32,
@@ -42,6 +44,8 @@ SpatialIndexInit :: proc(w: ^World) -> bool {
 	w.spatial.fireHead = make([]int, chunkCount)
 	w.spatial.presentKingdoms = make([]u8, chunkCount)
 	w.spatial.presentStamp = make([]u32, chunkCount)
+	w.spatial.buildingKingdoms = make([]u8, chunkCount)
+	w.spatial.buildingStamp = make([]u32, chunkCount)
 	w.spatial.presentRevision = 1
 	for i in 0..<chunkCount {
 		w.spatial.unitHead[i] = -1
@@ -78,6 +82,8 @@ SpatialIndexDeinit :: proc(w: ^World) {
 	delete(w.spatial.fireHead)
 	delete(w.spatial.presentKingdoms)
 	delete(w.spatial.presentStamp)
+	delete(w.spatial.buildingKingdoms)
+	delete(w.spatial.buildingStamp)
 }
 
 SpatialChunkIndex :: proc(w: ^World, x, y: int) -> int {
@@ -202,6 +208,7 @@ SpatialBuildingInsert :: proc(w: ^World, buildingSlot: int) {
 	w.spatial.buildingChunk[buildingSlot] = chunk
 	w.spatial.buildingNext[buildingSlot] = w.spatial.buildingHead[chunk]
 	w.spatial.buildingHead[chunk] = buildingSlot
+	w.spatial.buildingStamp[chunk] = 0
 }
 
 SpatialBuildingRemove :: proc(w: ^World, buildingSlot: int) {
@@ -223,6 +230,24 @@ SpatialBuildingRemove :: proc(w: ^World, buildingSlot: int) {
 	}
 	w.spatial.buildingNext[buildingSlot] = -1
 	w.spatial.buildingChunk[buildingSlot] = -1
+	w.spatial.buildingStamp[chunk] = 0
+}
+
+// Kingdom bitmask of the buildings in one chunk, refreshed once per tick.
+SpatialChunkBuildingPresent :: proc(w: ^World, chunk: int) -> u8 {
+	if chunk < 0 || chunk >= len(w.spatial.buildingKingdoms) do return 0
+	if w.spatial.buildingStamp[chunk] == w.spatial.presentRevision {
+		return w.spatial.buildingKingdoms[chunk]
+	}
+	mask: u8
+	for slot := w.spatial.buildingHead[chunk]; slot >= 0; slot = w.spatial.buildingNext[slot] {
+		if !w.buildingUsed[slot] do continue
+		kingdom := w.buildings.kingdom[slot]
+		if kingdom >= 0 && kingdom < KINGDOMS_CAPACITY do mask |= u8(1)<<u8(kingdom)
+	}
+	w.spatial.buildingKingdoms[chunk] = mask
+	w.spatial.buildingStamp[chunk] = w.spatial.presentRevision
+	return mask
 }
 
 // Decorations are static, so they are linked by their base tile and are never

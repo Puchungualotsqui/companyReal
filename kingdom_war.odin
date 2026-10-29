@@ -423,6 +423,10 @@ WarriorFindNearbyHostiles :: proc(w: ^World, unitSlot: int, state: ^StateWarrior
 				}
 			}
 
+			// Chunks that only hold this kingdom's own buildings cannot contain a
+			// target, and most warriors stand in their own town.
+			ownBit := u8(1)<<u8(clamp(unit.kingdome, 0, KINGDOMS_CAPACITY-1))
+			if SpatialChunkBuildingPresent(w, chunk) &~ ownBit == 0 do continue
 			for buildingSlot := w.spatial.buildingHead[chunk]; buildingSlot >= 0;
 				buildingSlot = w.spatial.buildingNext[buildingSlot] {
 				if !WarriorCanTargetBuilding(w, unitSlot, state, buildingSlot) do continue

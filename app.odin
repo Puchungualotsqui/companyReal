@@ -101,6 +101,7 @@ AppStartGame :: proc(app: ^App) -> bool {
 	settings := WorldGenerationSettingsDefault()
 	settings.seed = app.config.seed
 	size := APP_MAP_SIZES[clamp(app.config.mapSizeIndex, 0, len(APP_MAP_SIZES)-1)].tiles
+	if app.crazyWorld do size = CRAZY_WORLD_MAP_SIZE
 
 	// Keep the same world density on smaller maps.
 	scale := f32(size)/1024.0

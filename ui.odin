@@ -1690,25 +1690,40 @@ UIFindAt :: proc(w: ^World, camera: rl.Camera2D, mouse: rl.Vector2) -> Selection
 
 	bestSlot := -1
 	bestDistance: f32 = 1e9
-	for unitSlot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unitSlot] do continue
-		if w.units[unitSlot].type == nil do continue
-		if !FogUnitVisible(w, unitSlot) do continue
-		if state, ok := w.units[unitSlot].state.(StateConverting); ok && state.inside {
-			continue
-		}
+	// Only the buckets around the cursor can hold a unit under it. Walking every
+	// slot made hover picking cost a full world scan each frame.
+	chunkSize := w.spatial.chunkSize
+	if chunkSize > 0 && w.spatial.chunksX > 0 && w.spatial.chunksY > 0 {
+		centerChunkX := int(px)/chunkSize
+		centerChunkY := int(py)/chunkSize
+		for offsetX in -1..=1 {
+			chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
+			for offsetY in -1..=1 {
+				chunkY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
+				chunk := chunkX*w.spatial.chunksY+chunkY
+				for unitSlot := w.spatial.unitHead[chunk]; unitSlot >= 0;
+					unitSlot = w.spatial.unitNext[unitSlot] {
+					if !w.unitUsed[unitSlot] do continue
+					if w.units.type[unitSlot] == nil do continue
+					if !FogUnitVisible(w, unitSlot) do continue
+					if state, ok := w.units.state[unitSlot].(StateConverting); ok && state.inside {
+						continue
+					}
 
-		scale := UnitSpriteScale(UnitKindOf(w.units[unitSlot].type))
-		x, y := UnitRenderPosition(w, unitSlot)
-		if px < x-scale*0.5 || px > x+scale*0.5 || py < y+0.5-scale || py > y+0.5 {
-			continue
-		}
-		dx := px-x
-		dy := py-y
-		distance := dx*dx+dy*dy
-		if distance < bestDistance {
-			bestDistance = distance
-			bestSlot = unitSlot
+					scale := UnitSpriteScale(UnitKindOf(w.units.type[unitSlot]))
+					x, y := UnitRenderPosition(w, unitSlot)
+					if px < x-scale*0.5 || px > x+scale*0.5 || py < y+0.5-scale || py > y+0.5 {
+						continue
+					}
+					dx := px-x
+					dy := py-y
+					distance := dx*dx+dy*dy
+					if distance < bestDistance {
+						bestDistance = distance
+						bestSlot = unitSlot
+					}
+				}
+			}
 		}
 	}
 	if bestSlot >= 0 {
@@ -2651,41 +2666,63 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 UIDrawConversions :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle, kingdom, town: int) {
 	kinds: [len(UnitKind)]UnitKind
 	count := UIConversionRows(w, ui.selection, &kinds)
+	// One pass over the town's units fills every row's counts and training bars
+	// instead of one full world scan per row.
+	unitCount: [len(UnitKind)]int
+	training: [len(UnitKind)]int
+	progress: [len(UnitKind)]f32
+	if WorldTownExists(w, kingdom, town) {
+		for unitSlot in 0..<UNIT_CAPACITY {
+			if !w.unitUsed[unitSlot] do continue
+			if w.units.kingdome[unitSlot] != kingdom || w.units.town[unitSlot] != town do continue
+			if w.units.type[unitSlot] == nil do continue
+			kind := UnitKindOf(w.units.type[unitSlot])
+			unitCount[kind] += 1
+			state, converting := w.units.state[unitSlot].(StateConverting)
+			if !converting || !state.inside do continue
+			seconds := UnitDefaultTrainingTime(kind)
+			value: f32 = 0
+			if seconds > 0 do value = 1-clamp(state.timer/seconds, 0, 1)
+			training[kind] += 1
+			progress[kind] += value
+		}
+	}
 	for i in 0..<count {
-		UIDrawConversionRow(w, renderer, ui, panel, i, kinds[i], kingdom, town)
+		kind := kinds[i]
+		average: f32 = 0
+		if training[kind] > 0 do average = progress[kind]/f32(training[kind])
+		UIDrawConversionRow(
+			w,
+			renderer,
+			ui,
+			panel,
+			i,
+			kind,
+			kingdom,
+			town,
+			unitCount[kind],
+			training[kind],
+			average,
+		)
 	}
 }
 
-UIConversionProgress :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> (assigned, remaining, training: int, progress: f32, hasJob: bool) {
+UIConversionProgress :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> (remaining: int, hasJob: bool) {
 	if !WorldTownExists(w, kingdom, town) do return
 	t := &w.kingdoms[kingdom].towns[town]
 	for jobIndex in 0..<t.conversionCount {
 		job := t.conversions[jobIndex]
 		if job.to != kind do continue
 		hasJob = true
-		assigned += job.assigned
 		remaining += job.remaining
 	}
-	if !hasJob do return
-
-	for unitSlot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unitSlot] do continue
-		if w.units[unitSlot].kingdome != kingdom || w.units[unitSlot].town != town do continue
-		state, converting := w.units[unitSlot].state.(StateConverting)
-		if !converting || state.to != kind || !state.inside do continue
-		training += 1
-		seconds := UnitDefaultTrainingTime(kind)
-		if seconds > 0 do progress += 1-clamp(state.timer/seconds, 0, 1)
-	}
-	if training > 0 do progress /= f32(training)
 	return
 }
 
-UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle, index: int, kind: UnitKind, kingdom, town: int) {
+UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, panel: rl.Rectangle, index: int, kind: UnitKind, kingdom, town: int, unitCount, training: int, progress: f32) {
 	rowY := panel.y+UI_ROWS_TOP+f32(index)*UI_ROW_HEIGHT
 
 	faction := FactionSpriteIndex(kingdom)
-	unitCount := TownUnitCount(w, kingdom, town, kind)
 	icon := UIUnitIconRect(panel, index)
 	interactive := unitCount > 0
 	iconHovered := interactive && rl.CheckCollisionPointRec(rl.GetMousePosition(), icon)
@@ -2713,7 +2750,7 @@ UIDrawConversionRow :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, p
 	}
 
 	minus, plus := UIButtonRects(panel, index)
-	_, remaining, training, progress, hasJob := UIConversionProgress(w, kingdom, town, kind)
+	remaining, hasJob := UIConversionProgress(w, kingdom, town, kind)
 	if hasJob && remaining > 0 {
 		UIText(fmt.ctprintf("%d/%d", training, remaining), minus.x-112, rowY+8, UI_COLOR_DIM)
 

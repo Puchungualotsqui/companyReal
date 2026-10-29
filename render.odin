@@ -120,6 +120,19 @@ WorldViewUpdate :: proc(w: ^World, view: ^WorldView, deltaTime: f32) {
 	stamp = ProfilerBegin("View:Camera")
 	WorldCameraUpdate(w, &view.camera, deltaTime)
 	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("View:Animation")
+	// Animation is visual, so it only advances for buckets under the view.
+	halfViewWidth := f32(rl.GetScreenWidth())/(2*view.camera.zoom)
+	halfViewHeight := f32(rl.GetScreenHeight())/(2*view.camera.zoom)
+	WorldUnitAnimationUpdate(
+		w,
+		min(deltaTime, WORLD_MAX_FRAME_DELTA),
+		view.camera.target.x-halfViewWidth-4,
+		view.camera.target.x+halfViewWidth+4,
+		view.camera.target.y-halfViewHeight-4,
+		view.camera.target.y+halfViewHeight+4,
+	)
+	ProfilerEnd(stamp)
 	stamp = ProfilerBegin("View:Focus")
 	WorldFocusCameraUpdate(view, deltaTime)
 	ProfilerEnd(stamp)
@@ -1073,10 +1086,27 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				FogAppendMemoryDecorations(w, renderer, offsetX, offsetY, minX, maxX, minY, maxY)
 			}
 
-			for unitSlot in 0 ..< UNIT_CAPACITY {
-				if !w.unitUsed[unitSlot] do continue
-				if w.units[unitSlot].type == nil do continue
-				if UnitHiddenInside(w, unitSlot) do continue
+			// Only buckets under the view can contain a visible unit. The old loop
+			// walked all UNIT_CAPACITY slots for every map copy.
+			chunkSize := w.spatial.chunkSize
+			chunksX := w.spatial.chunksX
+			chunksY := w.spatial.chunksY
+			chunkMinX := int(math.floor(minX))/chunkSize-1
+			chunkMaxX := int(math.floor(maxX))/chunkSize+1
+			chunkMinY := int(math.floor(minY))/chunkSize-1
+			chunkMaxY := int(math.floor(maxY))/chunkSize+1
+			spanX := min(chunkMaxX-chunkMinX+1, chunksX)
+			spanY := min(chunkMaxY-chunkMinY+1, chunksY)
+			for chunkOffsetX in 0..<spanX {
+				chunkX := WorldWrapCoordinate(chunkMinX+chunkOffsetX, chunksX)
+				for chunkOffsetY in 0..<spanY {
+					chunkY := WorldWrapCoordinate(chunkMinY+chunkOffsetY, chunksY)
+					chunk := chunkX*chunksY+chunkY
+					for unitSlot := w.spatial.unitHead[chunk]; unitSlot >= 0;
+						unitSlot = w.spatial.unitNext[unitSlot] {
+						if !w.unitUsed[unitSlot] do continue
+						if w.units[unitSlot].type == nil do continue
+						if UnitHiddenInside(w, unitSlot) do continue
 
 				kind := UnitKindOf(w.units[unitSlot].type)
 				scale := UnitSpriteScale(kind)
@@ -1148,6 +1178,8 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 					texture = texture,
 					flipX = flipX,
 				})
+					}
+				}
 			}
 
 			slice.sort_by(renderer.items[:], RenderItemLess)

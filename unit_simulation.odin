@@ -229,13 +229,16 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		}
 	}
 	if state^ == .Roaming && w.units[unitSlot].decisionReady &&
-		town.wood < TownWoodGatherTarget(w, kingdomSlot, townSlot) {
+		town.wood < TownWoodGatherTarget(w, kingdomSlot, townSlot) &&
+		w.simulationTime >= town.woodSearchFailUntil {
 		if x, y, decoration, found := UnitFindResourceTarget(w, unitSlot, builder.taskSequence); found {
 			builder.targetDecoration = decoration
 			w.units[unitSlot].pathTargetX = x
 			w.units[unitSlot].pathTargetY = y
 			w.units[unitSlot].pathReady = false
 			state^ = .Traveling
+		} else {
+			town.woodSearchFailUntil = w.simulationTime+WOOD_SEARCH_RETRY_SECONDS
 		}
 	}
 
@@ -368,12 +371,9 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			builder.taskSequence += 1
 			break
 		}
-		if TownConstructionWork(w, kingdomSlot, townSlot, builder.constructionSite, deltaTime) == .Completed {
-			builder.constructionSite = -1
-			state^ = .Roaming
-			w.units[unitSlot].pathReady = false
-			builder.taskSequence += 1
-		}
+		// Work is applied after the unit loop; a finished site is noticed on the
+		// builder's next update.
+		ParallelQueueConstruction(kingdomSlot, townSlot, builder.constructionSite, deltaTime)
 	case .GoingHome, .Sleeping, .Hiding, .Fleeing:
 		}
 }
@@ -399,7 +399,7 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 				w.units[unitSlot].cooldown = max(0, w.units[unitSlot].cooldown-deltaTime)
 				return
 			}
-			if x, y, found := UnitFindTownReturnPoint(w, kingdomSlot, townSlot, unitSlot); found {
+			if x, y, found := TownCollectorReturnPoint(w, kingdomSlot, townSlot); found {
 				w.units[unitSlot].pathTargetX = x
 				w.units[unitSlot].pathTargetY = y
 				w.units[unitSlot].pathReady = false
@@ -413,7 +413,13 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		} else if w.units[unitSlot].cooldown > 0 {
 			w.units[unitSlot].cooldown -= deltaTime
 		} else if w.units[unitSlot].decisionReady {
-			if x, y, found := UnitFindWaterTarget(w, unitSlot, collector.taskSequence); found {
+			if x, y, found := TownCollectorWaterPoint(
+				w,
+				kingdomSlot,
+				townSlot,
+				unitSlot,
+				collector.taskSequence,
+			); found {
 				w.units[unitSlot].pathTargetX = x
 				w.units[unitSlot].pathTargetY = y
 				w.units[unitSlot].pathReady = false
@@ -448,7 +454,7 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		w.units[unitSlot].cooldown -= deltaTime
 		if w.units[unitSlot].cooldown <= 0 {
 			collector.carriedResource = 1
-			if x, y, found := UnitFindTownReturnPoint(w, kingdomSlot, townSlot, unitSlot); found {
+			if x, y, found := TownCollectorReturnPoint(w, kingdomSlot, townSlot); found {
 				w.units[unitSlot].pathTargetX = x
 				w.units[unitSlot].pathTargetY = y
 				w.units[unitSlot].pathReady = false
@@ -1018,6 +1024,19 @@ UnitApplyTownEffects :: proc(w: ^World, unitSlot: int, housed: bool, shortageEpo
 	w.units[unitSlot].health = min(UnitMaxHealth(w, unitSlot), w.units[unitSlot].health+regen*deltaTime)
 }
 
+// Applies town shortage effects and passive regeneration for one unit. Runs
+// with the unit's own slice, so it never needs a separate world pass.
+UnitUpdateTownUpkeep :: proc(w: ^World, unitSlot: int, shortageEpoch: int, deltaTime: f32) {
+	kingdomSlot := w.units.kingdome[unitSlot]
+	townSlot := w.units.town[unitSlot]
+	if !WorldTownExists(w, kingdomSlot, townSlot) {
+		UnitClearTownEffects(w, unitSlot)
+		return
+	}
+	isHoused := UnitHome(w, unitSlot) >= 0
+	UnitApplyTownEffects(w, unitSlot, isHoused, shortageEpoch, deltaTime)
+}
+
 UnitClearTownEffects :: proc(w: ^World, unitSlot: int) {
 	w.units[unitSlot].effects[.NoHome] = true
 	w.units[unitSlot].effects[.NoWater] = false
@@ -1086,36 +1105,41 @@ UnitFindResourceTarget :: proc(w: ^World, unitSlot, taskSequence: int) -> (int, 
 
 	centerChunkX := unitX/chunkSize
 	centerChunkY := unitY/chunkSize
-	// Keep the search bounded. The old linear fallback scanned every decoration
-	// slot for every builder whenever the nearby area had been cleared.
-	// A single square pass replaces nested radius scans, which revisited every
-	// inner chunk once per ring.
-	for offsetY in -8..=8 {
-		wrappedY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
-		for offsetX in -8..=8 {
-			wrappedX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
-			chunk := wrappedX*w.spatial.chunksY+wrappedY
-			for slot := w.spatial.decorationHead[chunk]; slot >= 0;
-				slot = w.spatial.decorationNext[slot] {
-				if !DecorationChoppable(w.decorations.kind[slot]) do continue
-				sourceX := int(w.decorations.x[slot])
-				sourceY := int(w.decorations.y[slot])
-				if WorldTileOccupied(w, sourceX, sourceY) do continue
-				if !WorldTileWalkable(w, sourceX, sourceY, w.units[unitSlot].type, w.units[unitSlot].kingdome) do continue
+	// Rings expand from the unit and stop at the first one with a hit, so a
+	// builder standing next to trees no longer walks a 17x17 chunk square.
+	RESOURCE_SEARCH_CHUNK_RINGS :: 3
+	for ring in 0..=RESOURCE_SEARCH_CHUNK_RINGS {
+		for offsetY in -ring..=ring {
+			for offsetX in -ring..=ring {
+				if max(abs(offsetX), abs(offsetY)) != ring do continue
+				wrappedX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
+				wrappedY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
+				chunk := wrappedX*w.spatial.chunksY+wrappedY
+				for slot := w.spatial.decorationHead[chunk]; slot >= 0;
+					slot = w.spatial.decorationNext[slot] {
+					if !DecorationChoppable(w.decorations.kind[slot]) do continue
+					sourceX := int(w.decorations.x[slot])
+					sourceY := int(w.decorations.y[slot])
+					if WorldTileOccupied(w, sourceX, sourceY) do continue
+					if !WorldTileWalkable(w, sourceX, sourceY, w.units[unitSlot].type, w.units[unitSlot].kingdome) {
+						continue
+					}
 
-				deltaX := WorldShortestWrappedDelta(f32(sourceX)-f32(unitX), f32(worldWidth))
-				deltaY := WorldShortestWrappedDelta(f32(sourceY)-f32(unitY), f32(worldHeight))
-				distanceSquared := deltaX*deltaX+deltaY*deltaY
-				score := WorldNoiseHash(sourceX, sourceY, seed)
-				if bestSlot >= 0 && (distanceSquared > bestDistanceSquared ||
-					(distanceSquared == bestDistanceSquared && score <= bestScore)) {
-					continue
+					deltaX := WorldShortestWrappedDelta(f32(sourceX)-f32(unitX), f32(worldWidth))
+					deltaY := WorldShortestWrappedDelta(f32(sourceY)-f32(unitY), f32(worldHeight))
+					distanceSquared := deltaX*deltaX+deltaY*deltaY
+					score := WorldNoiseHash(sourceX, sourceY, seed)
+					if bestSlot >= 0 && (distanceSquared > bestDistanceSquared ||
+						(distanceSquared == bestDistanceSquared && score <= bestScore)) {
+						continue
+					}
+					bestSlot = slot
+					bestDistanceSquared = distanceSquared
+					bestScore = score
 				}
-				bestSlot = slot
-				bestDistanceSquared = distanceSquared
-				bestScore = score
 			}
 		}
+		if bestSlot >= 0 do break
 	}
 
 	if bestSlot < 0 do return 0, 0, -1, false
@@ -1139,6 +1163,9 @@ CIVILIAN_DECISION_INTERVAL :: 1.0
 // Idle villagers in peaceful towns update every second instead of every half
 // second. Alarms, damage, sleep and conversions wake them immediately.
 UNIT_LOD_DORMANT_STRIDE :: 2
+// A town with no choppable tree around it shares one retry timer instead of
+// every builder rescanning the neighbourhood every decision.
+WOOD_SEARCH_RETRY_SECONDS :: 5
 
 UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomSlot := -1, townSlot := -1) -> (int, int, bool) {
 	worldWidth := int(w.maxX)
@@ -1233,50 +1260,136 @@ UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomS
 	return fallbackX, fallbackY, fallbackFound
 }
 
-UnitFindWaterTarget :: proc(w: ^World, unitSlot, taskSequence: int) -> (int, int, bool) {
-	return UnitFindCollectorTarget(w, unitSlot, taskSequence)
+WATER_SEARCH_RETRY_SECONDS :: 5
+
+// Every collector in a town walks to the same shore until the terrain changes,
+// so the expensive breadth-first search runs once per town instead of once per
+// collector decision.
+TownCollectorWaterPoint :: proc(
+	w: ^World,
+	kingdomSlot, townSlot, unitSlot, taskSequence: int,
+) -> (int, int, bool) {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	if town.waterSourceReady && town.waterSourceRevision == w.terrainRevision {
+		return town.waterSourceX, town.waterSourceY, true
+	}
+	if w.simulationTime < town.waterSearchFailUntil do return 0, 0, false
+	if x, y, found := UnitFindCollectorTarget(w, unitSlot, taskSequence); found {
+		town.waterSourceX, town.waterSourceY = x, y
+		town.waterSourceReady = true
+		town.waterSourceRevision = w.terrainRevision
+		return x, y, true
+	}
+	town.waterSearchFailUntil = w.simulationTime+WATER_SEARCH_RETRY_SECONDS
+	return 0, 0, false
+}
+
+// Nearest usable ring around the town hall, entrance first. Position-independent,
+// so it is cached per town instead of searched from every unit.
+TownCollectorReturnPoint :: proc(w: ^World, kingdomSlot, townSlot: int) -> (int, int, bool) {
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
+	town := &w.kingdoms[kingdomSlot].towns[townSlot]
+	if town.returnPointReady && town.returnPointRevision == w.terrainRevision {
+		return town.returnPointX, town.returnPointY, true
+	}
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	bestRadius := 9
+	bestX, bestY := 0, 0
+	entranceX, entranceY := 0, 0
+	entranceFound := false
+	found := false
+	for x in max(0, town.x-8)..=min(worldWidth-1, town.x+11) {
+		for y in max(0, town.y-8)..=min(worldHeight-1, town.y+11) {
+			if x >= town.x && x < town.x+4 && y >= town.y && y < town.y+4 do continue
+			if WorldTileOccupied(w, x, y) do continue
+			if !WorldTileWalkable(w, x, y, WaterCollector{}, kingdomSlot) do continue
+			if y == town.y+4 && (x == town.x+1 || x == town.x+2) && !entranceFound {
+				entranceX, entranceY = x, y
+				entranceFound = true
+			}
+			radius := max(max(town.x-x, x-(town.x+3)), max(town.y-y, y-(town.y+3)))
+			if radius > bestRadius do continue
+			if radius < bestRadius || !found {
+				bestRadius = radius
+				bestX, bestY = x, y
+				found = true
+			}
+		}
+	}
+	if entranceFound {
+		bestX, bestY = entranceX, entranceY
+	}
+	if !found do return 0, 0, false
+	town.returnPointX, town.returnPointY = bestX, bestY
+	town.returnPointReady = true
+	town.returnPointRevision = w.terrainRevision
+	return bestX, bestY, true
 }
 
 UnitFindFarmlandTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int, bool) {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
-	unitX := WorldWrapPosition(w.units[unitSlot].x, f32(worldWidth))
-	unitY := WorldWrapPosition(w.units[unitSlot].y, f32(worldHeight))
+	kingdomSlot := w.units[unitSlot].kingdome
+	townSlot := w.units[unitSlot].town
+	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
+	unit := &w.units[unitSlot]
+	unitX := WorldWrapPosition(unit.x, f32(worldWidth))
+	unitY := WorldWrapPosition(unit.y, f32(worldHeight))
 	bestX, bestY := 0, 0
 	bestDistanceSquared: f32 = 0
 	bestScore: f32 = -1
 	foundTarget := false
 	seed := u64(unitSlot+sequence*1031)
-	for buildingSlot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[buildingSlot] ||
-			w.buildings[buildingSlot].kingdom != w.units[unitSlot].kingdome ||
-			w.buildings[buildingSlot].town != w.units[unitSlot].town {
-			continue
-		}
-		if BuildingKindOf(w.buildings[buildingSlot].type) != .Farmland do continue
-
-		farmX := w.buildings.x[buildingSlot]
-		farmY := w.buildings.y[buildingSlot]
-		farmWidth, farmHeight := BuildingTileSize(w.buildings[buildingSlot].type)
-		for offsetX in -1..=farmWidth {
-			for offsetY in -1..=farmHeight {
-				if offsetX >= 0 && offsetX < farmWidth && offsetY >= 0 && offsetY < farmHeight do continue
-				x := WorldWrapCoordinate(farmX+offsetX, worldWidth)
-				y := WorldWrapCoordinate(farmY+offsetY, worldHeight)
-				if !UnitValidTileType(w.units[unitSlot].type, WorldTileAt(w, x, y).type) do continue
-				deltaX := WorldShortestWrappedDelta(f32(x)-unitX, f32(worldWidth))
-				deltaY := WorldShortestWrappedDelta(f32(y)-unitY, f32(worldHeight))
-				distanceSquared := deltaX*deltaX + deltaY*deltaY
-				score := WorldNoiseHash(x, y, seed)
-				if foundTarget && (distanceSquared > bestDistanceSquared ||
-					(distanceSquared == bestDistanceSquared && score <= bestScore)) {
+	// Farmlands always sit inside their town, so only the town's own buckets can
+	// hold one. Scanning every building slot here was O(world buildings) per
+	// farmer decision.
+	minX, maxX, minY, maxY := TownAreaBounds(w, kingdomSlot, townSlot)
+	chunkSize := w.spatial.chunkSize
+	chunksY := w.spatial.chunksY
+	startChunkX := max(0, minX)/chunkSize
+	endChunkX := min(max(maxX, 0), worldWidth-1)/chunkSize
+	startChunkY := max(0, minY)/chunkSize
+	endChunkY := min(max(maxY, 0), worldHeight-1)/chunkSize
+	for chunkX in startChunkX..=endChunkX {
+		for chunkY in startChunkY..=endChunkY {
+			chunk := chunkX*chunksY+chunkY
+			for buildingSlot := w.spatial.buildingHead[chunk]; buildingSlot >= 0;
+				buildingSlot = w.spatial.buildingNext[buildingSlot] {
+				if !w.buildingUsed[buildingSlot] ||
+				   w.buildings.kingdom[buildingSlot] != kingdomSlot ||
+				   w.buildings.town[buildingSlot] != townSlot {
 					continue
 				}
-				if WorldTileOccupied(w, x, y) do continue
-				bestX, bestY = x, y
-				bestDistanceSquared = distanceSquared
-				bestScore = score
-				foundTarget = true
+				if BuildingKindOf(w.buildings.type[buildingSlot]) != .Farmland do continue
+
+				farmX := w.buildings.x[buildingSlot]
+				farmY := w.buildings.y[buildingSlot]
+				farmWidth, farmHeight := BuildingTileSize(w.buildings.type[buildingSlot])
+				for offsetX in -1..=farmWidth {
+					for offsetY in -1..=farmHeight {
+						if offsetX >= 0 && offsetX < farmWidth && offsetY >= 0 && offsetY < farmHeight {
+							continue
+						}
+						x := WorldWrapCoordinate(farmX+offsetX, worldWidth)
+						y := WorldWrapCoordinate(farmY+offsetY, worldHeight)
+						if !UnitValidTileType(unit.type, WorldTileAt(w, x, y).type) do continue
+						deltaX := WorldShortestWrappedDelta(f32(x)-unitX, f32(worldWidth))
+						deltaY := WorldShortestWrappedDelta(f32(y)-unitY, f32(worldHeight))
+						distanceSquared := deltaX*deltaX+deltaY*deltaY
+						score := WorldNoiseHash(x, y, seed)
+						if foundTarget && (distanceSquared > bestDistanceSquared ||
+							(distanceSquared == bestDistanceSquared && score <= bestScore)) {
+							continue
+						}
+						if WorldTileOccupied(w, x, y) do continue
+						bestX, bestY = x, y
+						bestDistanceSquared = distanceSquared
+						bestScore = score
+						foundTarget = true
+					}
+				}
 			}
 		}
 	}

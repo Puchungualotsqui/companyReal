@@ -83,6 +83,7 @@ WorldNavigationInit :: proc(w: ^World) -> bool {
 		tileStepCost[tile] = max(1, int(math.round(f32(PLAIN_STEP_COST)*def.moveCost)))
 	}
 	w.tileConstructionBlocked = make([]bool, nodeCount)
+	w.tileSiteBlocked = make([]u8, nodeCount)
 	w.constructionBlockedTiles = make([dynamic]int, 0, COMBAT_SITE_CAPACITY*16)
 	// A* owns its own per-thread scratch; these arrays serve the serial town pass.
 	w.navigationCameFrom = make([]int, nodeCount)
@@ -94,6 +95,7 @@ WorldNavigationInit :: proc(w: ^World) -> bool {
 
 WorldNavigationDeinit :: proc(w: ^World) {
 	delete(w.tileConstructionBlocked)
+	delete(w.tileSiteBlocked)
 	delete(w.constructionBlockedTiles)
 	delete(w.navigationCameFrom)
 	delete(w.navigationQueue)
@@ -1047,6 +1049,51 @@ UnitFindBuildingExit :: proc(w: ^World, unitSlot, x, y, width, height: int) -> (
 		}
 	}
 	return 0, 0, false
+}
+
+// Short errands inside a town are usually clear ground. Walking an L-shaped
+// line is far cheaper than an A* search, and the tiles are validated in the
+// same axis order UnitMove steps through them.
+DIRECT_PATH_MAX_TILES :: 10
+
+UnitDirectPath :: proc(
+	w: ^World,
+	type: UnitType,
+	kingdomSlot, startX, startY, targetX, targetY: int,
+	path: ^[dynamic]int,
+) -> bool {
+	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return false
+	dx := targetX-startX
+	dy := targetY-startY
+	if dx > worldWidth/2 do dx -= worldWidth
+	if dx < -worldWidth/2 do dx += worldWidth
+	if dy > worldHeight/2 do dy -= worldHeight
+	if dy < -worldHeight/2 do dy += worldHeight
+	steps := abs(dx)+abs(dy)
+	if steps <= 0 || steps > DIRECT_PATH_MAX_TILES do return false
+
+	clear(path)
+	x, y := WorldWrapCoordinate(startX, worldWidth), WorldWrapCoordinate(startY, worldHeight)
+	stepX := dx > 0 ? 1 : dx < 0 ? -1 : 0
+	stepY := dy > 0 ? 1 : dy < 0 ? -1 : 0
+	for _ in 0..<abs(dx) {
+		x = WorldWrapCoordinate(x+stepX, worldWidth)
+		if !WorldTileWalkable(w, x, y, type, kingdomSlot) {
+			clear(path)
+			return false
+		}
+		append(path, x*worldHeight+y)
+	}
+	for _ in 0..<abs(dy) {
+		y = WorldWrapCoordinate(y+stepY, worldHeight)
+		if !WorldTileWalkable(w, x, y, type, kingdomSlot) {
+			clear(path)
+			return false
+		}
+		append(path, x*worldHeight+y)
+	}
+	return len(path) > 0
 }
 
 UnitStepTowards :: proc(w: ^World, unitSlot: int, targetX, targetY, distance: f32) -> (reached: bool, blocked: bool, remaining: f32) {

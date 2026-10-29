@@ -3,8 +3,8 @@ package main
 import "base:intrinsics"
 import rl "vendor:raylib"
 
-UNIT_CAPACITY :: 10_000
-BUILDING_CAPACITY :: 5_000
+UNIT_CAPACITY :: 500_000
+BUILDING_CAPACITY :: 60_000
 KINGDOMS_CAPACITY :: 5
 // Playable kingdoms plus the dedicated independent-town faction. Independent
 // towns live in the last slot but never get a controller, AI, diplomacy or
@@ -27,6 +27,7 @@ World :: struct {
 	pendingDespawns: [dynamic]int,
 	buildings: #soa [BUILDING_CAPACITY]Building,
 	buildingUsed: [BUILDING_CAPACITY]bool,
+	buildingFreeHint: int, // First slot likely to be free
 	decorations: #soa [DECORATION_CAPACITY]Decoration,
 	decorationUsed: [DECORATION_CAPACITY]bool,
 	decorationCursor: int,
@@ -89,6 +90,7 @@ World :: struct {
 	spatial: SpatialIndex,
 	tileBuilding: []int,
 	tileConstructionBlocked: []bool,
+	tileSiteBlocked: []u8, // Town construction-site reservations per tile
 	constructionBlockedTiles: [dynamic]int, // Tiles currently reserved by combat sites
 	constructionBlockers: [CONSTRUCTION_BLOCKER_CAPACITY]ConstructionBlocker,
 	constructionBlockerOrder: [CONSTRUCTION_BLOCKER_CAPACITY]int, // Compact list of blockers
@@ -302,12 +304,12 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.units.town[i] = townSlot
 	w.units.homeSlot[i] = -1
 	w.units.sleepInside[i] = false
-	w.units.walkPhase = 0
-	w.units.animX = x
-	w.units.animY = y
-	w.units.actionStarted = -1e9
-	w.units.actionDirX = 0
-	w.units.actionDirY = 0
+	w.units.walkPhase[i] = 0
+	w.units.animX[i] = x
+	w.units.animY[i] = y
+	w.units.actionStarted[i] = -1e9
+	w.units.actionDirX[i] = 0
+	w.units.actionDirY[i] = 0
 	// UnitTypeInit requires the slot to be marked used.
 	w.unitUsed[i] = true
 	UnitTypeInit(w, i, type)
@@ -329,7 +331,9 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 		.HeatStressed = false,
 	}
 
-	w.units[i].path = make([dynamic]int, 0, 250)
+	// Short initial capacity: at half a million units the old 250-slot buffer
+	// alone would be a gigabyte. Paths grow when a search needs more.
+	w.units[i].path = make([dynamic]int, 0, 32)
 	w.units[i].pathTargetX = 0
 	w.units[i].pathTargetY = 0
 	w.units[i].pathRevision = 0
@@ -386,13 +390,22 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 	if !WorldBuildingValid(w, x, y, type) do return 0, false
 	if !BuildingClearUnits(w, x, y, type, false) do return 0, false
 	i := -1
-	for slot in 0..<BUILDING_CAPACITY {
+	for slot in w.buildingFreeHint..<BUILDING_CAPACITY {
 		if !w.buildingUsed[slot] {
 			i = slot
 			break
 		}
 	}
+	if i < 0 {
+		for slot in 0..<w.buildingFreeHint {
+			if !w.buildingUsed[slot] {
+				i = slot
+				break
+			}
+		}
+	}
 	if i < 0 do return 0, false
+	w.buildingFreeHint = i+1
 	BuildingClearUnits(w, x, y, type, true)
 
 	w.buildings.x[i] = x
@@ -403,6 +416,8 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 	w.buildings.kingdom[i] = kingdomSlot
 	w.buildings.town[i] = townSlot
 	w.buildings.homeResident[i] = 0
+	w.buildings.output[i] = 0
+	w.buildings.outputRevision[i] = 0
 
 	width, height := BuildingTileSize(type)
 	clearedWood := WorldDecorationClearRect(w, x, y, width, height)
@@ -520,6 +535,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 	SpatialBuildingRemove(w, slot)
 	FogBuildingDespawn(w, slot)
 	w.buildingUsed[slot] = false
+	if slot < w.buildingFreeHint do w.buildingFreeHint = slot
 	w.navigationRevision += 1
 	w.pathRevision += 1
 	return true

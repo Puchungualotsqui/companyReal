@@ -135,7 +135,12 @@ BuildingUpdateFarmland :: proc(w: ^World, buildingSlot: int, deltaTime: f32) {
 	if WorldTownExists(w, kingdomSlot, townSlot) {
 		town := &w.kingdoms[kingdomSlot].towns[townSlot]
 		town.farmlands += 1
-		town.farmlandOutput += BuildingFarmlandOutput(w, buildingSlot)
+		// Fertility only changes with the terrain, so the footprint scan is cached.
+		if w.buildings.outputRevision[buildingSlot] != w.terrainRevision {
+			w.buildings.output[buildingSlot] = BuildingFarmlandOutput(w, buildingSlot)
+			w.buildings.outputRevision[buildingSlot] = w.terrainRevision
+		}
+		town.farmlandOutput += w.buildings.output[buildingSlot]
 	}
 }
 
@@ -235,6 +240,7 @@ BuildingFindNearestHostileUnit :: proc(w: ^World, buildingSlot: int, attackRange
 		for offsetY in -chunkRadius..=chunkRadius {
 			chunkY := WorldWrapCoordinate(centerChunkY+offsetY, w.spatial.chunksY)
 			chunk := chunkX*w.spatial.chunksY+chunkY
+			if !SpatialChunkHasEnemy(w, chunk, kingdomSlot) do continue
 			for unitSlot := w.spatial.unitHead[chunk]; unitSlot >= 0;
 				unitSlot = w.spatial.unitNext[unitSlot] {
 				if !w.unitUsed[unitSlot] do continue
@@ -269,23 +275,51 @@ BuildingAccessDistance :: proc(w: ^World, x, y, width, height, tileX, tileY: int
 BuildingClearUnits :: proc(w: ^World, x, y: int, buildingType: BuildingType, relocate: bool) -> bool {
 	if BuildingWalkable(buildingType) do return true
 	width, height := BuildingTileSize(buildingType)
-	for slot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[slot] do continue
-		unit := &w.units[slot]
-		if int(unit.x) < x || int(unit.x) >= x+width || int(unit.y) < y || int(unit.y) >= y+height do continue
-		exitX, exitY, found := UnitFindBuildingExit(w, slot, x, y, width, height)
-		if !found do return false
-		if !relocate do continue
-		// A displaced trainee must release its old entrance and job assignment.
-		if _, converting := unit.state.(StateConverting); converting do UnitConversionCancel(w, slot)
-		unit.x, unit.y = f32(exitX)+0.5, f32(exitY)+0.5
-		unit.previousX, unit.previousY = unit.x, unit.y
-		unit.pathReady = false
-		if _, pacific := unit.state.(StatePacific); pacific {
-			unit.state = StatePacific.Roaming
-			unit.cooldown = 0
+	if width <= 0 || height <= 0 do return true
+	chunkSize := w.spatial.chunkSize
+	chunksX := w.spatial.chunksX
+	chunksY := w.spatial.chunksY
+	if chunkSize <= 0 || chunksX <= 0 || chunksY <= 0 do return true
+	worldWidth := f32(w.maxX)
+	worldHeight := f32(w.maxY)
+	// Buildings never wrap, so only the buckets the footprint touches can hold
+	// an occupant. Scanning every unit slot here made each placement O(units).
+	startChunkX := x/chunkSize
+	startChunkY := y/chunkSize
+	spanChunksX := (x+width-1)/chunkSize-startChunkX+1
+	spanChunksY := (y+height-1)/chunkSize-startChunkY+1
+	for offsetX in 0..<min(spanChunksX, chunksX) {
+		chunkX := WorldWrapCoordinate(startChunkX+offsetX, chunksX)
+		for offsetY in 0..<min(spanChunksY, chunksY) {
+			chunkY := WorldWrapCoordinate(startChunkY+offsetY, chunksY)
+			chunk := chunkX*chunksY+chunkY
+			slot := w.spatial.unitHead[chunk]
+			for slot >= 0 {
+				next := w.spatial.unitNext[slot]
+				unitSlot := slot
+				slot = next
+				if !w.unitUsed[unitSlot] do continue
+				unitX := int(WorldWrapPosition(w.units.x[unitSlot], worldWidth))
+				unitY := int(WorldWrapPosition(w.units.y[unitSlot], worldHeight))
+				if unitX < x || unitX >= x+width || unitY < y || unitY >= y+height do continue
+				exitX, exitY, found := UnitFindBuildingExit(w, unitSlot, x, y, width, height)
+				if !found do return false
+				if !relocate do continue
+				unit := &w.units[unitSlot]
+				// A displaced trainee must release its old entrance and job assignment.
+				if _, converting := unit.state.(StateConverting); converting {
+					UnitConversionCancel(w, unitSlot)
+				}
+				unit.x, unit.y = f32(exitX)+0.5, f32(exitY)+0.5
+				unit.previousX, unit.previousY = unit.x, unit.y
+				unit.pathReady = false
+				if _, pacific := unit.state.(StatePacific); pacific {
+					unit.state = StatePacific.Roaming
+					unit.cooldown = 0
+				}
+				SpatialUnitMove(w, unitSlot)
+			}
 		}
-		SpatialUnitMove(w, slot)
 	}
 	return true
 }
@@ -481,7 +515,6 @@ TownConstructionCancel :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: int)
 	settlers := site.settlers
 	site^ = ConstructionSite{}
 	ConstructionBlockerUntrack(w, kingdomSlot, townSlot, siteIndex)
-	TownConstructionResetBuilders(w, kingdomSlot, townSlot, siteIndex)
 	for _ in 0..<settlers do TownSpawnCitizen(w, kingdomSlot, townSlot, Villager{})
 	WorldConstructionChanged(w)
 }
@@ -503,29 +536,6 @@ TownConstructionCancelLeastProgress :: proc(w: ^World, kingdomSlot, townSlot: in
 	if best < 0 do return -1
 	TownConstructionCancel(w, kingdomSlot, townSlot, best)
 	return best
-}
-
-// Builders remember slot indices, so clear stale assignments whenever a slot is
-// completed or cancelled. Slot indices themselves stay stable.
-TownConstructionResetBuilders :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: int) {
-	for unitSlot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unitSlot] do continue
-		unit := &w.units[unitSlot]
-		if unit.kingdome != kingdomSlot || unit.town != townSlot do continue
-		if unit.type == nil || UnitKindOf(unit.type) != .Builder do continue
-		if _, converting := unit.state.(StateConverting); converting do continue
-		builder := &unit.type.(Builder)
-		if builder.failedConstruction == siteIndex do builder.failedConstruction = -1
-		if builder.constructionSite != siteIndex do continue
-
-		builder.constructionSite = -1
-		if state, pacific := &unit.state.(StatePacific); pacific {
-			if state^ == .ToConstruction || state^ == .Building {
-				state^ = .Roaming
-				unit.pathReady = false
-			}
-		}
-	}
 }
 
 BuildingBuildSeconds :: proc(kind: BuildingKind) -> f32 {
@@ -656,14 +666,13 @@ ConstructionProgress :: enum {
 	Completed,
 }
 
-// Advances one builder's share of site work: clearing first, then raising.
-// Builders run on worker threads, so the shared site is updated under a lock.
+// Applies one builder's share of site work: clearing first, then raising.
+// Called from the serial post-unit pass, never from workers.
 TownConstructionWork :: proc(
 	w: ^World,
 	kingdomSlot, townSlot, siteIndex: int,
 	deltaTime: f32,
 ) -> ConstructionProgress {
-	RecursiveLockGuard(&w.unitMutex)
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return .Completed
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	if siteIndex < 0 || siteIndex >= TOWN_CONSTRUCTION_CAPACITY do return .Completed
@@ -705,7 +714,7 @@ TownConstructionWork :: proc(
 	site.active = false
 	site^ = ConstructionSite{}
 	ConstructionBlockerUntrack(w, kingdomSlot, townSlot, siteIndex)
-	TownConstructionResetBuilders(w, kingdomSlot, townSlot, siteIndex)
+	// Assigned builders notice the inactive slot on their next update.
 	WorldConstructionChanged(w)
 	return .Completed
 }
@@ -816,12 +825,43 @@ TownAutoPathSite :: proc(w: ^World, kingdomSlot, townSlot: int) -> (int, int, bo
 	}
 
 	hasTarget := false
-	for slot in 0..<BUILDING_CAPACITY {
-		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdomSlot || w.buildings.town[slot] != townSlot do continue
-		kind := BuildingKindOf(w.buildings[slot].type)
-		if kind == .Path || kind == .Bridge || kind == .Wall || kind == .TownHall || kind == .DistrictHall do continue
-		width, height := BuildingTileSize(w.buildings[slot].type)
-		if TownMarkPathAccess(w, kingdomSlot, townSlot, w.buildings.x[slot], w.buildings.y[slot], width, height, networkStamp, goalStamp) do hasTarget = true
+	// Only the town's own buckets can hold its buildings.
+	boundsMinX, boundsMaxX, boundsMinY, boundsMaxY := TownAreaBounds(w, kingdomSlot, townSlot)
+	chunkSize := w.spatial.chunkSize
+	chunksY := w.spatial.chunksY
+	startChunkX := max(0, boundsMinX)/chunkSize
+	endChunkX := min(max(boundsMaxX, 0), worldWidth-1)/chunkSize
+	startChunkY := max(0, boundsMinY)/chunkSize
+	endChunkY := min(max(boundsMaxY, 0), worldHeight-1)/chunkSize
+	for chunkX in startChunkX..=endChunkX {
+		for chunkY in startChunkY..=endChunkY {
+			chunk := chunkX*chunksY+chunkY
+			for slot := w.spatial.buildingHead[chunk]; slot >= 0;
+				slot = w.spatial.buildingNext[slot] {
+				if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdomSlot ||
+					w.buildings.town[slot] != townSlot {
+					continue
+				}
+				kind := BuildingKindOf(w.buildings.type[slot])
+				if kind == .Path || kind == .Bridge || kind == .Wall || kind == .TownHall || kind == .DistrictHall {
+					continue
+				}
+				width, height := BuildingTileSize(w.buildings.type[slot])
+				if TownMarkPathAccess(
+					w,
+					kingdomSlot,
+					townSlot,
+					w.buildings.x[slot],
+					w.buildings.y[slot],
+					width,
+					height,
+					networkStamp,
+					goalStamp,
+				) {
+					hasTarget = true
+				}
+			}
+		}
 	}
 	for site in town.constructions {
 		if !site.active || site.kind == .Path || site.kind == .TownHall do continue
@@ -902,6 +942,13 @@ ConstructionBlockerTrack :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: in
 	w.constructionBlockerPosition[id] = w.constructionBlockerCount
 	w.constructionBlockerOrder[w.constructionBlockerCount] = id
 	w.constructionBlockerCount += 1
+	// Per-tile reservations keep overlap queries O(footprint) instead of O(sites).
+	worldHeight := int(w.maxY)
+	for tileX in site.x..<site.x+width {
+		for tileY in site.y..<site.y+height {
+			w.tileSiteBlocked[tileX*worldHeight+tileY] += 1
+		}
+	}
 }
 
 ConstructionBlockerUntrack :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: int) {
@@ -912,6 +959,14 @@ ConstructionBlockerUntrack :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: 
 	id := ConstructionBlockerId(kingdomSlot, townSlot, siteIndex)
 	position := w.constructionBlockerPosition[id]
 	if position < 0 || position >= w.constructionBlockerCount do return
+	blocker := w.constructionBlockers[id]
+	worldHeight := int(w.maxY)
+	for tileX in blocker.x..<blocker.x+blocker.width {
+		for tileY in blocker.y..<blocker.y+blocker.height {
+			index := tileX*worldHeight+tileY
+			if w.tileSiteBlocked[index] > 0 do w.tileSiteBlocked[index] -= 1
+		}
+	}
 	last := w.constructionBlockerCount-1
 	moved := w.constructionBlockerOrder[last]
 	w.constructionBlockerOrder[position] = moved
@@ -922,11 +977,11 @@ ConstructionBlockerUntrack :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: 
 
 TownConstructionSiteOverlaps :: proc(w: ^World, x, y: int, kind: BuildingKind) -> bool {
 	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
-	for index in 0..<w.constructionBlockerCount {
-		blocker := w.constructionBlockers[w.constructionBlockerOrder[index]]
-		if x < blocker.x+blocker.width && blocker.x < x+width &&
-			y < blocker.y+blocker.height && blocker.y < y+height {
-			return true
+	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
+	if x < 0 || y < 0 || x+width > worldWidth || y+height > worldHeight do return false
+	for tileX in x..<x+width {
+		for tileY in y..<y+height {
+			if w.tileSiteBlocked[tileX*worldHeight+tileY] > 0 do return true
 		}
 	}
 	return false

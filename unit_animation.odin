@@ -132,19 +132,40 @@ UnitAnimationMoving :: proc(w: ^World, unitSlot: int) -> bool {
 }
 
 // Advances stride phase and schedules work/ambient effects on the render clock.
-WorldUnitAnimationUpdate :: proc(w: ^World, deltaTime: f32) {
+// Only buckets under the view are visited: animation is purely visual, and a
+// skipped unit snaps its anim position instead of trailing a stale path.
+WorldUnitAnimationUpdate :: proc(
+	w: ^World,
+	deltaTime: f32,
+	minX, maxX, minY, maxY: f32,
+) {
 	if deltaTime <= 0 do return
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return
+	chunkSize := w.spatial.chunkSize
+	chunksX := w.spatial.chunksX
+	chunksY := w.spatial.chunksY
+	if chunkSize <= 0 || chunksX <= 0 || chunksY <= 0 do return
 
 	now := w.simulationTime+w.simulationAccumulator
 	animTick := int(now*24)
-
-	for unitSlot in 0..<UNIT_CAPACITY {
-		if !w.unitUsed[unitSlot] do continue
-		unit := &w.units[unitSlot]
-		if unit.type == nil do continue
+	chunkMinX := int(math.floor(minX))/chunkSize-1
+	chunkMaxX := int(math.floor(maxX))/chunkSize+1
+	chunkMinY := int(math.floor(minY))/chunkSize-1
+	chunkMaxY := int(math.floor(maxY))/chunkSize+1
+	spanX := min(chunkMaxX-chunkMinX+1, chunksX)
+	spanY := min(chunkMaxY-chunkMinY+1, chunksY)
+	for chunkOffsetX in 0..<spanX {
+		chunkX := WorldWrapCoordinate(chunkMinX+chunkOffsetX, chunksX)
+		for chunkOffsetY in 0..<spanY {
+			chunkY := WorldWrapCoordinate(chunkMinY+chunkOffsetY, chunksY)
+			chunk := chunkX*chunksY+chunkY
+			for unitSlot := w.spatial.unitHead[chunk]; unitSlot >= 0;
+				unitSlot = w.spatial.unitNext[unitSlot] {
+				if !w.unitUsed[unitSlot] do continue
+				unit := &w.units[unitSlot]
+				if unit.type == nil do continue
 
 		hidden := false
 		pacificState: StatePacific
@@ -201,6 +222,8 @@ WorldUnitAnimationUpdate :: proc(w: ^World, deltaTime: f32) {
 			previous := int((now-deltaTime)/1.8+f32(unitSlot)*0.53)
 			current := int(now/1.8+f32(unitSlot)*0.53)
 			if current != previous do UnitAmbientMote(w, unitSlot, x, y, animTick)
+		}
+			}
 		}
 	}
 }
