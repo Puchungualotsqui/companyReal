@@ -684,8 +684,35 @@ UnitApplyDamage :: proc(
 ) -> bool {
 	if victimSlot < 0 || victimSlot >= UNIT_CAPACITY || !w.unitUsed[victimSlot] do return false
 	if damage <= 0 do return false
-	// Damage can arrive from another worker's unit, so the victim is mutated
-	// under a lock and deaths are deferred to the end of the unit loop.
+	// While the unit loop runs on every core, hits are queued per worker and
+	// applied in one serial pass. A lock per hit serialized every warrior.
+	if w.deferDespawn {
+		slot := parallelThreadSlot
+		count := pendingDamageCount[slot]
+		if count < PARALLEL_PENDING_DAMAGE {
+			pendingDamage[slot][count] = PendingDamage {
+				victim  = victimSlot,
+				damage  = damage,
+				sourceX = sourceX,
+				sourceY = sourceY,
+				kind    = kind,
+			}
+			pendingDamageCount[slot] = count+1
+			return false // The victim dies (if it does) in the serial pass
+		}
+	}
+	return UnitApplyDamageNow(w, victimSlot, damage, sourceX, sourceY, kind)
+}
+
+// Applies one hit immediately. Shared state is locked and deaths are deferred
+// to the end of the unit loop.
+UnitApplyDamageNow :: proc(
+	w: ^World,
+	victimSlot: int,
+	damage: f32,
+	sourceX, sourceY: f32,
+	kind: DamageKind,
+) -> bool {
 	RecursiveLockGuard(&w.unitMutex)
 	if w.units.health[victimSlot] <= 0 do return false
 

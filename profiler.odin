@@ -66,6 +66,7 @@ Profiler :: struct {
 	reportFrameMax:   f64,
 	file:             ^os.File,
 	unitKindIndex:    [UnitKind]int,
+	searchIndex:      int, // A* runs on workers, so it is merged per tick
 	sectionIndex:     [ProfileSection]int,
 	// Unit updates run on every core, so section timings are locked.
 	mutex:            sync.Mutex,
@@ -104,6 +105,7 @@ ProfilerInit :: proc() {
 	for name, kind in UNIT_PROFILE_NAMES {
 		profiler.unitKindIndex[kind] = ProfilerRegister(name)
 	}
+	profiler.searchIndex = ProfilerRegister("Nav:AStar")
 	for name, section in PROFILER_SECTION_NAMES {
 		profiler.sectionIndex[section] = ProfilerRegister(name)
 	}

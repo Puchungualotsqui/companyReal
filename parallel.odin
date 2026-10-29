@@ -35,6 +35,79 @@ parallelPool: thread.Pool
 parallelHelperCount: int // Helper threads, excluding the caller
 parallelReady: bool
 
+// --- bounded search scratch --------------------------------------------------
+// Flee, work-access, building-exit and water searches are small, but they used
+// to share the A* arrays under a lock, so every collector and fleeing civilian
+// serialized with everything else. Each thread now owns a queue plus a
+// generation-stamped visited set, which needs no clearing between searches.
+NAV_BFS_CAPACITY :: 4096
+NAV_BFS_SLOTS :: 8192 // Power of two, kept at most half full
+PARALLEL_MAX_THREADS :: 34
+
+NavBfsScratch :: struct {
+	queue:      [NAV_BFS_CAPACITY]int,
+	keys:       [NAV_BFS_SLOTS]i32,
+	parents:    [NAV_BFS_SLOTS]i32,
+	gens:       [NAV_BFS_SLOTS]u32,
+	generation: u32,
+	count:      int,
+}
+
+navBfsScratch: [PARALLEL_MAX_THREADS]NavBfsScratch
+parallelThreadCounter: i32
+
+// Thread slot used to pick this thread's scratch. The caller thread is 0.
+@(thread_local) parallelThreadSlot: int
+
+parallelThreadInit :: proc(t: ^thread.Thread, user_data: rawptr) {
+	parallelThreadSlot = min(
+		int(intrinsics.atomic_add(&parallelThreadCounter, 1))+1,
+		PARALLEL_MAX_THREADS-1,
+	)
+}
+
+NavBfsReset :: proc() -> ^NavBfsScratch {
+	scratch := &navBfsScratch[parallelThreadSlot]
+	scratch.generation += 1
+	if scratch.generation == 0 {
+		for &gen in scratch.gens do gen = 0
+		scratch.generation = 1
+	}
+	scratch.count = 0
+	return scratch
+}
+
+// Marks a tile as visited. `fresh` is false when another node already reached
+// it during this search. `slot` is always valid for setting the parent.
+NavBfsVisit :: proc(scratch: ^NavBfsScratch, index: int) -> (slot: int, fresh: bool) {
+	mask := u32(NAV_BFS_SLOTS-1)
+	probe := (u32(index)*0x9E3779B1) & mask
+	for _ in 0..<NAV_BFS_SLOTS {
+		if scratch.gens[probe] != scratch.generation {
+			if scratch.count >= NAV_BFS_SLOTS/2 do return -1, false
+			scratch.gens[probe] = scratch.generation
+			scratch.keys[probe] = i32(index)
+			scratch.parents[probe] = -1
+			scratch.count += 1
+			return int(probe), true
+		}
+		if scratch.keys[probe] == i32(index) do return int(probe), false
+		probe = (probe+1) & mask
+	}
+	return -1, false
+}
+
+NavBfsParent :: proc(scratch: ^NavBfsScratch, index: int) -> int {
+	mask := u32(NAV_BFS_SLOTS-1)
+	probe := (u32(index)*0x9E3779B1) & mask
+	for _ in 0..<NAV_BFS_SLOTS {
+		if scratch.gens[probe] != scratch.generation do return -1
+		if scratch.keys[probe] == i32(index) do return int(scratch.parents[probe])
+		probe = (probe+1) & mask
+	}
+	return -1
+}
+
 // Helpers leave one core to the calling (simulation or render) thread. The
 // count comes from the machine instead of a fixed constant.
 ParallelInit :: proc() {
@@ -49,18 +122,21 @@ ParallelInit :: proc() {
 	)
 	if parallelHelperCount <= 0 do return
 
-	thread.pool_init(&parallelPool, context.allocator, parallelHelperCount)
+	parallelThreadCounter = 0
+	thread.pool_init(&parallelPool, context.allocator, parallelHelperCount, parallelThreadInit)
 	thread.pool_start(&parallelPool)
 	parallelReady = true
 	if PROFILING_ENABLED do fmt.printfln("PARALLEL helpers=%d", parallelHelperCount)
 }
 
 ParallelDeinit :: proc() {
-	if !parallelReady do return
-	for thread.pool_num_outstanding(&parallelPool) > 0 do thread.yield()
-	thread.pool_join(&parallelPool)
-	thread.pool_destroy(&parallelPool)
-	parallelReady = false
+	if parallelReady {
+		for thread.pool_num_outstanding(&parallelPool) > 0 do thread.yield()
+		thread.pool_join(&parallelPool)
+		thread.pool_destroy(&parallelPool)
+		parallelReady = false
+	}
+	AStarScratchDeinit()
 }
 
 ParallelAvailable :: proc() -> bool {
@@ -115,6 +191,19 @@ RecursiveLockGuard :: proc(l: ^RecursiveLock) -> bool {
 	RecursiveLockAcquire(l)
 	return true
 }
+
+// Hits collected by the parallel unit loop and applied in one serial pass.
+PARALLEL_PENDING_DAMAGE :: 512
+
+PendingDamage :: struct {
+	victim: int,
+	damage: f32,
+	sourceX, sourceY: f32,
+	kind: DamageKind,
+}
+
+pendingDamage: [PARALLEL_MAX_THREADS][PARALLEL_PENDING_DAMAGE]PendingDamage
+pendingDamageCount: [PARALLEL_MAX_THREADS]int
 
 parallelRunJob :: proc(task: thread.Task) {
 	job := cast(^ParallelJob)task.data

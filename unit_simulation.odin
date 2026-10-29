@@ -1141,8 +1141,6 @@ CIVILIAN_DECISION_INTERVAL :: 1.0
 UNIT_LOD_DORMANT_STRIDE :: 2
 
 UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomSlot := -1, townSlot := -1) -> (int, int, bool) {
-	// Shares the navigation scratch with A*.
-	RecursiveLockGuard(&w.navMutex)
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	nodeCount := worldWidth*worldHeight
@@ -1170,23 +1168,19 @@ UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomS
 		if returnRadius > 8 do return 0, 0, false
 	}
 
-	w.navigationSearchId += 1
-	if w.navigationSearchId == 0 {
-		for &stamp in w.navigationStamp do stamp = 0
-		w.navigationSearchId = 1
-	}
-	searchId := w.navigationSearchId
+	scratch := NavBfsReset()
+	queue := scratch.queue[:]
 	startX := int(WorldWrapPosition(unit.x, f32(worldWidth)))
 	startY := int(WorldWrapPosition(unit.y, f32(worldHeight)))
 	start := startX*worldHeight+startY
-	w.navigationStamp[start] = searchId
-	w.navigationQueue[0] = start
+	NavBfsVisit(scratch, start)
+	queue[0] = start
 	head, tail := 0, 1
 	directionOffset := WorldWrapCoordinate(unitSlot+taskSequence, 4)
 	expansions := 0
 	for head < tail && expansions < COLLECTOR_SEARCH_MAX_EXPANSIONS {
 		expansions += 1
-		index := w.navigationQueue[head]
+		index := queue[head]
 		head += 1
 		x, y := index/worldHeight, index%worldHeight
 		if UnitValidTileType(unit.type, w.groundStorage[index].type) &&
@@ -1228,10 +1222,9 @@ UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomS
 			x = WorldWrapCoordinate(x, worldWidth)
 			y = WorldWrapCoordinate(y, worldHeight)
 			next := x*worldHeight+y
-			if w.navigationStamp[next] == searchId do continue
+			if _, fresh := NavBfsVisit(scratch, next); !fresh do continue
 			if !WorldTileWalkable(w, x, y, unit.type, unit.kingdome) do continue
-			w.navigationStamp[next] = searchId
-			w.navigationQueue[tail] = next
+			queue[tail] = next
 			tail += 1
 		}
 	}

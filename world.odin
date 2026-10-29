@@ -20,7 +20,6 @@ World :: struct {
 	// One tick of unit simulation can run on every core. These guard the few
 	// shared mutations that cannot be split by unit slot.
 	unitMutex:    RecursiveLock, // Damage, construction work, type changes
-	navMutex:     RecursiveLock, // A* and the navigation scratch arrays
 	spatialMutex: RecursiveLock, // Spatial bucket links
 	effectsMutex: RecursiveLock, // Particles
 	fireMutex:    RecursiveLock, // Live fire list
@@ -95,13 +94,8 @@ World :: struct {
 	constructionBlockerOrder: [CONSTRUCTION_BLOCKER_CAPACITY]int, // Compact list of blockers
 	constructionBlockerPosition: [CONSTRUCTION_BLOCKER_CAPACITY]int, // Index in the compact list
 	constructionBlockerCount: int,
-	navigationDistance: []int,
-	navigationPriority: []int, // gScore + heuristic, kept for the heap
 	navigationCameFrom: []int,
-	navigationOpen: []bool,
-	navigationClosed: []bool,
 	navigationQueue: []int,
-	navigationHeapPos: []int,
 	navigationStamp: []u32,
 	navigationSearchId: u32,
 	flowQueue: []int,

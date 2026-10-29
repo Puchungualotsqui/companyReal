@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:math"
 import "core:slice"
 import "core:sync"
+import rl "vendor:raylib"
 
 FLOW_FIELD_CAPACITY :: 16
 FLOW_FIELD_MAX_STEPS :: 8
@@ -83,13 +84,9 @@ WorldNavigationInit :: proc(w: ^World) -> bool {
 	}
 	w.tileConstructionBlocked = make([]bool, nodeCount)
 	w.constructionBlockedTiles = make([dynamic]int, 0, COMBAT_SITE_CAPACITY*16)
-	w.navigationDistance = make([]int, nodeCount)
-	w.navigationPriority = make([]int, nodeCount)
+	// A* owns its own per-thread scratch; these arrays serve the serial town pass.
 	w.navigationCameFrom = make([]int, nodeCount)
-	w.navigationOpen = make([]bool, nodeCount)
-	w.navigationClosed = make([]bool, nodeCount)
 	w.navigationQueue = make([]int, nodeCount)
-	w.navigationHeapPos = make([]int, nodeCount)
 	w.navigationStamp = make([]u32, nodeCount)
 	w.flowQueue = make([]int, nodeCount)
 	return true
@@ -98,13 +95,8 @@ WorldNavigationInit :: proc(w: ^World) -> bool {
 WorldNavigationDeinit :: proc(w: ^World) {
 	delete(w.tileConstructionBlocked)
 	delete(w.constructionBlockedTiles)
-	delete(w.navigationDistance)
-	delete(w.navigationPriority)
 	delete(w.navigationCameFrom)
-	delete(w.navigationOpen)
-	delete(w.navigationClosed)
 	delete(w.navigationQueue)
-	delete(w.navigationHeapPos)
 	delete(w.navigationStamp)
 	delete(w.flowQueue)
 	for &field in w.flowFields {
@@ -113,25 +105,85 @@ WorldNavigationDeinit :: proc(w: ^World) {
 	}
 }
 
-AStarHeapSwap :: #force_inline proc(heap, heapPos: []int, a, b: int) {
+AStarNodeState :: enum u8 {
+	Unseen,
+	Open,
+	Closed,
+}
+
+// A* arrays are indexed by world tile, so each worker needs its own copy to run
+// searches in parallel. One set is about 25 MB on the largest map.
+AStarScratch :: struct {
+	distance:  []i32, // gScore
+	priority:  []i32, // gScore + heuristic
+	cameFrom:  []i32,
+	heapPos:   []i32,
+	queue:     []i32,
+	state:     []u8,
+	stamp:     []u32,
+	searchId:  u32,
+	nodeCount: int,
+	time:      f64, // Seconds spent searching, merged per tick
+	calls:     int,
+}
+
+astarScratch: [PARALLEL_MAX_THREADS]AStarScratch
+
+AStarScratchAcquire :: proc(nodeCount: int) -> ^AStarScratch {
+	scratch := &astarScratch[parallelThreadSlot]
+	if scratch.nodeCount == nodeCount do return scratch
+	delete(scratch.distance)
+	delete(scratch.priority)
+	delete(scratch.cameFrom)
+	delete(scratch.heapPos)
+	delete(scratch.queue)
+	delete(scratch.state)
+	delete(scratch.stamp)
+	scratch^ = AStarScratch {
+		distance  = make([]i32, nodeCount),
+		priority  = make([]i32, nodeCount),
+		cameFrom  = make([]i32, nodeCount),
+		heapPos   = make([]i32, nodeCount),
+		queue     = make([]i32, nodeCount),
+		state     = make([]u8, nodeCount),
+		stamp     = make([]u32, nodeCount),
+		nodeCount = nodeCount,
+	}
+	return scratch
+}
+
+AStarScratchDeinit :: proc() {
+	for &scratch in astarScratch {
+		delete(scratch.distance)
+		delete(scratch.priority)
+		delete(scratch.cameFrom)
+		delete(scratch.heapPos)
+		delete(scratch.queue)
+		delete(scratch.state)
+		delete(scratch.stamp)
+		scratch = {}
+	}
+}
+
+AStarHeapSwap :: #force_inline proc(heap, heapPos, priority: []i32, a, b: int) {
 	heap[a], heap[b] = heap[b], heap[a]
-	heapPos[heap[a]] = a
-	heapPos[heap[b]] = b
+	heapPos[heap[a]] = i32(a)
+	heapPos[heap[b]] = i32(b)
 }
 
 // The heap only compares stored priorities. Recomputing the heuristic here
 // used to divide and modulo the tile index on every comparison.
-AStarHeapUp :: proc(heap, heapPos, priority: []int, position: int) {
+AStarHeapUp :: proc(heap, heapPos, priority: []i32, position: int) {
 	current := position
 	for current > 0 {
 		parent := (current-1)/2
 		if priority[heap[current]] >= priority[heap[parent]] do break
-		AStarHeapSwap(heap, heapPos, current, parent)
+		AStarHeapSwap(heap, heapPos, priority, current, parent)
 		current = parent
 	}
 }
 
-AStarHeapDown :: proc(heap, heapPos, priority: []int, count, position: int) {
+AStarHeapDown :: proc(heap, heapPos, priority: []i32, count, position: int) {
 	current := position
 	for {
 		left := current*2+1
@@ -142,27 +194,27 @@ AStarHeapDown :: proc(heap, heapPos, priority: []int, count, position: int) {
 			smallest = right
 		}
 		if priority[heap[current]] <= priority[heap[smallest]] do break
-		AStarHeapSwap(heap, heapPos, current, smallest)
+		AStarHeapSwap(heap, heapPos, priority, current, smallest)
 		current = smallest
 	}
 }
 
 AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, goalX, goalY: int, path: ^[dynamic]int, maxExpansions := 0) -> bool {
-	// The scratch arrays are shared, so one search runs at a time.
-	RecursiveLockAcquire(&w.navMutex)
-	defer RecursiveLockRelease(&w.navMutex)
-	profileStamp := ProfilerBegin("Nav:AStar")
-	defer ProfilerEnd(profileStamp)
+	started := f64(0)
+	if profiler.enabled do started = rl.GetTime()
+	defer {
+		if profiler.enabled {
+			scratch := &astarScratch[parallelThreadSlot]
+			scratch.time += rl.GetTime()-started
+			scratch.calls += 1
+		}
+	}
 	clear(path)
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return false
 
 	nodeCount := worldWidth*worldHeight
-	if nodeCount > len(w.navigationDistance) || nodeCount > len(w.navigationQueue) {
-		return false
-	}
-
 	wrappedStartX := WorldWrapCoordinate(startX, worldWidth)
 	wrappedStartY := WorldWrapCoordinate(startY, worldHeight)
 	wrappedGoalX := WorldWrapCoordinate(goalX, worldWidth)
@@ -170,44 +222,43 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 
 	startIndex := wrappedStartX*worldHeight + wrappedStartY
 	goalIndex := wrappedGoalX*worldHeight + wrappedGoalY
-	infinity := nodeCount*PLAIN_STEP_COST+1
 
 	if !WorldTileWalkableAt(w, goalIndex, unitType, unitKingdom, true) do return false
 
-	cameFrom := w.navigationCameFrom
-	gScore := w.navigationDistance
-	priority := w.navigationPriority
-	isOpen := w.navigationOpen
-	isClosed := w.navigationClosed
-	openSet := w.navigationQueue
-	heapPos := w.navigationHeapPos
-	stamp := w.navigationStamp
+	scratch := AStarScratchAcquire(nodeCount)
+	cameFrom := scratch.cameFrom
+	gScore := scratch.distance
+	priority := scratch.priority
+	state := scratch.state
+	openSet := scratch.queue
+	heapPos := scratch.heapPos
+	stamp := scratch.stamp
+	infinity := i32(nodeCount*PLAIN_STEP_COST+1)
 
 	// Stamp touched nodes instead of clearing the whole world for every path.
-	w.navigationSearchId += 1
-	if w.navigationSearchId == 0 {
-		for i in 0..<nodeCount {
-			stamp[i] = 0
-		}
-		w.navigationSearchId = 1
+	scratch.searchId += 1
+	if scratch.searchId == 0 {
+		for &entry in stamp do entry = 0
+		scratch.searchId = 1
 	}
-	searchId := w.navigationSearchId
+	searchId := scratch.searchId
 
 	stamp[startIndex] = searchId
 	cameFrom[startIndex] = -1
 	gScore[startIndex] = 0
-	priority[startIndex] = PATH_HEURISTIC_COST*WorldWrapHeuristic(
-		wrappedStartX,
-		wrappedStartY,
-		wrappedGoalX,
-		wrappedGoalY,
-		worldWidth,
-		worldHeight,
+	priority[startIndex] = i32(
+		PATH_HEURISTIC_COST*WorldWrapHeuristic(
+			wrappedStartX,
+			wrappedStartY,
+			wrappedGoalX,
+			wrappedGoalY,
+			worldWidth,
+			worldHeight,
+		),
 	)
-	isOpen[startIndex] = true
-	isClosed[startIndex] = false
+	state[startIndex] = u8(AStarNodeState.Open)
 	heapPos[startIndex] = 0
-	openSet[0] = startIndex
+	openSet[0] = i32(startIndex)
 	openCount := 1
 
 	found := false
@@ -215,22 +266,20 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 	for openCount > 0 {
 		if maxExpansions > 0 && expansions >= maxExpansions do break
 		expansions += 1
-		bestIndex := openSet[0]
+		bestIndex := int(openSet[0])
 		openCount -= 1
 		if openCount > 0 {
-			last := openSet[openCount]
-			openSet[0] = last
+			last := int(openSet[openCount])
+			openSet[0] = i32(last)
 			heapPos[last] = 0
 			AStarHeapDown(openSet, heapPos, priority, openCount, 0)
 		}
 		heapPos[bestIndex] = -1
-		isOpen[bestIndex] = false
+		state[bestIndex] = u8(AStarNodeState.Closed)
 		if bestIndex == goalIndex {
 			found = true
 			break
 		}
-		if isClosed[bestIndex] do continue
-		isClosed[bestIndex] = true
 
 		currentX := bestIndex / worldHeight
 		currentY := bestIndex % worldHeight
@@ -259,17 +308,16 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 				cameFrom[nextIndex] = -1
 				gScore[nextIndex] = infinity
 				priority[nextIndex] = infinity
-				isOpen[nextIndex] = false
-				isClosed[nextIndex] = false
+				state[nextIndex] = u8(AStarNodeState.Unseen)
 				heapPos[nextIndex] = -1
 			}
-			if isClosed[nextIndex] do continue
-			tentativeScore := gScore[bestIndex] + WorldStepCostAt(w, nextIndex)
+			if state[nextIndex] == u8(AStarNodeState.Closed) do continue
+			tentativeScore := gScore[bestIndex] + i32(WorldStepCostAt(w, nextIndex))
 			if tentativeScore >= gScore[nextIndex] do continue
 
-			cameFrom[nextIndex] = bestIndex
+			cameFrom[nextIndex] = i32(bestIndex)
 			gScore[nextIndex] = tentativeScore
-			priority[nextIndex] = tentativeScore+
+			priority[nextIndex] = tentativeScore+i32(
 				PATH_HEURISTIC_COST*WorldWrapHeuristic(
 					nextX,
 					nextY,
@@ -277,15 +325,16 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 					wrappedGoalY,
 					worldWidth,
 					worldHeight,
-				)
-			if isOpen[nextIndex] {
-				AStarHeapUp(openSet, heapPos, priority, heapPos[nextIndex])
+				),
+			)
+			if state[nextIndex] == u8(AStarNodeState.Open) {
+				AStarHeapUp(openSet, heapPos, priority, int(heapPos[nextIndex]))
 			} else if openCount < nodeCount {
-				isOpen[nextIndex] = true
-				heapPos[nextIndex] = openCount
-				openSet[openCount] = nextIndex
+				state[nextIndex] = u8(AStarNodeState.Open)
+				heapPos[nextIndex] = i32(openCount)
+				openSet[openCount] = i32(nextIndex)
 				openCount += 1
-				AStarHeapUp(openSet, heapPos, priority, heapPos[nextIndex])
+				AStarHeapUp(openSet, heapPos, priority, int(heapPos[nextIndex]))
 			}
 		}
 	}
@@ -295,7 +344,7 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 		for {
 			append(path, cursor)
 			if cursor == startIndex do break
-			cursor = cameFrom[cursor]
+			cursor = int(cameFrom[cursor])
 			if cursor < 0 {
 				clear(path)
 				found = false
@@ -401,8 +450,6 @@ UnitFleeClearance :: proc(w: ^World, x, y: f32, enemies: []UnitNearbyEnemy) -> f
 // Builds at most 85 reachable nodes, with no full-map A*. Shared navigation
 // scratch is stamped, while the resulting short route belongs to the unit.
 UnitFindEscapePath :: proc(w: ^World, unitSlot: int, enemies: []UnitNearbyEnemy) -> bool {
-	// Shares the navigation scratch with A*, so it needs the same lock.
-	RecursiveLockGuard(&w.navMutex)
 	unit := &w.units[unitSlot]
 	width, height := int(w.maxX), int(w.maxY)
 	startX := int(WorldWrapPosition(unit.x, f32(width)))
@@ -420,23 +467,18 @@ UnitFindEscapePath :: proc(w: ^World, unitSlot: int, enemies: []UnitNearbyEnemy)
 		len(w.navigationCameFrom) < width*height {
 				return false
 			}
-	w.navigationSearchId += 1
-	if w.navigationSearchId == 0 {
-		for &stamp in w.navigationStamp do stamp = 0
-		w.navigationSearchId = 1
-	}
-	stamp := w.navigationSearchId
+	scratch := NavBfsReset()
+	queue := scratch.queue[:]
 	depth: [FLEE_SEARCH_CAPACITY]int
 	routeClearance: [FLEE_SEARCH_CAPACITY]f32
 	startClearance := UnitFleeClearance(w, unit.x, unit.y, enemies)
 	routeClearance[0] = startClearance
-	w.navigationQueue[0] = start
-	w.navigationStamp[start] = stamp
-	w.navigationCameFrom[start] = -1
+	queue[0] = start
+	NavBfsVisit(scratch, start)
 	queueEnd := 1
 	best, bestScore := start, startClearance
 	for cursor := 0; cursor < queueEnd; cursor += 1 {
-		index := w.navigationQueue[cursor]
+		index := queue[cursor]
 		if depth[cursor] >= FLEE_SEARCH_STEPS do continue
 		for direction in 0..<4 {
 			nx, ny := index/height, index%height
@@ -448,27 +490,29 @@ UnitFindEscapePath :: proc(w: ^World, unitSlot: int, enemies: []UnitNearbyEnemy)
 			}
 			nx, ny = WorldWrapCoordinate(nx, width), WorldWrapCoordinate(ny, height)
 			next := nx*height+ny
-			if w.navigationStamp[next] == stamp do continue
+			slot, fresh := NavBfsVisit(scratch, next)
+			if !fresh do continue
 			if !WorldTileWalkable(w, nx, ny, unit.type, unit.kingdome) do continue
 			clearance := UnitFleeClearance(w, f32(nx)+0.5, f32(ny)+0.5, enemies)
 			// Do not escape through an enemy's immediate melee space, unless
 			// already that close; small temporary detours remain possible.
 			if clearance < min(startClearance, 1.25) do continue
 			if queueEnd >= FLEE_SEARCH_CAPACITY do continue
-			w.navigationStamp[next] = stamp
-			w.navigationCameFrom[next] = index
+			scratch.parents[slot] = i32(index)
 			depth[queueEnd] = depth[cursor]+1
 			routeClearance[queueEnd] = min(routeClearance[cursor], clearance)
 			score := clearance-0.15*f32(depth[queueEnd])-
 				2*max(0, startClearance-routeClearance[queueEnd])
 			if score > bestScore+0.001 do best, bestScore = next, score
-			w.navigationQueue[queueEnd] = next
+			queue[queueEnd] = next
 			queueEnd += 1
 		}
 	}
 	if best == start do return false
 	unit.pathTargetX, unit.pathTargetY = best/height, best%height
-	for cursor := best; cursor >= 0; cursor = w.navigationCameFrom[cursor] do append(&unit.path, cursor)
+	for cursor := best; cursor >= 0; cursor = NavBfsParent(scratch, cursor) {
+		append(&unit.path, cursor)
+	}
 	for i in 0..<len(unit.path)/2 {
 		opposite := len(unit.path)-i-1
 		unit.path[i], unit.path[opposite] = unit.path[opposite], unit.path[i]
@@ -902,8 +946,6 @@ UnitFollowFlowField :: proc(w: ^World, unitSlot: int, field: ^FlowField, deltaTi
 WORK_ACCESS_MAX_EXPANSIONS :: 256
 
 BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitType: UnitType, kingdom, startX, startY: int) -> (int, int, bool) {
-	// Shares the navigation scratch with A*.
-	RecursiveLockGuard(&w.navMutex)
 	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return 0, 0, false
 	workRadius := 0
@@ -931,20 +973,16 @@ BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitTyp
 		if workRadius > 0 do break
 	}
 	if workRadius == 0 do return 0, 0, false
-	w.navigationSearchId += 1
-	if w.navigationSearchId == 0 {
-		for &stamp in w.navigationStamp do stamp = 0
-		w.navigationSearchId = 1
-	}
-	stamp := w.navigationSearchId
+	scratch := NavBfsReset()
+	queue := scratch.queue[:]
 	start := WorldWrapCoordinate(startX, worldWidth)*worldHeight+WorldWrapCoordinate(startY, worldHeight)
-	w.navigationQueue[0] = start
-	w.navigationStamp[start] = stamp
+	queue[0] = start
+	NavBfsVisit(scratch, start)
 	queueEnd := 1
 	expansions := 0
 	for cursor := 0; cursor < queueEnd && expansions < WORK_ACCESS_MAX_EXPANSIONS; cursor += 1 {
 		expansions += 1
-		index := w.navigationQueue[cursor]
+		index := queue[cursor]
 		currentX, currentY := index/worldHeight, index%worldHeight
 		if BuildingAccessDistance(w, x, y, width, height, currentX, currentY) == workRadius &&
 			WorldTileWalkable(w, currentX, currentY, unitType, kingdom) {
@@ -961,10 +999,9 @@ BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitTyp
 			nextX = WorldWrapCoordinate(nextX, worldWidth)
 			nextY = WorldWrapCoordinate(nextY, worldHeight)
 			nextIndex := nextX*worldHeight+nextY
-			if w.navigationStamp[nextIndex] == stamp do continue
+			if _, fresh := NavBfsVisit(scratch, nextIndex); !fresh do continue
 			if !WorldTileWalkable(w, nextX, nextY, unitType, kingdom) do continue
-			w.navigationStamp[nextIndex] = stamp
-			w.navigationQueue[queueEnd] = nextIndex
+			queue[queueEnd] = nextIndex
 			queueEnd += 1
 		}
 	}
@@ -974,22 +1011,16 @@ BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitTyp
 // Search through the footprint only, stopping at its first walkable exit. This
 // avoids moving an occupant across water, other buildings or neighboring sites.
 UnitFindBuildingExit :: proc(w: ^World, unitSlot, x, y, width, height: int) -> (int, int, bool) {
-	// Shares the navigation scratch with A*.
-	RecursiveLockGuard(&w.navMutex)
 	unit := &w.units[unitSlot]
 	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
-	w.navigationSearchId += 1
-	if w.navigationSearchId == 0 {
-		for &stamp in w.navigationStamp do stamp = 0
-		w.navigationSearchId = 1
-	}
-	stamp := w.navigationSearchId
+	scratch := NavBfsReset()
+	queue := scratch.queue[:]
 	start := int(unit.x)*worldHeight+int(unit.y)
-	w.navigationQueue[0] = start
-	w.navigationStamp[start] = stamp
+	queue[0] = start
+	NavBfsVisit(scratch, start)
 	queueEnd := 1
 	for cursor := 0; cursor < queueEnd; cursor += 1 {
-		index := w.navigationQueue[cursor]
+		index := queue[cursor]
 		currentX, currentY := index/worldHeight, index%worldHeight
 		for direction in 0..<4 {
 			nextX, nextY := currentX, currentY
@@ -1002,8 +1033,7 @@ UnitFindBuildingExit :: proc(w: ^World, unitSlot, x, y, width, height: int) -> (
 			nextX = WorldWrapCoordinate(nextX, worldWidth)
 			nextY = WorldWrapCoordinate(nextY, worldHeight)
 			nextIndex := nextX*worldHeight+nextY
-			if w.navigationStamp[nextIndex] == stamp do continue
-			w.navigationStamp[nextIndex] = stamp
+			if _, fresh := NavBfsVisit(scratch, nextIndex); !fresh do continue
 			inside := nextX >= x && nextX < x+width && nextY >= y && nextY < y+height
 			if !inside {
 				if WorldTileWalkable(w, nextX, nextY, unit.type, unit.kingdome) {
@@ -1012,7 +1042,7 @@ UnitFindBuildingExit :: proc(w: ^World, unitSlot, x, y, width, height: int) -> (
 				continue
 			}
 			if !WorldTileWalkableBase(w, nextX, nextY, unit.type, unit.kingdome) do continue
-			w.navigationQueue[queueEnd] = nextIndex
+			queue[queueEnd] = nextIndex
 			queueEnd += 1
 		}
 	}

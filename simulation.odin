@@ -1440,6 +1440,28 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 	profiler.parallel = true
 	ParallelFor(UNIT_CAPACITY, &job, UnitLoopChunk)
 	profiler.parallel = false
+
+	// Apply the hits collected by the workers, then let the resulting deaths
+	// despawn in the same order as before.
+	for threadSlot in 0..<PARALLEL_MAX_THREADS {
+		count := pendingDamageCount[threadSlot]
+		for index in 0..<count {
+			hit := pendingDamage[threadSlot][index]
+			UnitApplyDamageNow(w, hit.victim, hit.damage, hit.sourceX, hit.sourceY, hit.kind)
+		}
+		pendingDamageCount[threadSlot] = 0
+	}
+	// A* searches run on the workers, so merge their timings here.
+	searchTime := f64(0)
+	searchCalls := 0
+	for threadSlot in 0..<PARALLEL_MAX_THREADS {
+		scratch := &astarScratch[threadSlot]
+		searchTime += scratch.time
+		searchCalls += scratch.calls
+		scratch.time = 0
+		scratch.calls = 0
+	}
+	if searchCalls > 0 do ProfilerAddTotal(profiler.searchIndex, searchTime, searchCalls)
 	w.deferDespawn = false
 
 	for slot in w.pendingDespawns {
