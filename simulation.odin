@@ -1,5 +1,6 @@
 package main
 
+import "base:intrinsics"
 import "core:math"
 import rl "vendor:raylib"
 
@@ -1314,31 +1315,23 @@ UnitUpdateSliceOf :: proc(unitSlot: int) -> int {
 	return int((u64(unitSlot)*0x9E3779B97F4A7C15)>>32)%UNIT_UPDATE_SLICES
 }
 
-WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
-	SpatialCacheBeginTick(w)
-	stamp := ProfilerBegin("Unit:Housing")
-	WorldHousingUpdate(w)
-	ProfilerEnd(stamp)
-	stamp = ProfilerBegin("Unit:Alarm")
-	WorldTownAlarmUpdate(w)
-	ProfilerEnd(stamp)
+// One tick of unit updates split by unit slot. Every worker keeps its own
+// timing; shared town counters are updated atomically. Pathfinding, damage,
+// construction and particles still share locks, which is the remaining
+// serialization in this pass.
+UnitLoopJob :: struct {
+	w:         ^World,
+	slice:     int,
+	tick:      int,
+	deltaTime: f32,
+	kindTime:  [PARALLEL_MAX_CHUNKS][UnitKind]f64,
+	kindCalls: [PARALLEL_MAX_CHUNKS][UnitKind]int,
+}
 
-	tick := int(w.simulationTime/TOWN_SIMULATION_STEP)
-	slice := tick%UNIT_UPDATE_SLICES
-	stamp = ProfilerBegin("Unit:Loop")
-	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdomSlot] do continue
-		for townSlot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
-			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			town.buildersBySlice[slice] = 0
-			town.waterCollectorsBySlice[slice] = 0
-			town.farmersBySlice[slice] = 0
-			town.villagersBySlice[slice] = 0
-		}
-	}
-
-	for unitSlot in 0..<UNIT_CAPACITY {
+UnitLoopChunk :: proc(ctx: rawptr, start, end, worker: int) {
+	job := cast(^UnitLoopJob)ctx
+	w := job.w
+	for unitSlot in start..<end {
 		if !w.unitUsed[unitSlot] do continue
 		// A dormant villager must react as soon as its town is alarmed.
 		if w.units.updateStride[unitSlot] > 1 {
@@ -1349,10 +1342,10 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 				UnitWake(w, unitSlot)
 			}
 		}
-		if UnitUpdateSliceOf(unitSlot) != slice do continue
+		if UnitUpdateSliceOf(unitSlot) != job.slice do continue
 		stride := int(w.units.updateStride[unitSlot])
-		if stride > 1 && (tick/UNIT_UPDATE_SLICES)%stride != 0 do continue
-		unitDelta := deltaTime*f32(UNIT_UPDATE_SLICES*stride)
+		if stride > 1 && (job.tick/UNIT_UPDATE_SLICES)%stride != 0 do continue
+		unitDelta := job.deltaTime*f32(UNIT_UPDATE_SLICES*stride)
 		w.units.previousX[unitSlot] = w.units.x[unitSlot]
 		w.units.previousY[unitSlot] = w.units.y[unitSlot]
 		w.units.updateTime[unitSlot] = w.simulationTime
@@ -1360,11 +1353,7 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		w.units.decisionTimer[unitSlot] -= unitDelta
 		w.units.decisionReady[unitSlot] = w.units.decisionTimer[unitSlot] <= 0
 		if w.units.decisionReady[unitSlot] {
-			jitter := 0.75+WorldNoiseHash(
-				unitSlot,
-				int(w.simulationTime/TOWN_SIMULATION_STEP),
-				0xD3C1,
-			)*0.5
+			jitter := 0.75+WorldNoiseHash(unitSlot, job.tick, 0xD3C1)*0.5
 			w.units.decisionTimer[unitSlot] = CIVILIAN_DECISION_INTERVAL*jitter
 		}
 		unitKind := UnitKindOf(w.units[unitSlot].type)
@@ -1409,7 +1398,64 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 			w.units.updateStride[unitSlot] = UnitDesiredUpdateStride(w, unitSlot)
 		}
 		if profileIndex < 0 do continue
-		ProfilerAdd(profileIndex, rl.GetTime()-unitStart)
+		job.kindTime[worker][unitKind] += rl.GetTime()-unitStart
+		job.kindCalls[worker][unitKind] += 1
+	}
+}
+
+WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
+	SpatialCacheBeginTick(w)
+	stamp := ProfilerBegin("Unit:Housing")
+	WorldHousingUpdate(w)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Unit:Alarm")
+	WorldTownAlarmUpdate(w)
+	ProfilerEnd(stamp)
+
+	tick := int(w.simulationTime/TOWN_SIMULATION_STEP)
+	slice := tick%UNIT_UPDATE_SLICES
+	stamp = ProfilerBegin("Unit:Loop")
+	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
+		if !w.kingdomUsed[kingdomSlot] do continue
+		for townSlot in 0..<TOWN_CAPACITY {
+			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
+			town := &w.kingdoms[kingdomSlot].towns[townSlot]
+			town.buildersBySlice[slice] = 0
+			town.waterCollectorsBySlice[slice] = 0
+			town.farmersBySlice[slice] = 0
+			town.villagersBySlice[slice] = 0
+		}
+	}
+
+	job := UnitLoopJob {
+		w         = w,
+		slice     = slice,
+		tick      = tick,
+		deltaTime = deltaTime,
+	}
+	// Units of one slot only touch themselves, so the loop splits by slot. The
+	// few cross-unit mutations (damage, construction work, spatial links) take
+	// their own short locks.
+	w.deferDespawn = true
+	profiler.parallel = true
+	ParallelFor(UNIT_CAPACITY, &job, UnitLoopChunk)
+	profiler.parallel = false
+	w.deferDespawn = false
+
+	for slot in w.pendingDespawns {
+		if w.unitUsed[slot] do UnitDespawn(w, slot)
+	}
+	clear(&w.pendingDespawns)
+
+	for profileIndex, kind in profiler.unitKindIndex {
+		if profileIndex < 0 do continue
+		total := f64(0)
+		calls := 0
+		for worker in 0..<PARALLEL_MAX_CHUNKS {
+			total += job.kindTime[worker][kind]
+			calls += job.kindCalls[worker][kind]
+		}
+		if calls > 0 do ProfilerAddTotal(profileIndex, total, calls)
 	}
 
 	// Combine the latest worker sample from every slice. Each slice refreshes

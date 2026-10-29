@@ -1,5 +1,7 @@
 package main
 
+import "base:intrinsics"
+
 Building :: struct {
 	x, y: int,
 	health: f32,
@@ -1069,7 +1071,7 @@ UnitTypeInit :: proc(w: ^World, unitSlot: int, type: UnitType) {
 	}
 	if unit.burning > 0 {
 		unit.burning = 0
-		w.unitsBurning -= 1
+		intrinsics.atomic_sub(&w.unitsBurning, 1)
 	}
 	unit.type = type
 	unit.health = UnitMaxHealthFor(w, unit.kingdome, type)

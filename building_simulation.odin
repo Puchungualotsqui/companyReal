@@ -657,11 +657,13 @@ ConstructionProgress :: enum {
 }
 
 // Advances one builder's share of site work: clearing first, then raising.
+// Builders run on worker threads, so the shared site is updated under a lock.
 TownConstructionWork :: proc(
 	w: ^World,
 	kingdomSlot, townSlot, siteIndex: int,
 	deltaTime: f32,
 ) -> ConstructionProgress {
+	RecursiveLockGuard(&w.unitMutex)
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return .Completed
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	if siteIndex < 0 || siteIndex >= TOWN_CONSTRUCTION_CAPACITY do return .Completed
@@ -998,7 +1000,7 @@ TownSiteSearchJob :: struct {
 	samples:          []TownSiteSample,
 }
 
-TownSiteSampleRange :: proc(ctx: rawptr, start, end: int) {
+TownSiteSampleRange :: proc(ctx: rawptr, start, end: int, worker: int) {
 	job := cast(^TownSiteSearchJob)ctx
 	town := &job.w.kingdoms[job.kingdomSlot].towns[job.townSlot]
 	for index in start..<end {

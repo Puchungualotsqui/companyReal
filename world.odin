@@ -1,5 +1,6 @@
 package main
 
+import "base:intrinsics"
 import rl "vendor:raylib"
 
 UNIT_CAPACITY :: 10_000
@@ -16,6 +17,15 @@ World :: struct {
 	unitUsed: [UNIT_CAPACITY]bool,
 	unitCount: int,
 	unitFreeHint: int,
+	// One tick of unit simulation can run on every core. These guard the few
+	// shared mutations that cannot be split by unit slot.
+	unitMutex:    RecursiveLock, // Damage, construction work, type changes
+	navMutex:     RecursiveLock, // A* and the navigation scratch arrays
+	spatialMutex: RecursiveLock, // Spatial bucket links
+	effectsMutex: RecursiveLock, // Particles
+	fireMutex:    RecursiveLock, // Live fire list
+	deferDespawn: bool, // Despawn requests are queued during the unit loop
+	pendingDespawns: [dynamic]int,
 	buildings: #soa [BUILDING_CAPACITY]Building,
 	buildingUsed: [BUILDING_CAPACITY]bool,
 	decorations: #soa [DECORATION_CAPACITY]Decoration,
@@ -116,6 +126,7 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.seed = settings.seed
 	w.unitCount = 0
 	w.unitFreeHint = 0
+	w.pendingDespawns = make([dynamic]int, 0, UNIT_CAPACITY)
 	w.dayTime = f32(WORLD_DAY_LENGTH_SECONDS)*6/24
 	WorldWeatherTransition(w, .Clear)
 	w.environment.phase = .None
@@ -186,6 +197,7 @@ WorldDeinit :: proc(w: ^World) {
 	WorldNavigationDeinit(w)
 	delete(w.scarTiles)
 	delete(w.terrainChunkRevisions)
+	delete(w.pendingDespawns)
 	delete(w.groundStorage)
 	delete(w.ground)
 	FogDeinit(w)
@@ -362,7 +374,7 @@ UnitDespawn :: proc(w: ^World, slot: int) -> bool {
 	}
 	delete(w.units[slot].path)
 	if w.units[slot].burning > 0 {
-		w.unitsBurning -= 1
+		intrinsics.atomic_sub(&w.unitsBurning, 1)
 		w.units[slot].burning = 0
 	}
 	SpatialUnitRemove(w, slot)

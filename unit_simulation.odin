@@ -1,5 +1,7 @@
 package main
 
+import "base:intrinsics"
+
 
 // Pacific units drop their work to fight a fire burning inside their town.
 UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
@@ -15,6 +17,7 @@ UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 	bestDistanceSquared: f32 = 0
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
+	RecursiveLockAcquire(&w.fireMutex)
 	for activeIndex in 0..<w.fireCount {
 		slot := w.fireActive[activeIndex]
 		if !TownPointInArea(w, unit.kingdome, unit.town, int(w.fires.x[slot]), int(w.fires.y[slot])) {
@@ -27,7 +30,10 @@ UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 		fireSlot = slot
 		bestDistanceSquared = distanceSquared
 	}
-	if fireSlot < 0 do return false
+	if fireSlot < 0 {
+		RecursiveLockRelease(&w.fireMutex)
+		return false
+	}
 
 	// A fire is an emergency: abandon whatever task is in progress.
 	if state, ok := unit.state.(StatePacific); ok && state != .Roaming {
@@ -39,13 +45,17 @@ UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 		w.fires.remaining[fireSlot] -= rate*deltaTime
 		if w.fires.remaining[fireSlot] <= 0 do WorldFireDespawn(w, fireSlot)
 		unit.pathReady = false
+		RecursiveLockRelease(&w.fireMutex)
 		return true
 	}
+	fireX := int(w.fires.x[fireSlot])
+	fireY := int(w.fires.y[fireSlot])
+	RecursiveLockRelease(&w.fireMutex)
 
 	targetX, targetY, found := FireAccessPoint(
 		w,
-		int(w.fires.x[fireSlot]),
-		int(w.fires.y[fireSlot]),
+		fireX,
+		fireY,
 		unit.type,
 		unit.kingdome,
 	)
@@ -63,7 +73,10 @@ UnitUpdateVillager :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	kingdomSlot := w.units[unitSlot].kingdome
 	townSlot := w.units[unitSlot].town
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return
-	w.kingdoms[kingdomSlot].towns[townSlot].villagersBySlice[UnitUpdateSlice(w)] += 1
+	intrinsics.atomic_add(
+		&w.kingdoms[kingdomSlot].towns[townSlot].villagersBySlice[UnitUpdateSlice(w)],
+		1,
+	)
 	if UnitUpdatePacificSleep(w, unitSlot, deltaTime) do return
 	if UnitTryExtinguish(w, unitSlot, deltaTime) do return
 	UnitUpdateRoaming(w, unitSlot, deltaTime)
@@ -191,7 +204,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	// Builders gathering wood are still available to switch to a construction
 	// site, so the town plans with the whole awake builder workforce.
-	town.buildersBySlice[UnitUpdateSlice(w)] += 1
+	intrinsics.atomic_add(&town.buildersBySlice[UnitUpdateSlice(w)], 1)
 	if state^ == .Roaming && builder.carriedResource > 0 {
 		if x, y, found := UnitFindTownReturnPoint(w, kingdomSlot, townSlot); found {
 			w.units[unitSlot].pathTargetX = x
@@ -298,7 +311,9 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			speed*deltaTime,
 		)
 		if reached {
+			RecursiveLockAcquire(&w.unitMutex)
 			town.wood += builder.carriedResource*KingdomTechWoodMultiplier(w, kingdomSlot)
+			RecursiveLockRelease(&w.unitMutex)
 			builder.carriedResource = 0
 			builder.targetDecoration = -1
 			builder.taskSequence += 1
@@ -371,7 +386,10 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	state := &unit.state.(StatePacific)
 
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return
-	w.kingdoms[kingdomSlot].towns[townSlot].waterCollectorsBySlice[UnitUpdateSlice(w)] += 1
+	intrinsics.atomic_add(
+		&w.kingdoms[kingdomSlot].towns[townSlot].waterCollectorsBySlice[UnitUpdateSlice(w)],
+		1,
+	)
 	if UnitUpdatePacificSleep(w, unitSlot, deltaTime) do return
 	if UnitTryExtinguish(w, unitSlot, deltaTime) do return
 
@@ -470,7 +488,10 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		farmer.workDay = w.dayNumber
 		farmer.workedToday = false
 	}
-	w.kingdoms[kingdomSlot].towns[townSlot].farmersBySlice[UnitUpdateSlice(w)] += 1
+	intrinsics.atomic_add(
+		&w.kingdoms[kingdomSlot].towns[townSlot].farmersBySlice[UnitUpdateSlice(w)],
+		1,
+	)
 	if UnitUpdatePacificSleep(w, unitSlot, deltaTime) do return
 	if UnitTryExtinguish(w, unitSlot, deltaTime) do return
 
@@ -591,6 +612,8 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 
 UnitConvert :: proc(w: ^World, unitSlot: int) {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return
+	// Conversion jobs are shared by every unit of the town.
+	RecursiveLockGuard(&w.unitMutex)
 	unit := &w.units[unitSlot]
 	if _, converting := unit.state.(StateConverting); !converting do return
 	state := unit.state.(StateConverting)
@@ -619,6 +642,7 @@ UnitConvert :: proc(w: ^World, unitSlot: int) {
 
 UnitConversionCancel :: proc(w: ^World, unitSlot: int) {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return
+	RecursiveLockGuard(&w.unitMutex)
 	unit := &w.units[unitSlot]
 	if _, converting := unit.state.(StateConverting); !converting do return
 	state := unit.state.(StateConverting)
@@ -1117,6 +1141,8 @@ CIVILIAN_DECISION_INTERVAL :: 1.0
 UNIT_LOD_DORMANT_STRIDE :: 2
 
 UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomSlot := -1, townSlot := -1) -> (int, int, bool) {
+	// Shares the navigation scratch with A*.
+	RecursiveLockGuard(&w.navMutex)
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	nodeCount := worldWidth*worldHeight

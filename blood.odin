@@ -684,6 +684,10 @@ UnitApplyDamage :: proc(
 ) -> bool {
 	if victimSlot < 0 || victimSlot >= UNIT_CAPACITY || !w.unitUsed[victimSlot] do return false
 	if damage <= 0 do return false
+	// Damage can arrive from another worker's unit, so the victim is mutated
+	// under a lock and deaths are deferred to the end of the unit loop.
+	RecursiveLockGuard(&w.unitMutex)
+	if w.units.health[victimSlot] <= 0 do return false
 
 	x := w.units.x[victimSlot]
 	y := w.units.y[victimSlot]
@@ -792,7 +796,11 @@ UnitApplyDamage :: proc(
 	}
 
 	if dead {
-		UnitDespawn(w, victimSlot)
+		if w.deferDespawn {
+			append(&w.pendingDespawns, victimSlot)
+		} else {
+			UnitDespawn(w, victimSlot)
+		}
 		return true
 	}
 	return false

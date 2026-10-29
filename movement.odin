@@ -1,7 +1,9 @@
 package main
 
+import "core:fmt"
 import "core:math"
 import "core:slice"
+import "core:sync"
 
 FLOW_FIELD_CAPACITY :: 16
 FLOW_FIELD_MAX_STEPS :: 8
@@ -146,6 +148,9 @@ AStarHeapDown :: proc(heap, heapPos, priority: []int, count, position: int) {
 }
 
 AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, goalX, goalY: int, path: ^[dynamic]int, maxExpansions := 0) -> bool {
+	// The scratch arrays are shared, so one search runs at a time.
+	RecursiveLockAcquire(&w.navMutex)
+	defer RecursiveLockRelease(&w.navMutex)
 	profileStamp := ProfilerBegin("Nav:AStar")
 	defer ProfilerEnd(profileStamp)
 	clear(path)
@@ -396,6 +401,8 @@ UnitFleeClearance :: proc(w: ^World, x, y: f32, enemies: []UnitNearbyEnemy) -> f
 // Builds at most 85 reachable nodes, with no full-map A*. Shared navigation
 // scratch is stamped, while the resulting short route belongs to the unit.
 UnitFindEscapePath :: proc(w: ^World, unitSlot: int, enemies: []UnitNearbyEnemy) -> bool {
+	// Shares the navigation scratch with A*, so it needs the same lock.
+	RecursiveLockGuard(&w.navMutex)
 	unit := &w.units[unitSlot]
 	width, height := int(w.maxX), int(w.maxY)
 	startX := int(WorldWrapPosition(unit.x, f32(width)))
@@ -719,7 +726,7 @@ FlowMaskJob :: struct {
 	kingdom:  int,
 }
 
-FlowMaskBuildTiles :: proc(ctx: rawptr, startIndex, endIndex: int) {
+FlowMaskBuildTiles :: proc(ctx: rawptr, startIndex, endIndex: int, worker: int) {
 	job := cast(^FlowMaskJob)ctx
 	for index in startIndex..<endIndex {
 		job.mask[index] = WorldTileWalkableAt(job.w, index, job.walkType, job.kingdom, true) ? 1 : 0
@@ -895,6 +902,8 @@ UnitFollowFlowField :: proc(w: ^World, unitSlot: int, field: ^FlowField, deltaTi
 WORK_ACCESS_MAX_EXPANSIONS :: 256
 
 BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitType: UnitType, kingdom, startX, startY: int) -> (int, int, bool) {
+	// Shares the navigation scratch with A*.
+	RecursiveLockGuard(&w.navMutex)
 	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return 0, 0, false
 	workRadius := 0
@@ -965,6 +974,8 @@ BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitTyp
 // Search through the footprint only, stopping at its first walkable exit. This
 // avoids moving an occupant across water, other buildings or neighboring sites.
 UnitFindBuildingExit :: proc(w: ^World, unitSlot, x, y, width, height: int) -> (int, int, bool) {
+	// Shares the navigation scratch with A*.
+	RecursiveLockGuard(&w.navMutex)
 	unit := &w.units[unitSlot]
 	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
 	w.navigationSearchId += 1

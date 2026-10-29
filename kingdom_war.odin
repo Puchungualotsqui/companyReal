@@ -684,6 +684,9 @@ WorldMeleeSeparation :: proc(w: ^World) {
 }
 
 WarriorSwing :: proc(w: ^World, unitSlot: int, state: ^StateWarrior) {
+	// The swing can hit other units, buildings and decorations, all of which are
+	// shared with the other workers running this tick.
+	RecursiveLockGuard(&w.unitMutex)
 	unit := &w.units[unitSlot]
 	damage := UnitDefaultDamage(unit.type)*KingdomTechWarriorDamageMultiplier(w, unit.kingdome, UnitKindOf(unit.type))
 	if unit.effects[.Poisoned] do damage *= 0.85

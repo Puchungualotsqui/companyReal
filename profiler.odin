@@ -3,6 +3,7 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:strings"
+import "core:sync"
 import rl "vendor:raylib"
 
 // Set to false to remove profiling output and its overhead.
@@ -66,6 +67,11 @@ Profiler :: struct {
 	file:             ^os.File,
 	unitKindIndex:    [UnitKind]int,
 	sectionIndex:     [ProfileSection]int,
+	// Unit updates run on every core, so section timings are locked.
+	mutex:            sync.Mutex,
+	// Set while the unit loop runs on workers: per-call sections would spend
+	// more time on the lock than on the work.
+	parallel:         bool,
 }
 
 profiler: Profiler
@@ -117,6 +123,7 @@ ProfilerWrite :: proc(text: string) {
 }
 
 ProfilerRegister :: proc(name: cstring) -> int {
+	sync.guard(&profiler.mutex)
 	for entry, i in profiler.entries[:profiler.count] {
 		if entry.name == name do return i
 	}
@@ -128,15 +135,25 @@ ProfilerRegister :: proc(name: cstring) -> int {
 }
 
 ProfilerBegin :: proc(name: cstring) -> ProfileStamp {
-	if !profiler.enabled do return {index = -1}
+	if !profiler.enabled || profiler.parallel do return {index = -1}
 	return ProfileStamp{index = ProfilerRegister(name), start = rl.GetTime()}
 }
 
 ProfilerAdd :: proc(index: int, elapsed: f64) {
 	if !profiler.enabled || index < 0 || index >= profiler.count do return
+	sync.guard(&profiler.mutex)
 	entry := &profiler.entries[index]
 	entry.total += elapsed
 	entry.calls += 1
+}
+
+// Merges per-worker timing captured during a parallel phase.
+ProfilerAddTotal :: proc(index: int, elapsed: f64, calls: int) {
+	if !profiler.enabled || index < 0 || index >= profiler.count do return
+	sync.guard(&profiler.mutex)
+	entry := &profiler.entries[index]
+	entry.total += elapsed
+	entry.calls += calls
 }
 
 // Hot-loop helpers. ProfilerBegin cannot be used here because it resolves the
@@ -147,28 +164,31 @@ ProfileSectionBegin :: proc(section: ProfileSection) -> f64 {
 }
 
 ProfileSectionEnd :: proc(section: ProfileSection, start: f64) {
-	if !profiler.enabled do return
+	if !profiler.enabled || profiler.parallel do return
 	ProfilerAdd(profiler.sectionIndex[section], rl.GetTime()-start)
 }
 
 ProfilerEnd :: proc(stamp: ProfileStamp) {
-	if !profiler.enabled || stamp.index < 0 do return
-	entry := &profiler.entries[stamp.index]
+	if !profiler.enabled || profiler.parallel || stamp.index < 0 do return
 	elapsed := rl.GetTime()-stamp.start
-	entry.total += elapsed
-	entry.calls += 1
+	{
+		sync.guard(&profiler.mutex)
+		entry := &profiler.entries[stamp.index]
+		entry.total += elapsed
+		entry.calls += 1
+	}
 	if elapsed < PROFILER_SLOW_WARNING_SECONDS do return
 
 	buffer: [256]u8
 	line := fmt.bprintf(
 		buffer[:],
 		"PROFILE SLOW: %s %.1f ms",
-		entry.name,
+		profiler.entries[stamp.index].name,
 		elapsed*1000,
 		newline = true,
 	)
 	ProfilerWrite(line)
-	if entry.name == "Sim:Tick" && elapsed >= PROFILER_SLOW_DUMP_SECONDS {
+	if profiler.entries[stamp.index].name == "Sim:Tick" && elapsed >= PROFILER_SLOW_DUMP_SECONDS {
 		ProfilerDumpCurrent()
 	}
 }

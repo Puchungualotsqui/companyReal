@@ -1,6 +1,7 @@
 package main
 
 import rl "vendor:raylib"
+import "base:intrinsics"
 import "core:math"
 
 // Particles are a fixed-capacity structure-of-arrays pool. They are simulated
@@ -66,14 +67,15 @@ Particle :: struct {
 	tint:          rl.Color,
 }
 
-// Deterministic xorshift so all the little gore variations replay identically.
+// Deterministic hash stream. An atomic counter keeps it safe when unit updates
+// spawn particles from several threads.
 PRandom :: proc(w: ^World) -> f32 {
-	x := w.particleRandom
-	if x == 0 do x = 0x9E3779B97F4A7C15
-	x = x ~ (x << 13)
-	x = x ~ (x >> 7)
-	x = x ~ (x << 17)
-	w.particleRandom = x
+	x := u64(intrinsics.atomic_add(&w.particleRandom, 0x9E3779B97F4A7C15))
+	x = x ~ (x >> 30)
+	x = x*0xBF58476D1CE4E5B9
+	x = x ~ (x >> 27)
+	x = x*0x94D049BB133111EB
+	x = x ~ (x >> 31)
 	return f32(x & 0xFFFFFF)/f32(0x1000000)
 }
 
@@ -132,6 +134,7 @@ UnitWaterWake :: proc(w: ^World, unitSlot: int) {
 }
 
 ParticleSpawn :: proc(w: ^World, p: Particle) -> int {
+	RecursiveLockGuard(&w.effectsMutex)
 	slot := -1
 	for step in 0 ..< PARTICLE_CAPACITY {
 		candidate := (w.particleCursor+step)%PARTICLE_CAPACITY

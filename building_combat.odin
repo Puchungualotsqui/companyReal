@@ -183,6 +183,8 @@ CombatSiteAdvance :: proc(w: ^World, siteSlot: int, deltaTime: f32) -> bool {
 	if siteSlot < 0 || siteSlot >= COMBAT_SITE_CAPACITY || !w.combatSiteUsed[siteSlot] {
 		return true
 	}
+	// Combat builders run on worker threads and share these sites.
+	RecursiveLockGuard(&w.unitMutex)
 
 	site := &w.combatSites[siteSlot]
 	speed := KingdomTechBuildSpeedMultiplier(w, site.kingdom)

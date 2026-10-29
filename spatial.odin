@@ -98,6 +98,7 @@ SpatialUnitChunk :: proc(w: ^World, unitSlot: int) -> int {
 }
 
 SpatialUnitLink :: proc(w: ^World, unitSlot, chunk: int) {
+	RecursiveLockGuard(&w.spatialMutex)
 	head := w.spatial.unitHead[chunk]
 	w.spatial.unitNext[unitSlot] = head
 	w.spatial.unitPrev[unitSlot] = -1
@@ -108,6 +109,7 @@ SpatialUnitLink :: proc(w: ^World, unitSlot, chunk: int) {
 }
 
 SpatialUnitUnlink :: proc(w: ^World, unitSlot: int) {
+	RecursiveLockGuard(&w.spatialMutex)
 	chunk := w.spatial.unitChunk[unitSlot]
 	if chunk < 0 do return
 	previous := w.spatial.unitPrev[unitSlot]

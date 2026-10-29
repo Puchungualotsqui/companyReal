@@ -271,6 +271,7 @@ WorldDecorationDespawn :: proc(w: ^World, slot: int) -> bool {
 
 // Fells a harvested decoration: trunks keep a stump so the forest can regrow.
 DecorationFell :: proc(w: ^World, slot: int) {
+	RecursiveLockGuard(&w.unitMutex)
 	kind := w.decorations.kind[slot]
 	DecorationDebris(w, w.decorations.x[slot], w.decorations.y[slot], kind)
 	switch kind {
@@ -350,6 +351,7 @@ WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> f32 {
 // Splash damage fells trees and brush around the impact; stone takes longer.
 WorldDecorationAreaDamage :: proc(w: ^World, x, y, radius, damage: f32) {
 	if radius <= 0 || damage <= 0 do return
+	RecursiveLockGuard(&w.unitMutex)
 	chunkSize := w.spatial.chunkSize
 	if chunkSize <= 0 do return
 	worldWidth := f32(w.maxX)

@@ -1,6 +1,7 @@
 package main
 
 import rl "vendor:raylib"
+import "base:intrinsics"
 import "core:math"
 
 // Fire rules. A fire cell lives on a tile and burns whatever flammable entity
@@ -99,6 +100,7 @@ WorldFireAt :: proc(w: ^World, x, y: int) -> bool {
 }
 
 WorldFireIgnite :: proc(w: ^World, x, y, intensity: f32, spread: f32 = 1) -> (int, bool) {
+	RecursiveLockGuard(&w.fireMutex)
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return 0, false
@@ -156,6 +158,7 @@ WorldFireExtinguishAt :: proc(w: ^World, x, y: int) {
 
 WorldFireDespawn :: proc(w: ^World, slot: int) -> bool {
 	if slot < 0 || slot >= FIRE_CAPACITY || !w.fireUsed[slot] do return false
+	RecursiveLockGuard(&w.fireMutex)
 	SpatialFireRemove(w, slot)
 	w.fireUsed[slot] = false
 	position := w.fireActivePosition[slot]
@@ -356,7 +359,7 @@ FireIgniteUnits :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 				roll := WorldNoiseHash(unitSlot, fireSlot, u64(w.simulationTime*64)+3)
 				if roll > chance do continue
 				w.units.burning[unitSlot] = FIRE_UNIT_BURN_SECONDS
-				w.unitsBurning += 1
+				intrinsics.atomic_add(&w.unitsBurning, 1)
 			}
 		}
 	}
@@ -378,7 +381,7 @@ FireDamageBurningUnits :: proc(w: ^World, deltaTime: f32) {
 		) {
 			continue
 		}
-		if w.units.burning[unitSlot] <= 0 do w.unitsBurning -= 1
+		if w.units.burning[unitSlot] <= 0 do intrinsics.atomic_sub(&w.unitsBurning, 1)
 	}
 }
 
