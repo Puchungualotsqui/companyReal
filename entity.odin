@@ -483,6 +483,9 @@ Unit :: struct {
 	poisonRemaining: f32,
 	decisionTimer: f32, // Seconds until the next expensive AI decision
 	decisionReady: bool, // Set once per update by WorldUnitUpdate
+	updateStride: u8, // Simulation slices between updates (idle LOD)
+	updateTime: f32, // Simulation time of the last update
+	updateInterval: f32, // Seconds the current position span covers
 	type: UnitType,
 	kingdome: int,
 	town: int,
@@ -1139,6 +1142,8 @@ UnitSetType :: proc(w: ^World, unitSlot: int, kind: UnitKind) {
 }
 
 UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32, maxExpansions := 0) -> bool {
+	start := ProfileSectionBegin(.UnitMove)
+	defer ProfileSectionEnd(.UnitMove, start)
 	unitIndex, exists := UnitGet(w, unitSlot)
 	if !exists || deltaTime < 0 do return false
 

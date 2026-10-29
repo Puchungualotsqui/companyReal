@@ -644,20 +644,17 @@ WorldRenderEnvironmentEvent :: proc(w: ^World, camera: rl.Camera2D) {
 DECORATION_MIN_ZOOM : f32 : 4
 
 // Position used for drawing and picking, interpolated between simulation ticks.
-// Units update in slices, so the interpolation window covers the whole slice
-// cycle and the previous position intentionally stays put on skipped ticks.
+// Every unit carries the time of its last update, so skipped (LOD) updates
+// stretch the interpolation window instead of snapping.
 UnitRenderPosition :: proc(w: ^World, unitSlot: int) -> (x, y: f32) {
 	x = w.units.x[unitSlot]
 	y = w.units.y[unitSlot]
-	tick := int(w.simulationTime/TOWN_SIMULATION_STEP)
-	phase := (tick%UNIT_UPDATE_SLICES-UnitUpdateSliceOf(unitSlot)+UNIT_UPDATE_SLICES) %
-		UNIT_UPDATE_SLICES
-	alpha := clamp(
-		(f32(phase)+clamp(w.simulationAccumulator/TOWN_SIMULATION_STEP, 0, 1)) /
-			f32(UNIT_UPDATE_SLICES),
-		0,
-		1,
-	)
+	now := w.simulationTime+w.simulationAccumulator
+	interval := w.units.updateInterval[unitSlot]
+	alpha: f32 = 1
+	if interval > 0 {
+		alpha = clamp((now-w.units.updateTime[unitSlot])/interval, 0, 1)
+	}
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
 	x = WorldWrapPosition(
@@ -1205,8 +1202,8 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 					)
 				}
 				if w.fireCount > 0 {
-					for fireSlot in 0 ..< FIRE_CAPACITY {
-						if !w.fireUsed[fireSlot] do continue
+					for activeIndex in 0..<w.fireCount {
+						fireSlot := w.fireActive[activeIndex]
 						fireX := w.fires.x[fireSlot]
 						fireY := w.fires.y[fireSlot]
 						if fireX+1 < minX || fireX-1 > maxX ||

@@ -70,11 +70,19 @@ FlowField :: struct {
 	walkMask: []u8,      // 1 when a tile is walkable
 }
 
+// Step cost per terrain, computed once instead of rounding per neighbour.
+tileStepCost: [TileType]int
+
 WorldNavigationInit :: proc(w: ^World) -> bool {
 	nodeCount := int(w.maxX)*int(w.maxY)
 	if nodeCount <= 0 do return false
+	for def, tile in TILE_DEFS {
+		tileStepCost[tile] = max(1, int(math.round(f32(PLAIN_STEP_COST)*def.moveCost)))
+	}
 	w.tileConstructionBlocked = make([]bool, nodeCount)
+	w.constructionBlockedTiles = make([dynamic]int, 0, COMBAT_SITE_CAPACITY*16)
 	w.navigationDistance = make([]int, nodeCount)
+	w.navigationPriority = make([]int, nodeCount)
 	w.navigationCameFrom = make([]int, nodeCount)
 	w.navigationOpen = make([]bool, nodeCount)
 	w.navigationClosed = make([]bool, nodeCount)
@@ -87,7 +95,9 @@ WorldNavigationInit :: proc(w: ^World) -> bool {
 
 WorldNavigationDeinit :: proc(w: ^World) {
 	delete(w.tileConstructionBlocked)
+	delete(w.constructionBlockedTiles)
 	delete(w.navigationDistance)
+	delete(w.navigationPriority)
 	delete(w.navigationCameFrom)
 	delete(w.navigationOpen)
 	delete(w.navigationClosed)
@@ -101,63 +111,35 @@ WorldNavigationDeinit :: proc(w: ^World) {
 	}
 }
 
-AStarPriority :: #force_inline proc(
-	index, goalX, goalY, worldWidth, worldHeight: int,
-	gScore: []int,
-) -> int {
-	return gScore[index]+PATH_HEURISTIC_COST*WorldWrapHeuristic(
-		index/worldHeight,
-		index%worldHeight,
-		goalX,
-		goalY,
-		worldWidth,
-		worldHeight,
-	)
-}
-
 AStarHeapSwap :: #force_inline proc(heap, heapPos: []int, a, b: int) {
 	heap[a], heap[b] = heap[b], heap[a]
 	heapPos[heap[a]] = a
 	heapPos[heap[b]] = b
 }
 
-AStarHeapUp :: proc(
-	heap, heapPos: []int,
-	position, goalX, goalY, worldWidth, worldHeight: int,
-	gScore: []int,
-) {
+// The heap only compares stored priorities. Recomputing the heuristic here
+// used to divide and modulo the tile index on every comparison.
+AStarHeapUp :: proc(heap, heapPos, priority: []int, position: int) {
 	current := position
 	for current > 0 {
 		parent := (current-1)/2
-		if AStarPriority(heap[current], goalX, goalY, worldWidth, worldHeight, gScore) >=
-			AStarPriority(heap[parent], goalX, goalY, worldWidth, worldHeight, gScore) {
-			break
-		}
+		if priority[heap[current]] >= priority[heap[parent]] do break
 		AStarHeapSwap(heap, heapPos, current, parent)
 		current = parent
 	}
 }
 
-AStarHeapDown :: proc(
-	heap, heapPos: []int,
-	count, position, goalX, goalY, worldWidth, worldHeight: int,
-	gScore: []int,
-) {
+AStarHeapDown :: proc(heap, heapPos, priority: []int, count, position: int) {
 	current := position
 	for {
 		left := current*2+1
 		if left >= count do break
 		right := left+1
 		smallest := left
-		if right < count &&
-			AStarPriority(heap[right], goalX, goalY, worldWidth, worldHeight, gScore) <
-				AStarPriority(heap[left], goalX, goalY, worldWidth, worldHeight, gScore) {
+		if right < count && priority[heap[right]] < priority[heap[left]] {
 			smallest = right
 		}
-		if AStarPriority(heap[current], goalX, goalY, worldWidth, worldHeight, gScore) <=
-			AStarPriority(heap[smallest], goalX, goalY, worldWidth, worldHeight, gScore) {
-			break
-		}
+		if priority[heap[current]] <= priority[heap[smallest]] do break
 		AStarHeapSwap(heap, heapPos, current, smallest)
 		current = smallest
 	}
@@ -181,14 +163,15 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 	wrappedGoalX := WorldWrapCoordinate(goalX, worldWidth)
 	wrappedGoalY := WorldWrapCoordinate(goalY, worldHeight)
 
-	if !WorldTileWalkable(w, wrappedGoalX, wrappedGoalY, unitType, unitKingdom) do return false
-
 	startIndex := wrappedStartX*worldHeight + wrappedStartY
 	goalIndex := wrappedGoalX*worldHeight + wrappedGoalY
 	infinity := nodeCount*PLAIN_STEP_COST+1
 
+	if !WorldTileWalkableAt(w, goalIndex, unitType, unitKingdom, true) do return false
+
 	cameFrom := w.navigationCameFrom
 	gScore := w.navigationDistance
+	priority := w.navigationPriority
 	isOpen := w.navigationOpen
 	isClosed := w.navigationClosed
 	openSet := w.navigationQueue
@@ -208,6 +191,14 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 	stamp[startIndex] = searchId
 	cameFrom[startIndex] = -1
 	gScore[startIndex] = 0
+	priority[startIndex] = PATH_HEURISTIC_COST*WorldWrapHeuristic(
+		wrappedStartX,
+		wrappedStartY,
+		wrappedGoalX,
+		wrappedGoalY,
+		worldWidth,
+		worldHeight,
+	)
 	isOpen[startIndex] = true
 	isClosed[startIndex] = false
 	heapPos[startIndex] = 0
@@ -225,17 +216,7 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 			last := openSet[openCount]
 			openSet[0] = last
 			heapPos[last] = 0
-			AStarHeapDown(
-				openSet,
-				heapPos,
-				openCount,
-				0,
-				wrappedGoalX,
-				wrappedGoalY,
-				worldWidth,
-				worldHeight,
-				gScore,
-			)
+			AStarHeapDown(openSet, heapPos, priority, openCount, 0)
 		}
 		heapPos[bestIndex] = -1
 		isOpen[bestIndex] = false
@@ -252,56 +233,54 @@ AStar :: proc(w: ^World, unitType: UnitType, unitKingdom: int, startX, startY, g
 			nextX := currentX
 			nextY := currentY
 			switch direction {
-			case 0: nextX += 1
-			case 1: nextX -= 1
-			case 2: nextY += 1
-			case 3: nextY -= 1
+			case 0:
+				nextX += 1
+				if nextX >= worldWidth do nextX = 0
+			case 1:
+				nextX -= 1
+				if nextX < 0 do nextX = worldWidth-1
+			case 2:
+				nextY += 1
+				if nextY >= worldHeight do nextY = 0
+			case 3:
+				nextY -= 1
+				if nextY < 0 do nextY = worldHeight-1
 			}
-			nextX = WorldWrapCoordinate(nextX, worldWidth)
-			nextY = WorldWrapCoordinate(nextY, worldHeight)
-			if !WorldTileWalkable(w, nextX, nextY, unitType, unitKingdom) do continue
 
 			nextIndex := nextX*worldHeight + nextY
+			if !WorldTileWalkableAt(w, nextIndex, unitType, unitKingdom, true) do continue
 			if stamp[nextIndex] != searchId {
 				stamp[nextIndex] = searchId
 				cameFrom[nextIndex] = -1
 				gScore[nextIndex] = infinity
+				priority[nextIndex] = infinity
 				isOpen[nextIndex] = false
 				isClosed[nextIndex] = false
 				heapPos[nextIndex] = -1
 			}
 			if isClosed[nextIndex] do continue
-			tentativeScore := gScore[bestIndex] + WorldStepCost(w, nextX, nextY)
+			tentativeScore := gScore[bestIndex] + WorldStepCostAt(w, nextIndex)
 			if tentativeScore >= gScore[nextIndex] do continue
 
 			cameFrom[nextIndex] = bestIndex
 			gScore[nextIndex] = tentativeScore
-			if isOpen[nextIndex] {
-				AStarHeapUp(
-					openSet,
-					heapPos,
-					heapPos[nextIndex],
+			priority[nextIndex] = tentativeScore+
+				PATH_HEURISTIC_COST*WorldWrapHeuristic(
+					nextX,
+					nextY,
 					wrappedGoalX,
 					wrappedGoalY,
 					worldWidth,
 					worldHeight,
-					gScore,
 				)
+			if isOpen[nextIndex] {
+				AStarHeapUp(openSet, heapPos, priority, heapPos[nextIndex])
 			} else if openCount < nodeCount {
 				isOpen[nextIndex] = true
 				heapPos[nextIndex] = openCount
 				openSet[openCount] = nextIndex
 				openCount += 1
-				AStarHeapUp(
-					openSet,
-					heapPos,
-					heapPos[nextIndex],
-					wrappedGoalX,
-					wrappedGoalY,
-					worldWidth,
-					worldHeight,
-					gScore,
-				)
+				AStarHeapUp(openSet, heapPos, priority, heapPos[nextIndex])
 			}
 		}
 	}
@@ -731,6 +710,22 @@ FlowFieldSeed :: proc(w: ^World, field: ^FlowField) -> bool {
 	return tail > 0
 }
 
+// Walk masks cover every tile and never overlap between rows, so they split
+// cleanly across cores.
+FlowMaskJob :: struct {
+	w:        ^World,
+	mask:     []u8,
+	walkType: UnitType,
+	kingdom:  int,
+}
+
+FlowMaskBuildTiles :: proc(ctx: rawptr, startIndex, endIndex: int) {
+	job := cast(^FlowMaskJob)ctx
+	for index in startIndex..<endIndex {
+		job.mask[index] = WorldTileWalkableAt(job.w, index, job.walkType, job.kingdom, true) ? 1 : 0
+	}
+}
+
 // Advances the current build by at most budget tiles. Returns true once the
 // field is complete (reachable or provably unreachable).
 FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int) -> bool {
@@ -743,22 +738,33 @@ FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int) -> bool {
 		mask := field.walkMask
 		walkType: UnitType = Knight{}
 		if field.walkWater do walkType = Turtle{}
-		x := field.maskX
-		y := field.maskY
-		index := field.maskIndex
-		for budget^ > 0 && x < worldWidth {
-			mask[index] = WorldTileWalkableAt(w, index, walkType, field.unitKingdom, true) ? 1 : 0
-			budget^ -= 1
-			index += 1
-			y += 1
-			if y >= worldHeight {
-				y = 0
-				x += 1
+		if ParallelAvailable() {
+			job := FlowMaskJob {
+				w        = w,
+				mask     = mask,
+				walkType = walkType,
+				kingdom  = field.unitKingdom,
 			}
+			ParallelFor(len(mask), &job, FlowMaskBuildTiles)
+			field.maskX, field.maskY, field.maskIndex = worldWidth, 0, len(mask)
+		} else {
+			x := field.maskX
+			y := field.maskY
+			index := field.maskIndex
+			for budget^ > 0 && x < worldWidth {
+				mask[index] = WorldTileWalkableAt(w, index, walkType, field.unitKingdom, true) ? 1 : 0
+				budget^ -= 1
+				index += 1
+				y += 1
+				if y >= worldHeight {
+					y = 0
+					x += 1
+				}
+			}
+			field.maskX, field.maskY, field.maskIndex = x, y, index
 		}
-		field.maskX, field.maskY, field.maskIndex = x, y, index
 		ProfilerEnd(stamp)
-		if x < worldWidth do return false
+		if field.maskX < worldWidth do return false
 		field.maskKingdom = field.unitKingdom
 		field.maskWater = field.walkWater
 		field.maskRevision = w.pathRevision
@@ -1138,13 +1144,14 @@ WorldTileHasPath :: proc(w: ^World, x, y: int) -> bool {
 	return BuildingKindOf(w.buildings[slot].type) == .Path
 }
 
-WorldStepCost :: proc(w: ^World, x, y: int) -> int {
-	if WorldTileHasPath(w, x, y) do return PATH_STEP_COST
-	wrappedX := WorldWrapCoordinate(x, int(w.maxX))
-	wrappedY := WorldWrapCoordinate(y, int(w.maxY))
-	index := wrappedX*int(w.maxY)+wrappedY
-	cost := TILE_DEFS[w.groundStorage[index].type].moveCost
-	return max(1, int(math.round(f32(PLAIN_STEP_COST)*cost)))
+// Index-based variant for A*: the caller already resolved the wrapped tile.
+WorldStepCostAt :: proc(w: ^World, index: int) -> int {
+	if slot := w.tileBuilding[index];
+		slot >= 0 && slot < BUILDING_CAPACITY && w.buildingUsed[slot] &&
+		BuildingKindOf(w.buildings[slot].type) == .Path {
+		return PATH_STEP_COST
+	}
+	return tileStepCost[w.groundStorage[index].type]
 }
 
 // Base speed adjusted by the tile the unit is standing on.

@@ -18,6 +18,8 @@ main :: proc() {
 
 	app := AppInit()
 	defer AppDeinit(&app)
+	ParallelInit()
+	defer ParallelDeinit()
 	crazyWorld := CommandLineFlagPresent(CRAZY_WORLD_FLAG)
 	if crazyWorld {
 		app.crazyWorld = true

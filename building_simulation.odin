@@ -95,7 +95,10 @@ WorldBuildingUpdate :: proc(w: ^World, deltaTime: f32) {
 // seal off another site's access or a training building's only route. Overlap
 // checks still prevent buildings and other sites from being placed on them.
 WorldConstructionChanged :: proc(w: ^World) {
-	for &blocked in w.tileConstructionBlocked do blocked = false
+	// Only combat-site footprints are reserved, so clearing the whole map here
+	// made every construction start cost a full-map pass.
+	for index in w.constructionBlockedTiles do w.tileConstructionBlocked[index] = false
+	clear(&w.constructionBlockedTiles)
 	for slot in 0..<COMBAT_SITE_CAPACITY {
 		if !w.combatSiteUsed[slot] do continue
 		site := w.combatSites[slot]
@@ -104,12 +107,16 @@ WorldConstructionChanged :: proc(w: ^World) {
 	w.navigationRevision += 1
 }
 
-BuildingReserveFootprint :: proc(w: ^World, x, y: int, buildingType: BuildingType, blocked := true) {
+BuildingReserveFootprint :: proc(w: ^World, x, y: int, buildingType: BuildingType) {
 	if BuildingWalkable(buildingType) do return
 	width, height := BuildingTileSize(buildingType)
+	worldHeight := int(w.maxY)
 	for tileX in x..<x+width {
 		for tileY in y..<y+height {
-			w.tileConstructionBlocked[tileX*int(w.maxY)+tileY] = blocked
+			index := tileX*worldHeight+tileY
+			if w.tileConstructionBlocked[index] do continue
+			w.tileConstructionBlocked[index] = true
+			append(&w.constructionBlockedTiles, index)
 		}
 	}
 }
@@ -286,6 +293,8 @@ BuildingClearUnits :: proc(w: ^World, x, y: int, buildingType: BuildingType, rel
 TownBuilderConstruct :: proc(w: ^World, kingdomSlot, townSlot: int, canGrow: bool) -> bool {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	startedAny := false
+	// The street search walks the town twice, so run it at most once per call.
+	pathChecked := false
 	maxStarts := min(max(1, town.builders), TOWN_CONSTRUCTION_STARTS_PER_TICK)
 	for _ in 0 ..< maxStarts {
 		if TownConstructionCount(w, kingdomSlot, townSlot) >= TOWN_CONSTRUCTION_CAPACITY do break
@@ -298,11 +307,16 @@ TownBuilderConstruct :: proc(w: ^World, kingdomSlot, townSlot: int, canGrow: boo
 			}
 		}
 
-		if TownConstructionKindCount(w, kingdomSlot, townSlot, .Path) == 0 {
-			if x, y, found := TownAutoPathSite(w, kingdomSlot, townSlot); found {
-				if TownStartConstruction(w, kingdomSlot, townSlot, .Path, x, y) {
-					startedAny = true
-					continue
+		if !pathChecked && TownConstructionKindCount(w, kingdomSlot, townSlot, .Path) == 0 {
+			pathChecked = true
+			if w.simulationTime >= town.pathSearchFailUntil {
+				if x, y, found := TownAutoPathSite(w, kingdomSlot, townSlot); found {
+					if TownStartConstruction(w, kingdomSlot, townSlot, .Path, x, y) {
+						startedAny = true
+						continue
+					}
+				} else {
+					town.pathSearchFailUntil = w.simulationTime+TOWN_SITE_FAIL_COOLDOWN
 				}
 			}
 		}
@@ -424,6 +438,8 @@ TownTakePooledSite :: proc(
 // Orders a building: the town pays for it and gets a construction site that
 // builders must clear and then raise.
 TownStartConstruction :: proc(w: ^World, kingdomSlot, townSlot: int, kind: BuildingKind, x, y: int) -> bool {
+	start := ProfileSectionBegin(.TownSiteStart)
+	defer ProfileSectionEnd(.TownSiteStart, start)
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return false
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	slot := TownConstructionFreeSlot(w, kingdomSlot, townSlot)
@@ -448,6 +464,7 @@ TownStartConstruction :: proc(w: ^World, kingdomSlot, townSlot: int, kind: Build
 		y = y,
 		paid = cost,
 	}
+	ConstructionBlockerTrack(w, kingdomSlot, townSlot, slot)
 	WorldConstructionChanged(w)
 	return true
 }
@@ -463,6 +480,7 @@ TownConstructionCancel :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: int)
 	town.wood += site.paid
 	settlers := site.settlers
 	site^ = ConstructionSite{}
+	ConstructionBlockerUntrack(w, kingdomSlot, townSlot, siteIndex)
 	TownConstructionResetBuilders(w, kingdomSlot, townSlot, siteIndex)
 	for _ in 0..<settlers do TownSpawnCitizen(w, kingdomSlot, townSlot, Villager{})
 	WorldConstructionChanged(w)
@@ -684,6 +702,7 @@ TownConstructionWork :: proc(
 	}
 	site.active = false
 	site^ = ConstructionSite{}
+	ConstructionBlockerUntrack(w, kingdomSlot, townSlot, siteIndex)
 	TownConstructionResetBuilders(w, kingdomSlot, townSlot, siteIndex)
 	WorldConstructionChanged(w)
 	return .Completed
@@ -742,6 +761,8 @@ TownMarkPathAccess :: proc(w: ^World, kingdomSlot, townSlot, x, y, width, height
 
 // Reuse connected streets, then find the shortest new branch to an entrance.
 TownAutoPathSite :: proc(w: ^World, kingdomSlot, townSlot: int) -> (int, int, bool) {
+	start := ProfileSectionBegin(.TownPathSite)
+	defer ProfileSectionEnd(.TownPathSite, start)
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
 	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return 0, 0, false
@@ -852,25 +873,69 @@ TownAutoPathSite :: proc(w: ^World, kingdomSlot, townSlot: int) -> (int, int, bo
 }
 
 // Automatic construction also reserves its footprint, so a player cannot drop a
-// combat site on top of a house that is already being raised.
+// combat site on top of a house that is already being raised. The compact list
+// keeps this cheap: the old query walked every town's site array per tile.
+ConstructionBlocker :: struct {
+	x, y,          width, height: int,
+}
+
+ConstructionBlockerId :: #force_inline proc(kingdomSlot, townSlot, siteIndex: int) -> int {
+	return (kingdomSlot*TOWN_CAPACITY+townSlot)*TOWN_CONSTRUCTION_CAPACITY+siteIndex
+}
+
+ConstructionBlockerTrack :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: int) {
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY do return
+	if townSlot < 0 || townSlot >= TOWN_CAPACITY do return
+	if siteIndex < 0 || siteIndex >= TOWN_CONSTRUCTION_CAPACITY do return
+	site := w.kingdoms[kingdomSlot].towns[townSlot].constructions[siteIndex]
+	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
+
+	id := ConstructionBlockerId(kingdomSlot, townSlot, siteIndex)
+	w.constructionBlockers[id] = ConstructionBlocker {
+		x      = site.x,
+		y      = site.y,
+		width  = width,
+		height = height,
+	}
+	w.constructionBlockerPosition[id] = w.constructionBlockerCount
+	w.constructionBlockerOrder[w.constructionBlockerCount] = id
+	w.constructionBlockerCount += 1
+}
+
+ConstructionBlockerUntrack :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: int) {
+	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY do return
+	if townSlot < 0 || townSlot >= TOWN_CAPACITY do return
+	if siteIndex < 0 || siteIndex >= TOWN_CONSTRUCTION_CAPACITY do return
+
+	id := ConstructionBlockerId(kingdomSlot, townSlot, siteIndex)
+	position := w.constructionBlockerPosition[id]
+	if position < 0 || position >= w.constructionBlockerCount do return
+	last := w.constructionBlockerCount-1
+	moved := w.constructionBlockerOrder[last]
+	w.constructionBlockerOrder[position] = moved
+	w.constructionBlockerPosition[moved] = position
+	w.constructionBlockerPosition[id] = -1
+	w.constructionBlockerCount = last
+}
+
 TownConstructionSiteOverlaps :: proc(w: ^World, x, y: int, kind: BuildingKind) -> bool {
 	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
-	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
-		if !w.kingdomUsed[kingdomSlot] do continue
-		for townSlot in 0..<TOWN_CAPACITY {
-			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
-			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			for site in town.constructions {
-				if !site.active do continue
-				otherWidth, otherHeight := BuildingTileSize(BuildingTypeFromKind(site.kind))
-				if x < site.x+otherWidth && site.x < x+width &&
-					y < site.y+otherHeight && site.y < y+height {
-					return true
-				}
-			}
+	for index in 0..<w.constructionBlockerCount {
+		blocker := w.constructionBlockers[w.constructionBlockerOrder[index]]
+		if x < blocker.x+blocker.width && blocker.x < x+width &&
+			y < blocker.y+blocker.height && blocker.y < y+height {
+			return true
 		}
 	}
 	return false
+}
+
+// Removing a town drops its sites without completing them, so the compact list
+// has to forget their footprints too.
+TownConstructionBlockersClear :: proc(w: ^World, kingdomSlot, townSlot: int) {
+	for siteIndex in 0..<TOWN_CONSTRUCTION_CAPACITY {
+		ConstructionBlockerUntrack(w, kingdomSlot, townSlot, siteIndex)
+	}
 }
 
 BuildingValidTileTypeForKingdom :: proc(w: ^World, kingdom: int, bType: BuildingType, tType: TileType) -> bool {
@@ -912,7 +977,70 @@ TOWN_BUILDING_SITE_SAMPLES :: 48
 // of them mostly repeats placement checks in dense areas.
 TOWN_BUILDING_SITE_CANDIDATES :: 8
 
+// Sample validation only reads the world, so the samples split cleanly across
+// cores. The caller merges them in sample order, which keeps the result
+// identical to a sequential scan.
+TownSiteSample :: struct {
+	x, y:  int,
+	score: f32,
+	valid: bool,
+}
+
+TownSiteSearchJob :: struct {
+	w:                ^World,
+	kingdomSlot, townSlot: int,
+	buildingType:     BuildingType,
+	kind:             BuildingKind,
+	seed:             u64,
+	minX, minY:       int,
+	spanX, spanY:     int,
+	width, height:    int,
+	samples:          []TownSiteSample,
+}
+
+TownSiteSampleRange :: proc(ctx: rawptr, start, end: int) {
+	job := cast(^TownSiteSearchJob)ctx
+	town := &job.w.kingdoms[job.kingdomSlot].towns[job.townSlot]
+	for index in start..<end {
+		rollX := WorldNoiseHash(index, int(job.kind)+1, job.seed+0x51D)
+		rollY := WorldNoiseHash(index, int(job.kind)+2, job.seed+0x51E)
+		x := job.minX+min(int(rollX*f32(job.spanX)), job.spanX-1)
+		y := job.minY+min(int(rollY*f32(job.spanY)), job.spanY-1)
+
+		distanceX := max(max(town.x-x, 0), x-(town.x+3))
+		distanceY := max(max(town.y-y, 0), y-(town.y+3))
+		if max(distanceX, distanceY) < 2 do continue
+		if !TownBuildingInArea(job.w, job.kingdomSlot, job.townSlot, x, y, job.buildingType) {
+			continue
+		}
+		if !TownBuildingValid(job.w, job.kingdomSlot, x, y, job.buildingType) do continue
+		access, accessible := TownPlacementAccess(job.w, job.kingdomSlot, x, y, job.width, job.height)
+		if !accessible do continue
+		if CombatSiteOverlaps(job.w, x, y, job.kind) do continue
+		if TownConstructionSiteOverlaps(job.w, x, y, job.kind) do continue
+		score := TownPlacementScore(
+			job.w,
+			job.kingdomSlot,
+			job.townSlot,
+			x,
+			y,
+			job.width,
+			job.height,
+			job.kind,
+			job.seed,
+		)
+		job.samples[index] = TownSiteSample {
+			x     = x,
+			y     = y,
+			score = score+f32(min(access, 12))*0.12,
+			valid = true,
+		}
+	}
+}
+
 TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType: BuildingType) -> (int, int, bool) {
+	start := ProfileSectionBegin(.TownSiteSearch)
+	defer ProfileSectionEnd(.TownSiteSearch, start)
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
@@ -933,32 +1061,39 @@ TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType
 	spanX := maxX-minX+1
 	spanY := maxY-minY+1
 
+	samples: [TOWN_BUILDING_SITE_SAMPLES]TownSiteSample
+	job := TownSiteSearchJob {
+		w             = w,
+		kingdomSlot   = kingdomSlot,
+		townSlot      = townSlot,
+		buildingType  = buildingType,
+		kind          = kind,
+		seed          = seed,
+		minX          = minX,
+		minY          = minY,
+		spanX         = spanX,
+		spanY         = spanY,
+		width         = buildingWidth,
+		height        = buildingHeight,
+		samples       = samples[:],
+	}
+	ParallelFor(TOWN_BUILDING_SITE_SAMPLES, &job, TownSiteSampleRange)
+
 	bestX, bestY := 0, 0
 	bestScore: f32 = -1e30
 	found := false
 	considered := 0
-	for sample in 0..<TOWN_BUILDING_SITE_SAMPLES {
-		rollX := WorldNoiseHash(sample, int(kind)+1, seed+0x51D)
-		rollY := WorldNoiseHash(sample, int(kind)+2, seed+0x51E)
-		x := minX+min(int(rollX*f32(spanX)), spanX-1)
-		y := minY+min(int(rollY*f32(spanY)), spanY-1)
-
-		distanceX := max(max(town.x-x, 0), x-(town.x+3))
-		distanceY := max(max(town.y-y, 0), y-(town.y+3))
-		if max(distanceX, distanceY) < 2 do continue
-		if !TownBuildingInArea(w, kingdomSlot, townSlot, x, y, buildingType) do continue
-		if !TownBuildingValid(w, kingdomSlot, x, y, buildingType) do continue
-		access, accessible := TownPlacementAccess(w, kingdomSlot, x, y, buildingWidth, buildingHeight)
-		if !accessible do continue
-		if CombatSiteOverlaps(w, x, y, kind) do continue
-		if TownConstructionSiteOverlaps(w, x, y, kind) do continue
-		score := TownPlacementScore(w, kingdomSlot, townSlot, x, y, buildingWidth, buildingHeight, kind, seed)
-		score += f32(min(access, 12))*0.12
-		if !found || score > bestScore {
-			bestX, bestY, bestScore, found = x, y, score, true
+	for sample in samples {
+		if !sample.valid do continue
+		if !found || sample.score > bestScore {
+			bestX, bestY, bestScore, found = sample.x, sample.y, sample.score, true
 		}
 		if town.sitePoolCount < TOWN_SITE_POOL_CAPACITY {
-			town.sitePool[town.sitePoolCount] = TownSiteCandidate{kind = kind, x = x, y = y}
+			town.sitePool[town.sitePoolCount] = TownSiteCandidate {
+				kind = kind,
+				x    = sample.x,
+				y    = sample.y,
+			}
 			town.sitePoolCount += 1
 		}
 		considered += 1
@@ -980,7 +1115,9 @@ TownPlacementAccess :: proc(w: ^World, kingdom, x, y, width, height: int) -> (in
 				}
 				wrappedX := WorldWrapCoordinate(tileX, worldWidth)
 				wrappedY := WorldWrapCoordinate(tileY, worldHeight)
-				if !WorldTileWalkable(w, wrappedX, wrappedY, Builder{}, kingdom) do continue
+				if !WorldTileWalkableAt(w, wrappedX*worldHeight+wrappedY, Builder{}, kingdom, true) {
+					continue
+				}
 				access += 1
 			}
 		}

@@ -24,6 +24,8 @@ World :: struct {
 	decorationStumps: int,
 	fires: #soa [FIRE_CAPACITY]Fire,
 	fireUsed: [FIRE_CAPACITY]bool,
+	fireActive: [FIRE_CAPACITY]int, // Compact list of live fire slots
+	fireActivePosition: [FIRE_CAPACITY]int, // Index of a slot inside fireActive
 	fireCursor: int,
 	fireCount: int,
 	unitsBurning: int,
@@ -78,7 +80,13 @@ World :: struct {
 	spatial: SpatialIndex,
 	tileBuilding: []int,
 	tileConstructionBlocked: []bool,
+	constructionBlockedTiles: [dynamic]int, // Tiles currently reserved by combat sites
+	constructionBlockers: [CONSTRUCTION_BLOCKER_CAPACITY]ConstructionBlocker,
+	constructionBlockerOrder: [CONSTRUCTION_BLOCKER_CAPACITY]int, // Compact list of blockers
+	constructionBlockerPosition: [CONSTRUCTION_BLOCKER_CAPACITY]int, // Index in the compact list
+	constructionBlockerCount: int,
 	navigationDistance: []int,
+	navigationPriority: []int, // gScore + heuristic, kept for the heap
 	navigationCameFrom: []int,
 	navigationOpen: []bool,
 	navigationClosed: []bool,
@@ -149,6 +157,8 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 		w.flowFields[i].targetTown = -1
 		w.flowFields[i].unitKingdom = -1
 	}
+	for &position in w.constructionBlockerPosition do position = -1
+	w.constructionBlockerCount = 0
 	WorldGenerate(w, settings)
 	ok := WorldSpawnInitialKingdoms(w, int(kingdoms), settings.seed)
 	if ok {
@@ -299,6 +309,9 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.units[i].decisionTimer =
 		WorldNoiseHash(i, 7, 0xD3C1)*CIVILIAN_DECISION_INTERVAL
 	w.units[i].decisionReady = false
+	w.units[i].updateStride = 1
+	w.units[i].updateTime = w.simulationTime
+	w.units[i].updateInterval = TOWN_SIMULATION_STEP*f32(UNIT_UPDATE_SLICES)
 	w.units[i].burning = 0
 	w.units[i].effects = [UnitEffects]bool{
 		.NoHome = false,
@@ -455,6 +468,7 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 		} else {
 			TownOrdersClear(w, kingdomSlot, townSlot)
 			TownConversionsClear(w, kingdomSlot, townSlot)
+			TownConstructionBlockersClear(w, kingdomSlot, townSlot)
 			w.kingdoms[kingdomSlot].townUsed[townSlot] = false
 			WorldConstructionChanged(w)
 			CombatSiteClear(w, kingdomSlot, townSlot)

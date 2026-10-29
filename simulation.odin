@@ -1323,8 +1323,8 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 	WorldTownAlarmUpdate(w)
 	ProfilerEnd(stamp)
 
-	slice := UnitUpdateSlice(w)
-	unitDelta := deltaTime*f32(UNIT_UPDATE_SLICES)
+	tick := int(w.simulationTime/TOWN_SIMULATION_STEP)
+	slice := tick%UNIT_UPDATE_SLICES
 	stamp = ProfilerBegin("Unit:Loop")
 	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdomSlot] do continue
@@ -1340,9 +1340,23 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 
 	for unitSlot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] do continue
+		// A dormant villager must react as soon as its town is alarmed.
+		if w.units.updateStride[unitSlot] > 1 {
+			kingdomSlot := w.units[unitSlot].kingdome
+			townSlot := w.units[unitSlot].town
+			if WorldTownExists(w, kingdomSlot, townSlot) &&
+				w.kingdoms[kingdomSlot].towns[townSlot].alarmActive {
+				UnitWake(w, unitSlot)
+			}
+		}
 		if UnitUpdateSliceOf(unitSlot) != slice do continue
+		stride := int(w.units.updateStride[unitSlot])
+		if stride > 1 && (tick/UNIT_UPDATE_SLICES)%stride != 0 do continue
+		unitDelta := deltaTime*f32(UNIT_UPDATE_SLICES*stride)
 		w.units.previousX[unitSlot] = w.units.x[unitSlot]
 		w.units.previousY[unitSlot] = w.units.y[unitSlot]
+		w.units.updateTime[unitSlot] = w.simulationTime
+		w.units.updateInterval[unitSlot] = unitDelta
 		w.units.decisionTimer[unitSlot] -= unitDelta
 		w.units.decisionReady[unitSlot] = w.units.decisionTimer[unitSlot] <= 0
 		if w.units.decisionReady[unitSlot] {
@@ -1390,6 +1404,9 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 					UnitWaterWake(w, unitSlot)
 				}
 			}
+		}
+		if w.unitUsed[unitSlot] {
+			w.units.updateStride[unitSlot] = UnitDesiredUpdateStride(w, unitSlot)
 		}
 		if profileIndex < 0 do continue
 		ProfilerAdd(profileIndex, rl.GetTime()-unitStart)

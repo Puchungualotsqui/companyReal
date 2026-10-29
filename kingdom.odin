@@ -212,6 +212,8 @@ ConstructionSite :: struct {
 }
 
 TOWN_CONSTRUCTION_CAPACITY :: 10
+// Every construction site in the world, used for overlap queries.
+CONSTRUCTION_BLOCKER_CAPACITY :: KINGDOMS_CAPACITY*TOWN_CAPACITY*TOWN_CONSTRUCTION_CAPACITY
 // Planning one building per tick keeps large towns from running the site
 // search dozens of times in the same simulation step.
 TOWN_CONSTRUCTION_STARTS_PER_TICK :: 1
@@ -248,6 +250,7 @@ Town :: struct {
 	constructionProgress: f32,
 	constructionFailUntil: f32, // Skip all site searches until this time
 	siteFailUntil: [BuildingKind]f32, // Per-kind retry time after a failed search
+	pathSearchFailUntil: f32, // Street extension search retry time
 	sitePool:      [TOWN_SITE_POOL_CAPACITY]TownSiteCandidate, // Reusable valid sites
 	sitePoolCount: int,
 	constructions: [TOWN_CONSTRUCTION_CAPACITY]ConstructionSite,
@@ -431,6 +434,7 @@ IndependentTownDefeat :: proc(w: ^World, townSlot, destroyer: int) {
 	}
 
 	TownOrdersClear(w, NEUTRAL_KINGDOM, townSlot)
+	TownConstructionBlockersClear(w, NEUTRAL_KINGDOM, townSlot)
 	w.kingdoms[NEUTRAL_KINGDOM].townUsed[townSlot] = false
 
 	if KingdomTownCount(w, NEUTRAL_KINGDOM) == 0 {
@@ -815,6 +819,7 @@ TownStartFounding :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> bool {
 		paid = cost,
 		settlers = settlers,
 	}
+	ConstructionBlockerTrack(w, kingdomSlot, townSlot, slot)
 	BuildingClearUnits(w, x, y, TownHall{}, true)
 	WorldConstructionChanged(w)
 	return true
@@ -1274,6 +1279,7 @@ TownFuse :: proc(
 	}
 
 	w.kingdoms[kingdomSlot].towns[guestSlot] = Town{}
+	TownConstructionBlockersClear(w, kingdomSlot, guestSlot)
 	WorldConstructionChanged(w)
 	w.navigationRevision += 1
 	w.pathRevision += 1
@@ -1792,6 +1798,7 @@ KingdomAbsorb :: proc(w: ^World, defeated, destroyer, capitalTown, capitalBuildi
 
 	for townSlot in 0..<TOWN_CAPACITY {
 		w.kingdoms[defeated].townUsed[townSlot] = false
+		TownConstructionBlockersClear(w, defeated, townSlot)
 		w.kingdoms[defeated].towns[townSlot].citizens = 0
 	}
 	w.kingdoms[defeated].capitalSlot = -1

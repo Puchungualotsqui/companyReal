@@ -3,6 +3,8 @@ package main
 
 // Pacific units drop their work to fight a fire burning inside their town.
 UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
+	start := ProfileSectionBegin(.UnitExtinguish)
+	defer ProfileSectionEnd(.UnitExtinguish, start)
 	unit := &w.units[unitSlot]
 	rate := UnitExtinguishRate(unit.type)
 	if rate <= 0 do return false
@@ -13,8 +15,8 @@ UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 	bestDistanceSquared: f32 = 0
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
-	for slot in 0 ..< FIRE_CAPACITY {
-		if !w.fireUsed[slot] do continue
+	for activeIndex in 0..<w.fireCount {
+		slot := w.fireActive[activeIndex]
 		if !TownPointInArea(w, unit.kingdome, unit.town, int(w.fires.x[slot]), int(w.fires.y[slot])) {
 			continue
 		}
@@ -639,6 +641,7 @@ UnitConversionCancel :: proc(w: ^World, unitSlot: int) {
 		unit.state = StatePacific.Roaming
 	}
 	unit.pathReady = false
+	UnitWake(w, unitSlot)
 }
 
 UnitResetState :: proc(w: ^World, unitSlot: int) {
@@ -704,9 +707,28 @@ UnitHiddenInside :: proc(w: ^World, unitSlot: int) -> bool {
 	return UnitInsideHome(w, unitSlot) >= 0
 }
 
+UnitWake :: proc(w: ^World, unitSlot: int) {
+	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return
+	w.units.updateStride[unitSlot] = 1
+	w.units.decisionTimer[unitSlot] = 0
+}
+
+// Idle villagers in peaceful towns are the only units allowed to sleep through
+// simulation slices. Everything else stays at the normal cadence.
+UnitDesiredUpdateStride :: proc(w: ^World, unitSlot: int) -> u8 {
+	unit := &w.units[unitSlot]
+	if UnitKindOf(unit.type) != .Villager do return 1
+	state, pacific := unit.state.(StatePacific)
+	if !pacific || state != .Roaming do return 1
+	if !WorldTownExists(w, unit.kingdome, unit.town) do return 1
+	if w.kingdoms[unit.kingdome].towns[unit.town].alarmActive do return 1
+	return UNIT_LOD_DORMANT_STRIDE
+}
+
 UnitSleepWake :: proc(w: ^World, unitSlot: int) {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return
 	unit := &w.units[unitSlot]
+	w.units.updateStride[unitSlot] = 1
 	if unit.sleepInside {
 		unit.sleepInside = false
 		// Move also relinks an absent unit, without duplicating an existing link.
@@ -747,6 +769,8 @@ UnitUpdateMilitaryAlarm :: proc(w: ^World, unitSlot: int) {
 
 // Emergency shelter/fleeing takes precedence over work, fire-fighting and sleep.
 UnitUpdatePacificSafety :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
+	start := ProfileSectionBegin(.UnitSafety)
+	defer ProfileSectionEnd(.UnitSafety, start)
 	unit := &w.units[unitSlot]
 	if UnitIsWarrior(unit.type) || UnitKindOf(unit.type) == .CombatBuilder do return false
 	if state, converting := unit.state.(StateConverting); converting && state.inside do return false
@@ -978,6 +1002,8 @@ UnitClearTownEffects :: proc(w: ^World, unitSlot: int) {
 }
 
 UnitFindRoamingTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int, bool) {
+	start := ProfileSectionBegin(.UnitSeek)
+	defer ProfileSectionEnd(.UnitSeek, start)
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return 0, 0, false
@@ -1020,6 +1046,8 @@ UnitFindRoamingTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int, 
 // spatial buckets are searched first; the linear scan is only a fallback for
 // towns that have already cleared everything close to them.
 UnitFindResourceTarget :: proc(w: ^World, unitSlot, taskSequence: int) -> (int, int, int, bool) {
+	start := ProfileSectionBegin(.UnitSeek)
+	defer ProfileSectionEnd(.UnitSeek, start)
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	chunkSize := w.spatial.chunkSize
@@ -1084,6 +1112,9 @@ CIVILIAN_PATH_EXPANSIONS :: 4096
 // Civilians share one staggered decision clock for threat scans, construction
 // assignment and work targeting. Movement still runs every update.
 CIVILIAN_DECISION_INTERVAL :: 1.0
+// Idle villagers in peaceful towns update every second instead of every half
+// second. Alarms, damage, sleep and conversions wake them immediately.
+UNIT_LOD_DORMANT_STRIDE :: 2
 
 UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomSlot := -1, townSlot := -1) -> (int, int, bool) {
 	worldWidth := int(w.maxX)
@@ -1234,6 +1265,8 @@ UnitFindFarmlandTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int,
 }
 
 UnitFindHomeTarget :: proc(w: ^World, unitSlot: int) -> (int, int, bool) {
+	start := ProfileSectionBegin(.UnitSeek)
+	defer ProfileSectionEnd(.UnitSeek, start)
 	home := UnitHome(w, unitSlot)
 	if home < 0 do return 0, 0, false
 	unit := &w.units[unitSlot]
@@ -1289,6 +1322,8 @@ UnitFindHomeTarget :: proc(w: ^World, unitSlot: int) -> (int, int, bool) {
 }
 
 UnitFindTownReturnPoint :: proc(w: ^World, kingdomSlot, townSlot: int, unitSlot := -1) -> (int, int, bool) {
+	start := ProfileSectionBegin(.UnitSeek)
+	defer ProfileSectionEnd(.UnitSeek, start)
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	// Collectors prefer the hall entrance, with a reachable perimeter fallback;

@@ -692,6 +692,8 @@ UnitApplyDamage :: proc(
 
 	w.units.health[victimSlot] -= damage
 	dead := w.units.health[victimSlot] <= 0
+	// A hit unit may be LOD-dormant and must react immediately.
+	if !dead do UnitWake(w, victimSlot)
 
 	dirX := WorldShortestWrappedDelta(x-sourceX, f32(w.maxX))
 	dirY := WorldShortestWrappedDelta(y-sourceY, f32(w.maxY))

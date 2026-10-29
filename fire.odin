@@ -135,6 +135,8 @@ WorldFireIgnite :: proc(w: ^World, x, y, intensity: f32, spread: f32 = 1) -> (in
 	w.fires.duration[slot] = duration
 	w.fireUsed[slot] = true
 	w.fireCursor = (slot+1)%FIRE_CAPACITY
+	w.fireActivePosition[slot] = w.fireCount
+	w.fireActive[w.fireCount] = slot
 	w.fireCount += 1
 	SpatialFireInsert(w, slot)
 	FireIgniteBurst(w, f32(tileX)+0.5, f32(tileY)+0.5, w.fires.intensity[slot])
@@ -156,7 +158,12 @@ WorldFireDespawn :: proc(w: ^World, slot: int) -> bool {
 	if slot < 0 || slot >= FIRE_CAPACITY || !w.fireUsed[slot] do return false
 	SpatialFireRemove(w, slot)
 	w.fireUsed[slot] = false
-	w.fireCount -= 1
+	position := w.fireActivePosition[slot]
+	last := w.fireCount-1
+	moved := w.fireActive[last]
+	w.fireActive[position] = moved
+	w.fireActivePosition[moved] = position
+	w.fireCount = last
 	return true
 }
 

@@ -15,7 +15,29 @@ PROFILER_REPORT_SECONDS :: 2.0
 PROFILER_SLOW_WARNING_SECONDS :: 0.10
 PROFILER_SLOW_DUMP_SECONDS :: 0.50
 PROFILER_MAX_ENTRIES :: 128
-PROFILER_REPORT_ROWS :: 32
+PROFILER_REPORT_ROWS :: 128
+
+// Cached sections for hot loops. Registering by name every call is too slow
+// once a section is entered thousands of times per tick.
+ProfileSection :: enum {
+	UnitSafety, // Civilian threat check
+	UnitExtinguish, // Fire response scan
+	UnitSeek, // Roam, resource, home and construction searches
+	UnitMove, // Path following, including A*
+	TownSiteSearch, // Building site sampling
+	TownSiteStart, // Committing a construction site
+	TownPathSite, // Street extension search
+}
+
+PROFILER_SECTION_NAMES := [ProfileSection]cstring {
+	.UnitSafety = "Phase:Safety",
+	.UnitExtinguish = "Phase:Extinguish",
+	.UnitSeek = "Phase:Seek",
+	.UnitMove = "Phase:Move",
+	.TownSiteSearch = "Phase:SiteSearch",
+	.TownSiteStart = "Phase:SiteStart",
+	.TownPathSite = "Phase:PathSite",
+}
 
 ProfilerEntry :: struct {
 	name:        cstring,
@@ -43,6 +65,7 @@ Profiler :: struct {
 	reportFrameMax:   f64,
 	file:             ^os.File,
 	unitKindIndex:    [UnitKind]int,
+	sectionIndex:     [ProfileSection]int,
 }
 
 profiler: Profiler
@@ -70,9 +93,13 @@ ProfilerInit :: proc() {
 		reportStart = rl.GetTime(),
 	}
 	for &index in profiler.unitKindIndex do index = -1
+	for &index in profiler.sectionIndex do index = -1
 	if !PROFILING_ENABLED do return
 	for name, kind in UNIT_PROFILE_NAMES {
 		profiler.unitKindIndex[kind] = ProfilerRegister(name)
+	}
+	for name, section in PROFILER_SECTION_NAMES {
+		profiler.sectionIndex[section] = ProfilerRegister(name)
 	}
 	file, err := os.open(PROFILER_LOG_PATH, {.Write, .Create, .Trunc})
 	if err == nil do profiler.file = file
@@ -110,6 +137,18 @@ ProfilerAdd :: proc(index: int, elapsed: f64) {
 	entry := &profiler.entries[index]
 	entry.total += elapsed
 	entry.calls += 1
+}
+
+// Hot-loop helpers. ProfilerBegin cannot be used here because it resolves the
+// name on every call.
+ProfileSectionBegin :: proc(section: ProfileSection) -> f64 {
+	if !profiler.enabled do return 0
+	return rl.GetTime()
+}
+
+ProfileSectionEnd :: proc(section: ProfileSection, start: f64) {
+	if !profiler.enabled do return
+	ProfilerAdd(profiler.sectionIndex[section], rl.GetTime()-start)
 }
 
 ProfilerEnd :: proc(stamp: ProfileStamp) {
@@ -215,7 +254,7 @@ ProfilerReport :: proc(w: ^World) {
 
 	fmt.sbprintfln(
 		&report,
-		"PROFILE %.1fs  frames=%d  frame_avg=%.2fms  frame_max=%.2fms  units=%d  buildings=%d  towns=%d",
+		"PROFILE %.1fs  frames=%d  frame_avg=%.2fms  frame_max=%.2fms  units=%d  buildings=%d  towns=%d  fires=%d  parallel=%d",
 		interval,
 		frames,
 		profiler.reportFrameTotal/f64(frames)*1000,
@@ -223,6 +262,8 @@ ProfilerReport :: proc(w: ^World) {
 		units,
 		buildings,
 		towns,
+		w.fireCount,
+		parallelHelperCount,
 	)
 
 	order: [PROFILER_MAX_ENTRIES]int
