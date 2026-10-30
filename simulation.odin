@@ -3,12 +3,14 @@ package main
 import "base:intrinsics"
 import "core:fmt"
 import "core:math"
+import slices "core:slice"
 import rl "vendor:raylib"
 
 TOWN_SIMULATION_STEP :: 0.25
 // A long render/load frame must not trigger a burst of catch-up ticks.
 WORLD_MAX_FRAME_DELTA :: 0.25
 WORLD_HASH_INTERVAL :: 16
+
 // Units update in alternating slices. Each slice receives dt*UNIT_UPDATE_SLICES
 // so speeds and cooldowns stay the same while per-tick CPU drops by the same
 // factor. Rendering interpolates across the full slice window.
@@ -1334,23 +1336,24 @@ UnitUpdateSliceOf :: proc(unitSlot: int) -> int {
 	return int((u64(unitSlot)*0x9E3779B97F4A7C15)>>32)%UNIT_UPDATE_SLICES
 }
 
-// One tick of unit updates split by unit slot. Every worker keeps its own
-// timing; shared town counters are updated atomically. Pathfinding, damage,
-// construction and particles still share locks, which is the remaining
-// serialization in this pass.
+// The unit pass observes shared state in ascending slot order.
 UnitLoopJob :: struct {
 	w:             ^World,
 	slice:         int,
 	tick:          int,
 	deltaTime:     f32,
 	shortageEpoch: int,
-	kindTime:      [PARALLEL_MAX_CHUNKS][UnitKind]f64,
-	kindCalls:     [PARALLEL_MAX_CHUNKS][UnitKind]int,
+	damageQueue:   ^PendingDamageQueue,
+	kindTime:      [UnitKind]f64,
+	kindCalls:     [UnitKind]int,
 }
 
 UnitLoopChunk :: proc(ctx: rawptr, start, end, worker: int) {
 	job := cast(^UnitLoopJob)ctx
 	w := job.w
+	previousDamageQueue := pendingDamageQueue
+	pendingDamageQueue = job.damageQueue
+	defer pendingDamageQueue = previousDamageQueue
 	for unitSlot in start..<end {
 		if !w.unitUsed[unitSlot] do continue
 		// A dormant villager must react as soon as its town is alarmed.
@@ -1421,8 +1424,26 @@ UnitLoopChunk :: proc(ctx: rawptr, start, end, worker: int) {
 			w.units.updateStride[unitSlot] = UnitDesiredUpdateStride(w, unitSlot)
 		}
 		if profileIndex < 0 do continue
-		job.kindTime[worker][unitKind] += rl.GetTime()-unitStart
-		job.kindCalls[worker][unitKind] += 1
+		job.kindTime[unitKind] += rl.GetTime()-unitStart
+		job.kindCalls[unitKind] += 1
+	}
+}
+
+PendingDamageMerge :: proc(w: ^World, queue: ^PendingDamageQueue) {
+	total := queue.count+len(queue.overflow)
+	if total == 0 do return
+
+	hits := queue.inlineHits[:queue.count]
+	hasOverflow := len(queue.overflow) > 0
+	if hasOverflow {
+		hits = make([]PendingDamage, total)
+		copy(hits, queue.inlineHits[:queue.count])
+		copy(hits[queue.count:], queue.overflow[:])
+	}
+	defer if hasOverflow do delete(hits)
+	slices.sort_by(hits, PendingDamageLess)
+	for hit in hits {
+		UnitApplyDamageNow(w, hit.victim, hit.damage, hit.sourceX, hit.sourceY, hit.kind)
 	}
 }
 
@@ -1450,68 +1471,28 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		}
 	}
 
+	damageQueue: PendingDamageQueue
+	defer delete(damageQueue.overflow)
 	job := UnitLoopJob {
+		damageQueue   = &damageQueue,
 		w             = w,
 		slice         = slice,
 		tick          = tick,
 		deltaTime     = deltaTime,
 		shortageEpoch = int(w.simulationTime/5),
 	}
-	// Units of one slot only touch themselves, so the loop splits by slot. The
-	// few cross-unit mutations (damage, construction work, spatial links) take
-	// their own short locks.
+	// Unit updates observe and mutate shared state in slot order.
 	w.deferDespawn = true
-	profiler.parallel = true
-	ParallelFor(UNIT_CAPACITY, &job, UnitLoopChunk)
-	profiler.parallel = false
+	UnitLoopChunk(&job, 0, UNIT_CAPACITY, 0)
 
-	// Work queued by builders is applied here, in one serial pass, so the unit
-	// loop never has to take the shared lock. Several builders often work the
-	// same site, so their shares are merged before it is evaluated.
+	// Apply builder contributions in unit-slot order.
 	constructionStamp := ProfilerBegin("Unit:Construction")
-	CONSTRUCTION_PENDING_SITES :: KINGDOM_SLOTS*TOWN_CAPACITY*TOWN_CONSTRUCTION_CAPACITY
-	constructionWork: [CONSTRUCTION_PENDING_SITES]f32
-	constructionTouched: [CONSTRUCTION_PENDING_SITES]int
-	touchedCount := 0
-	for threadSlot in 0..<PARALLEL_MAX_THREADS {
-		count := pendingConstructionCount[threadSlot]
-		for index in 0..<count {
-			entry := pendingConstruction[threadSlot][index]
-			id := ConstructionBlockerId(entry.kingdom, entry.town, entry.site)
-			if id < 0 || id >= CONSTRUCTION_PENDING_SITES do continue
-			if constructionWork[id] == 0 {
-				constructionTouched[touchedCount] = id
-				touchedCount += 1
-			}
-			constructionWork[id] += entry.amount
-		}
-		pendingConstructionCount[threadSlot] = 0
-	}
-	for index in 0..<touchedCount {
-		id := constructionTouched[index]
-		kingdomSlot := id/(TOWN_CAPACITY*TOWN_CONSTRUCTION_CAPACITY)
-		rest := id%(TOWN_CAPACITY*TOWN_CONSTRUCTION_CAPACITY)
-		TownConstructionWork(
-			w,
-			kingdomSlot,
-			rest/TOWN_CONSTRUCTION_CAPACITY,
-			rest%TOWN_CONSTRUCTION_CAPACITY,
-			constructionWork[id],
-		)
-	}
+	TownConstructionMerge(w)
 	ProfilerEnd(constructionStamp)
 
-	// Apply the hits collected by the workers, then let the resulting deaths
-	// despawn in the same order as before.
-	for threadSlot in 0..<PARALLEL_MAX_THREADS {
-		count := pendingDamageCount[threadSlot]
-		for index in 0..<count {
-			hit := pendingDamage[threadSlot][index]
-			UnitApplyDamageNow(w, hit.victim, hit.damage, hit.sourceX, hit.sourceY, hit.kind)
-		}
-		pendingDamageCount[threadSlot] = 0
-	}
-	// A* searches run on the workers, so merge their timings here.
+	// Sort by hit contents, independent of worker assignment and arrival order.
+	PendingDamageMerge(w, &damageQueue)
+	// Merge search timings.
 	searchTime := f64(0)
 	searchCalls := 0
 	for threadSlot in 0..<PARALLEL_MAX_THREADS {
@@ -1524,20 +1505,18 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 	if searchCalls > 0 do ProfilerAddTotal(profiler.searchIndex, searchTime, searchCalls)
 	w.deferDespawn = false
 
+	// Requests are appended under unitMutex.
+	slices.sort(w.pendingDespawns[:])
 	for slot in w.pendingDespawns {
-		if w.unitUsed[slot] do UnitDespawn(w, slot)
+		if slot >= 0 && slot < UNIT_CAPACITY && w.unitUsed[slot] do UnitDespawn(w, slot)
 	}
 	clear(&w.pendingDespawns)
 
 	for profileIndex, kind in profiler.unitKindIndex {
 		if profileIndex < 0 do continue
-		total := f64(0)
-		calls := 0
-		for worker in 0..<PARALLEL_MAX_CHUNKS {
-			total += job.kindTime[worker][kind]
-			calls += job.kindCalls[worker][kind]
+		if job.kindCalls[kind] > 0 {
+			ProfilerAddTotal(profileIndex, job.kindTime[kind], job.kindCalls[kind])
 		}
-		if calls > 0 do ProfilerAddTotal(profileIndex, total, calls)
 	}
 
 	// Combine the latest worker sample from every slice. Each slice refreshes

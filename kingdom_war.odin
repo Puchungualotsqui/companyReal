@@ -416,7 +416,7 @@ WarriorFindNearbyHostiles :: proc(w: ^World, unitSlot: int, state: ^StateWarrior
 					deltaX := WorldShortestWrappedDelta(w.units.x[otherSlot]-unitX, worldWidth)
 					deltaY := WorldShortestWrappedDelta(w.units.y[otherSlot]-unitY, worldHeight)
 					distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-					if distance < unitDistance {
+					if distance < unitDistance || (distance == unitDistance && nearUnit >= 0 && otherSlot < nearUnit) {
 						unitDistance = distance
 						nearUnit = otherSlot
 					}
@@ -431,7 +431,7 @@ WarriorFindNearbyHostiles :: proc(w: ^World, unitSlot: int, state: ^StateWarrior
 				buildingSlot = w.spatial.buildingNext[buildingSlot] {
 				if !WarriorCanTargetBuilding(w, unitSlot, state, buildingSlot) do continue
 				distance, _, _ := WarriorBuildingNearestPoint(w, unitX, unitY, buildingSlot)
-				if distance < buildingDistance {
+				if distance < buildingDistance || (distance == buildingDistance && nearBuilding >= 0 && buildingSlot < nearBuilding) {
 					buildingDistance = distance
 					nearBuilding = buildingSlot
 				}
@@ -1028,7 +1028,7 @@ UnitFindEscortTarget :: proc(w: ^World, warriorSlot, sequence: int) -> int {
 					continue
 				}
 				score := WorldNoiseHash(warriorSlot, candidateSlot, seed)
-				if score > bestScore {
+				if score > bestScore || (score == bestScore && candidateSlot < selectedTarget) {
 					bestScore = score
 					selectedTarget = candidateSlot
 				}

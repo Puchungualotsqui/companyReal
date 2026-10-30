@@ -64,17 +64,17 @@ Done when: no `PRandom` call influences unit or kingdom state.
 
 Goal: the unit loop may stay parallel, but every shared effect merges in a canonical order.
 
-Order-sensitive today:
+- Unit spatial lists are slot-ordered, with stable tie-breaking for target selection and cached insertion hints.
+- Builder wood deliveries and town construction contributions merge in unit-slot order. Damage is sorted by hit contents; despawns are processed in slot order. These change the order in which simultaneous effects resolve.
+- Unit updates run serially in slot order. They read and mutate shared positions, spatial links, resources, combat sites, buildings and navigation; running the old loop in parallel was nondeterministic. Restoring parallel unit updates requires a shared snapshot-and-intent model or another proven ordering scheme.
+- Independent passes use the worker pool when available. Flow masks consume the same per-tick budget whether or not the pool is available.
+- The construction merge scans a compact bitset before accessing per-unit records. Damage uses an inline buffer and allocates only on overflow; overflow is never dropped. Other simulation and navigation allocations remain.
 
-- Spatial linking (`SpatialUnitMove`, `SpatialUnitLink`) inserts from workers, so per-chunk list order varies. Target selection walks those lists (`UnitFindResourceTarget`, `WarriorFindNearbyHostiles`, `CombatBuilderFindEnemy`, `BuildingFindNearestHostileUnit`). Fix with deterministic insertion or order-independent selection (lowest slot wins).
-- `town.wood +=` under `unitMutex` (`UnitUpdateBuilder`) and inside `TownConstructionWork`: f32 addition order changes totals. Accumulate per unit and apply in slot order in the serial pass.
-- `pendingDamage` is per thread with `PARALLEL_PENDING_DAMAGE :: 512` and silently drops hits on overflow (`UnitApplyDamage`). Make overflow impossible or deterministic.
-- `pendingConstruction` merges by `parallelThreadSlot`, which is assigned by thread startup order (`parallelThreadInit`). Sort entries before applying.
-- `w.pendingDespawns` is appended from workers; confirm it is locked, then sort it before the despawn pass.
+The serial unit loop may be slower than the former parallel loop, and flow-field builds on large maps may take more ticks than the former parallel full-mask build. No performance benchmark has been established yet.
 
-Interim step: add `DETERMINISTIC_SIM :: true` that runs the unit loop on the calling thread and use it as the reference while fixing the merges.
+`python compare_parallel_hashes.py` (run in the Build Tools environment) compares runs with and without the worker pool across scripted commands, flow-field building, shared harvesting and combat construction. This validates those scenarios, not every possible game state.
 
-Done when: toggling `DETERMINISTIC_SIM` produces the same state hash.
+Done when: the same inputs produce the same state hash with and without the worker pool.
 
 ## Phase 4 - Remove wall-clock time from world state
 

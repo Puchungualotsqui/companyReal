@@ -314,9 +314,10 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			speed*deltaTime,
 		)
 		if reached {
-			RecursiveLockAcquire(&w.unitMutex)
-			town.wood += builder.carriedResource*KingdomTechWoodMultiplier(w, kingdomSlot)
-			RecursiveLockRelease(&w.unitMutex)
+			ParallelQueueConstruction(
+				unitSlot, kingdomSlot, townSlot, -1,
+				builder.carriedResource*KingdomTechWoodMultiplier(w, kingdomSlot), .Wood,
+			)
 			builder.carriedResource = 0
 			builder.targetDecoration = -1
 			builder.taskSequence += 1
@@ -373,7 +374,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		}
 		// Work is applied after the unit loop; a finished site is noticed on the
 		// builder's next update.
-		ParallelQueueConstruction(kingdomSlot, townSlot, builder.constructionSite, deltaTime)
+		ParallelQueueConstruction(unitSlot, kingdomSlot, townSlot, builder.constructionSite, deltaTime, .Work)
 	case .GoingHome, .Sleeping, .Hiding, .Fleeing:
 		}
 }
@@ -1130,7 +1131,8 @@ UnitFindResourceTarget :: proc(w: ^World, unitSlot, taskSequence: int) -> (int, 
 					distanceSquared := deltaX*deltaX+deltaY*deltaY
 					score := WorldNoiseHash(sourceX, sourceY, seed)
 					if bestSlot >= 0 && (distanceSquared > bestDistanceSquared ||
-						(distanceSquared == bestDistanceSquared && score <= bestScore)) {
+						(distanceSquared == bestDistanceSquared && (score < bestScore ||
+							(score == bestScore && slot >= bestSlot)))) {
 						continue
 					}
 					bestSlot = slot

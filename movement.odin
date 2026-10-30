@@ -770,11 +770,13 @@ FlowMaskJob :: struct {
 	mask:     []u8,
 	walkType: UnitType,
 	kingdom:  int,
+	start:    int,
 }
 
 FlowMaskBuildTiles :: proc(ctx: rawptr, startIndex, endIndex: int, worker: int) {
 	job := cast(^FlowMaskJob)ctx
-	for index in startIndex..<endIndex {
+	for offset in startIndex..<endIndex {
+		index := job.start+offset
 		job.mask[index] = WorldTileWalkableAt(job.w, index, job.walkType, job.kingdom, true) ? 1 : 0
 	}
 }
@@ -791,31 +793,19 @@ FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int) -> bool {
 		mask := field.walkMask
 		walkType: UnitType = Knight{}
 		if field.walkWater do walkType = Turtle{}
-		if ParallelAvailable() {
-			job := FlowMaskJob {
-				w        = w,
-				mask     = mask,
-				walkType = walkType,
-				kingdom  = field.unitKingdom,
-			}
-			ParallelFor(len(mask), &job, FlowMaskBuildTiles)
-			field.maskX, field.maskY, field.maskIndex = worldWidth, 0, len(mask)
-		} else {
-			x := field.maskX
-			y := field.maskY
-			index := field.maskIndex
-			for budget^ > 0 && x < worldWidth {
-				mask[index] = WorldTileWalkableAt(w, index, walkType, field.unitKingdom, true) ? 1 : 0
-				budget^ -= 1
-				index += 1
-				y += 1
-				if y >= worldHeight {
-					y = 0
-					x += 1
-				}
-			}
-			field.maskX, field.maskY, field.maskIndex = x, y, index
+		count := min(max(budget^, 0), worldWidth*worldHeight-field.maskIndex)
+		job := FlowMaskJob {
+			w        = w,
+			mask     = mask,
+			walkType = walkType,
+			kingdom  = field.unitKingdom,
+			start    = field.maskIndex,
 		}
+		ParallelFor(count, &job, FlowMaskBuildTiles)
+		budget^ -= count
+		field.maskIndex += count
+		field.maskX = field.maskIndex/worldHeight
+		field.maskY = field.maskIndex%worldHeight
 		ProfilerEnd(stamp)
 		if field.maskX < worldWidth do return false
 		field.maskKingdom = field.unitKingdom

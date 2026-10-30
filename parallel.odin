@@ -2,6 +2,7 @@ package main
 
 import "base:intrinsics"
 import "core:fmt"
+
 import "core:sync"
 import "core:sys/info"
 import "core:thread"
@@ -192,9 +193,7 @@ RecursiveLockGuard :: proc(l: ^RecursiveLock) -> bool {
 	return true
 }
 
-// Hits collected by the parallel unit loop and applied in one serial pass.
-PARALLEL_PENDING_DAMAGE :: 512
-
+// Hits collected during the unit loop and applied after it.
 PendingDamage :: struct {
 	victim: int,
 	damage: f32,
@@ -202,36 +201,61 @@ PendingDamage :: struct {
 	kind: DamageKind,
 }
 
-pendingDamage: [PARALLEL_MAX_THREADS][PARALLEL_PENDING_DAMAGE]PendingDamage
-pendingDamageCount: [PARALLEL_MAX_THREADS]int
+PENDING_DAMAGE_INLINE_CAPACITY :: 256
 
-// Construction work is accumulated per worker and applied in one serial pass.
-// Taking the shared unit lock for every builder update serialized every builder
-// in the world at high populations.
-PARALLEL_PENDING_CONSTRUCTION :: 512
-
-PendingConstruction :: struct {
-	kingdom, town, site: int,
-	amount:             f32,
+PendingDamageQueue :: struct {
+	inlineHits: [PENDING_DAMAGE_INLINE_CAPACITY]PendingDamage,
+	count: int,
+	overflow: [dynamic]PendingDamage,
 }
 
-pendingConstruction: [PARALLEL_MAX_THREADS][PARALLEL_PENDING_CONSTRUCTION]PendingConstruction
-pendingConstructionCount: [PARALLEL_MAX_THREADS]int
+@(thread_local) pendingDamageQueue: ^PendingDamageQueue
 
-ParallelQueueConstruction :: proc(
+PendingDamageQueueAppend :: proc(queue: ^PendingDamageQueue, hit: PendingDamage) {
+	if queue.count < len(queue.inlineHits) {
+		queue.inlineHits[queue.count] = hit
+		queue.count += 1
+	} else {
+		added := append(&queue.overflow, hit)
+		assert(added == 1, "unable to queue damage")
+	}
+}
+
+PendingDamageLess :: proc(a, b: PendingDamage) -> bool {
+	if a.victim != b.victim do return a.victim < b.victim
+	if a.kind != b.kind do return a.kind < b.kind
+	if transmute(u32)a.damage != transmute(u32)b.damage do return transmute(u32)a.damage < transmute(u32)b.damage
+	if transmute(u32)a.sourceX != transmute(u32)b.sourceX do return transmute(u32)a.sourceX < transmute(u32)b.sourceX
+	return transmute(u32)a.sourceY < transmute(u32)b.sourceY
+}
+
+
+// Each builder emits at most one work or wood contribution per update.
+PendingConstructionKind :: enum { None, Work, Wood }
+
+PendingConstruction :: struct {
+	kind: PendingConstructionKind,
 	kingdom, town, site: int,
 	amount: f32,
+}
+
+CONSTRUCTION_MASK_BITS :: 64
+pendingConstruction: [UNIT_CAPACITY]PendingConstruction
+pendingConstructionMask: [(UNIT_CAPACITY+CONSTRUCTION_MASK_BITS-1)/CONSTRUCTION_MASK_BITS]u64
+
+ParallelQueueConstruction :: proc(
+	unitSlot, kingdom, town, site: int,
+	amount: f32,
+	kind: PendingConstructionKind,
 ) {
-	slot := parallelThreadSlot
-	count := pendingConstructionCount[slot]
-	if count >= PARALLEL_PENDING_CONSTRUCTION do return
-	pendingConstruction[slot][count] = PendingConstruction {
+	pendingConstruction[unitSlot] = PendingConstruction {
+		kind = kind,
 		kingdom = kingdom,
-		town    = town,
-		site    = site,
-		amount  = amount,
+		town = town,
+		site = site,
+		amount = amount,
 	}
-	pendingConstructionCount[slot] = count+1
+	pendingConstructionMask[unitSlot/CONSTRUCTION_MASK_BITS] |= u64(1) << uint(unitSlot%CONSTRUCTION_MASK_BITS)
 }
 
 parallelRunJob :: proc(task: thread.Task) {

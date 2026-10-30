@@ -411,7 +411,10 @@ CombatBuilderFindEnemy :: proc(w: ^World, unitSlot: int, radius: f32) -> int {
 				deltaX := WorldShortestWrappedDelta(w.units.x[otherSlot]-unit.x, worldWidth)
 				deltaY := WorldShortestWrappedDelta(w.units.y[otherSlot]-unit.y, worldHeight)
 				distanceSquared := deltaX*deltaX+deltaY*deltaY
-				if distanceSquared > bestDistance do continue
+				if distanceSquared > bestDistance ||
+					(distanceSquared == bestDistance && bestSlot >= 0 && otherSlot >= bestSlot) {
+					continue
+				}
 				bestDistance = distanceSquared
 				bestSlot = otherSlot
 			}

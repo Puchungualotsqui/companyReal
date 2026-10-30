@@ -1,5 +1,6 @@
 package main
 
+import "base:intrinsics"
 import "core:math"
 
 CANNON_RANGE :: 14
@@ -248,7 +249,7 @@ BuildingFindNearestHostileUnit :: proc(w: ^World, buildingSlot: int, attackRange
 				deltaX := WorldShortestWrappedDelta(w.units.x[unitSlot]-centerX, worldWidth)
 				deltaY := WorldShortestWrappedDelta(w.units.y[unitSlot]-centerY, worldHeight)
 				distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-				if distance < nearestDistance {
+				if distance < nearestDistance || (distance == nearestDistance && nearestSlot >= 0 && unitSlot < nearestSlot) {
 					nearestDistance = distance
 					nearestSlot = unitSlot
 				}
@@ -664,6 +665,28 @@ TownFindConstructionForBuilder :: proc(
 ConstructionProgress :: enum {
 	Working,
 	Completed,
+}
+
+TownConstructionMerge :: proc(w: ^World) {
+	for wordIndex in 0..<len(pendingConstructionMask) {
+		bits := pendingConstructionMask[wordIndex]
+		pendingConstructionMask[wordIndex] = 0
+		for bits != 0 {
+			unitSlot := wordIndex*CONSTRUCTION_MASK_BITS+int(intrinsics.count_trailing_zeros(bits))
+			bits &= bits-1
+			entry := pendingConstruction[unitSlot]
+			pendingConstruction[unitSlot] = {}
+			switch entry.kind {
+			case .None:
+			case .Work:
+				TownConstructionWork(w, entry.kingdom, entry.town, entry.site, entry.amount)
+			case .Wood:
+				if WorldTownExists(w, entry.kingdom, entry.town) {
+					w.kingdoms[entry.kingdom].towns[entry.town].wood += entry.amount
+				}
+			}
+		}
+	}
 }
 
 // Applies one builder's share of site work: clearing first, then raising.

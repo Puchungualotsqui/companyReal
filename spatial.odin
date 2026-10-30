@@ -3,11 +3,13 @@ package main
 // Units live in 16x16 tile buckets so proximity queries only visit the
 // neighbourhood instead of every unit in the world.
 SPATIAL_CHUNK_SIZE :: 16
+SPATIAL_UNIT_HINT_COUNT :: 256
 
 SpatialIndex :: struct {
 	chunkSize:        int,
 	chunksX, chunksY: int,
 	unitHead:         []int,
+	unitHint:         [SPATIAL_UNIT_HINT_COUNT]int,
 	unitNext:         [UNIT_CAPACITY]int,
 	unitPrev:         [UNIT_CAPACITY]int,
 	unitChunk:        [UNIT_CAPACITY]int,
@@ -53,6 +55,7 @@ SpatialIndexInit :: proc(w: ^World) -> bool {
 		w.spatial.decorationHead[i] = -1
 		w.spatial.fireHead[i] = -1
 	}
+	for &hint in w.spatial.unitHint do hint = -1
 	for i in 0..<UNIT_CAPACITY {
 		w.spatial.unitNext[i] = -1
 		w.spatial.unitPrev[i] = -1
@@ -105,12 +108,29 @@ SpatialUnitChunk :: proc(w: ^World, unitSlot: int) -> int {
 
 SpatialUnitLink :: proc(w: ^World, unitSlot, chunk: int) {
 	RecursiveLockGuard(&w.spatialMutex)
-	head := w.spatial.unitHead[chunk]
-	w.spatial.unitNext[unitSlot] = head
-	w.spatial.unitPrev[unitSlot] = -1
-	if head >= 0 do w.spatial.unitPrev[head] = unitSlot
-	w.spatial.unitHead[chunk] = unitSlot
+	previous := -1
+	next := w.spatial.unitHead[chunk]
+	// A hint is only a starting point: collisions and removals can make it stale.
+	hintIndex := chunk % SPATIAL_UNIT_HINT_COUNT
+	hint := w.spatial.unitHint[hintIndex]
+	if hint >= 0 && hint < unitSlot && w.spatial.unitChunk[hint] == chunk {
+		previous = hint
+		next = w.spatial.unitNext[hint]
+	}
+	for next >= 0 && next < unitSlot {
+		previous = next
+		next = w.spatial.unitNext[next]
+	}
+	w.spatial.unitPrev[unitSlot] = previous
+	w.spatial.unitNext[unitSlot] = next
+	if previous >= 0 {
+		w.spatial.unitNext[previous] = unitSlot
+	} else {
+		w.spatial.unitHead[chunk] = unitSlot
+	}
+	if next >= 0 do w.spatial.unitPrev[next] = unitSlot
 	w.spatial.unitChunk[unitSlot] = chunk
+	w.spatial.unitHint[hintIndex] = unitSlot
 	if len(w.spatial.presentStamp) > 0 do w.spatial.presentStamp[chunk] = 0
 }
 
@@ -133,8 +153,10 @@ SpatialUnitUnlink :: proc(w: ^World, unitSlot: int) {
 }
 
 SpatialUnitInsert :: proc(w: ^World, unitSlot: int) {
+	RecursiveLockGuard(&w.spatialMutex)
 	chunk := SpatialUnitChunk(w, unitSlot)
-	if chunk < 0 do return
+	if chunk < 0 || chunk == w.spatial.unitChunk[unitSlot] do return
+	SpatialUnitUnlink(w, unitSlot)
 	SpatialUnitLink(w, unitSlot, chunk)
 }
 
@@ -143,6 +165,7 @@ SpatialUnitRemove :: proc(w: ^World, unitSlot: int) {
 }
 
 SpatialUnitMove :: proc(w: ^World, unitSlot: int) {
+	RecursiveLockGuard(&w.spatialMutex)
 	chunk := SpatialUnitChunk(w, unitSlot)
 	if chunk < 0 || chunk == w.spatial.unitChunk[unitSlot] do return
 	SpatialUnitUnlink(w, unitSlot)

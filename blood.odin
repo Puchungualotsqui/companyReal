@@ -684,22 +684,16 @@ UnitApplyDamage :: proc(
 ) -> bool {
 	if victimSlot < 0 || victimSlot >= UNIT_CAPACITY || !w.unitUsed[victimSlot] do return false
 	if damage <= 0 do return false
-	// While the unit loop runs on every core, hits are queued per worker and
-	// applied in one serial pass. A lock per hit serialized every warrior.
 	if w.deferDespawn {
-		slot := parallelThreadSlot
-		count := pendingDamageCount[slot]
-		if count < PARALLEL_PENDING_DAMAGE {
-			pendingDamage[slot][count] = PendingDamage {
-				victim  = victimSlot,
-				damage  = damage,
-				sourceX = sourceX,
-				sourceY = sourceY,
-				kind    = kind,
-			}
-			pendingDamageCount[slot] = count+1
-			return false // The victim dies (if it does) in the serial pass
-		}
+		assert(pendingDamageQueue != nil, "deferred damage requires a unit-loop queue")
+		PendingDamageQueueAppend(pendingDamageQueue, PendingDamage {
+			victim  = victimSlot,
+			damage  = damage,
+			sourceX = sourceX,
+			sourceY = sourceY,
+			kind    = kind,
+		})
+		return false // Death is resolved in the serial pass
 	}
 	return UnitApplyDamageNow(w, victimSlot, damage, sourceX, sourceY, kind)
 }
