@@ -1175,6 +1175,7 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 WorldTick :: proc(w: ^World) {
 	tickStamp := ProfilerBegin("Sim:Tick")
 	w.simulationTime += TOWN_SIMULATION_STEP
+	WorldAlertPrune(w)
 	w.dayTime += TOWN_SIMULATION_STEP
 	if w.dayTime >= f32(WORLD_DAY_LENGTH_SECONDS) {
 		w.dayTime -= f32(WORLD_DAY_LENGTH_SECONDS)
@@ -1385,8 +1386,7 @@ UnitLoopChunk :: proc(ctx: rawptr, start, end, worker: int) {
 		unitKind := UnitKindOf(w.units[unitSlot].type)
 		profileIndex := -1
 		if profiler.enabled do profileIndex = profiler.unitKindIndex[unitKind]
-		unitStart := f64(0)
-		if profileIndex >= 0 do unitStart = rl.GetTime()
+		unitStart := ProfilerUnitStart(profileIndex)
 		UnitUpdateMilitaryAlarm(w, unitSlot)
 		converting := false
 		if _, isConverting := w.units[unitSlot].state.(StateConverting); isConverting {
@@ -1424,7 +1424,7 @@ UnitLoopChunk :: proc(ctx: rawptr, start, end, worker: int) {
 			w.units.updateStride[unitSlot] = UnitDesiredUpdateStride(w, unitSlot)
 		}
 		if profileIndex < 0 do continue
-		job.kindTime[unitKind] += rl.GetTime()-unitStart
+		job.kindTime[unitKind] += ProfilerUnitElapsed(profileIndex, unitStart)
 		job.kindCalls[unitKind] += 1
 	}
 }

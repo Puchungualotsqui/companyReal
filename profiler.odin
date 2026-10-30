@@ -158,6 +158,16 @@ ProfilerAddTotal :: proc(index: int, elapsed: f64, calls: int) {
 	entry.calls += calls
 }
 
+ProfilerUnitStart :: proc(index: int) -> f64 {
+	if index < 0 do return 0
+	return rl.GetTime()
+}
+
+ProfilerUnitElapsed :: proc(index: int, start: f64) -> f64 {
+	if index < 0 do return 0
+	return rl.GetTime()-start
+}
+
 // Hot-loop helpers. ProfilerBegin cannot be used here because it resolves the
 // name on every call.
 ProfileSectionBegin :: proc(section: ProfileSection) -> f64 {

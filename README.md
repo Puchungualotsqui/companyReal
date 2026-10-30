@@ -72,7 +72,7 @@ Goal: the unit loop may stay parallel, but every shared effect merges in a canon
 
 The serial unit loop may be slower than the former parallel loop, and flow-field builds on large maps may take more ticks than the former parallel full-mask build. No performance benchmark has been established yet.
 
-`python compare_parallel_hashes.py` (run in the Build Tools environment) compares runs with and without the worker pool across scripted commands, flow-field building, shared harvesting and combat construction. This validates those scenarios, not every possible game state.
+Matching hashes across runs with and without the worker pool provide evidence for the scenarios exercised, not every possible game state.
 
 Done when: the same inputs produce the same state hash with and without the worker pool.
 
@@ -80,8 +80,9 @@ Done when: the same inputs produce the same state hash with and without the work
 
 Goal: no `rl.GetTime()` in anything hashed or mutated by the sim/render split.
 
-- `alert.odin`: `WorldAlertPush`, `WorldAlertAddGrowth` and `WorldAlertPrune` stamp and compare `rl.GetTime()`, and `WorldAlertPrune` is called from `WorldUIDraw`, so drawing mutates `World`.
-- Move alerts out of `World`, or drive them from `simulationTime`, and stop mutating them from the draw path.
+- Alerts use `simulationTime` for timestamps, throttling, growth refresh and expiry. Expired alerts are pruned at the start of each simulation tick, not by UI update or drawing.
+- Alerts are observer-local presentation state and remain outside the gameplay hash. They no longer expire while the simulation is paused.
+- Profiling clock reads are confined to `profiler.odin`, crazy-world logging and the `AStar` timer. New-game seed generation still uses the system clock before world creation; the selected seed must be shared with peers.
 
 Done when: no `rl.GetTime()` outside `profiler.odin`, the `crazy_world.odin` logging and the `AStar` timer.
 
@@ -106,6 +107,6 @@ Done when: replaying the command log rebuilds the same state hash sequence.
 
 ## Phase 7 - Session plumbing
 
-- Seed exchange: `AppNewSeed` uses `rl.GetTime()` and `rl.GetRandomValue`, so the resulting seed must be sent to peers, not regenerated.
+- Seed exchange: `AppNewSeed` uses the system clock and `rl.GetRandomValue`, so the resulting seed must be sent to peers, not regenerated.
 - Tick scheduling: agree that "tick N consumes every player's commands for tick N", with a small input delay.
 - Optional: periodic state-hash exchange for desync detection and command-log replay for recovery.

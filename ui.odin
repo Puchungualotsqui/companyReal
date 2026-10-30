@@ -1311,7 +1311,6 @@ UICanConvertFrom :: proc(w: ^World, kingdom, town: int, kind: UnitKind) -> bool 
 // --- input ----------------------------------------------------------------
 
 WorldUIUpdate :: proc(w: ^World, view: ^WorldView, camera: rl.Camera2D) {
-	WorldAlertPrune(w)
 	ui := &view.ui
 	// The tile inspector only exists while the right button is held.
 	ui.inspectTileValid = false
@@ -1854,7 +1853,6 @@ WorldFocusCameraUpdate :: proc(view: ^WorldView, deltaTime: f32) {
 // --- drawing --------------------------------------------------------------
 
 WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui: ^UIState) {
-	WorldAlertPrune(w)
 	milestoneKingdom, milestoneTown, milestonePending := UIMilestoneTown(w)
 
 	UIDrawOrderArrows(w, camera, ui.selection)

@@ -1,6 +1,5 @@
 package main
 
-import rl "vendor:raylib"
 
 ALERT_CAPACITY :: 64
 ALERT_ATTACK_THROTTLE :: 12
@@ -29,7 +28,7 @@ Alert :: struct {
 	otherName: Name,
 	x, y:       f32,
 	time:       f32,
-	realTime:  f64,
+
 	amount:     int,
 }
 
@@ -43,7 +42,7 @@ AlertFeed :: struct {
 WorldAlertPush :: proc(w: ^World, alert: Alert) -> ^Alert {
 	slot := w.alerts.next
 	entry := alert
-	entry.realTime = rl.GetTime()
+
 	w.alerts.items[slot] = entry
 
 	if entry.town >= 0 && entry.town < TOWN_CAPACITY &&
@@ -107,13 +106,11 @@ WorldAlertAddInsight :: proc(w: ^World, kingdom, amount: int) {
 // feed readable without hiding the event.
 WorldAlertAddGrowth :: proc(w: ^World, kingdom, town, amount: int) {
 	if w.observerKingdom < 0 || kingdom != w.observerKingdom do return
-	now := rl.GetTime()
-
 	for i in 0..<w.alerts.count {
 		alert := &w.alerts.items[(w.alerts.next-1-i+ALERT_CAPACITY*2)%ALERT_CAPACITY]
 		if alert.kind != .TownGrowth || alert.kingdom != kingdom || alert.town != town do continue
 		alert.amount += amount
-		alert.realTime = now
+
 		alert.time = w.simulationTime
 		return
 	}
@@ -165,14 +162,12 @@ WorldAlertClear :: proc(w: ^World) {
 
 WorldAlertPrune :: proc(w: ^World) {
 	if w.alerts.count == 0 do return
-	now := rl.GetTime()
-
 	survivors: [ALERT_CAPACITY]Alert
 	count := 0
 	for index in 0..<w.alerts.count {
 		alert, found := WorldAlertNewest(w, index)
 		if !found do continue
-		if now-alert.realTime >= ALERT_LIFETIME_SECONDS do continue
+		if w.simulationTime-alert.time >= ALERT_LIFETIME_SECONDS do continue
 		survivors[count] = alert
 		count += 1
 	}

@@ -2,6 +2,7 @@ package main
 
 import rl "vendor:raylib"
 import "core:fmt"
+import "core:time"
 
 AppState :: enum {
 	MainMenu,
@@ -72,9 +73,9 @@ AppInit :: proc() -> App {
 }
 
 AppNewSeed :: proc() -> u64 {
-	now := rl.GetTime()
+	now := time.to_unix_nanoseconds(time.now())
 	salt := rl.GetRandomValue(0, max(i32))
-	return u64(now*1_000_000) ~ (u64(salt) << 32)+0x9E3779B97F4A7C15
+	return u64(now) ~ (u64(salt) << 32)+0x9E3779B97F4A7C15
 }
 
 AppDeinit :: proc(app: ^App) {
