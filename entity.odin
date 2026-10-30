@@ -1,16 +1,17 @@
 package main
 
 import "base:intrinsics"
+import "d32"
 
 Building :: struct {
 	x, y: int,
-	health: f32,
-	cooldown: f32,
+	health: d32.Value,
+	cooldown: d32.Value,
 	type: BuildingType,
 	kingdom: int,
 	town: int,
 	homeResident: int, 	// Zero means vacant; otherwise the assigned citizen slot plus one
-	output: f32, // Cached farmland fertility
+	output: d32.Value, // Cached farmland fertility
 	outputRevision: u64, // Terrain revision the cache was built at
 }
 
@@ -73,17 +74,17 @@ TurtlePen :: struct {}
 ThievesGuild :: struct {}
 Path :: struct {}
 DistrictHall :: struct {}
-	BuildingOrder :: struct {
-		orderCooldown: f32,
-		orderActive: f32,
-		orderTelegraph: f32,
-		orderTargetX, orderTargetY: f32,
-		orderTick: f32,
-		orderMitigation: f32,
-		orderKind: OrderKind,
-		orderPending: bool,
-		type: BuildingOrderType
-	}
+BuildingOrder :: struct {
+	orderCooldown: d32.Value,
+	orderActive: d32.Value,
+	orderTelegraph: d32.Value,
+	orderTargetX, orderTargetY: d32.Value,
+	orderTick: d32.Value,
+	orderMitigation: d32.Value,
+	orderKind: OrderKind,
+	orderPending: bool,
+	type: BuildingOrderType
+}
 
 BuildingOrderType :: union {
 	GiantMortar,
@@ -257,50 +258,50 @@ BuildingTileSize :: proc(type: BuildingType) -> (int, int) {
 	unreachable()
 }
 
-BuildingDefaultHealth :: proc(type: BuildingType) -> f32 {
+BuildingDefaultHealth :: proc(type: BuildingType) -> d32.Value {
 	switch v in type {
 	case TownHall:
-		return 1000
+		return d32.FromInt(1000)
 	case Home, Farmland:
-		return 100
+		return d32.FromInt(100)
 	case Wall:
-		return 300
+		return d32.FromInt(300)
 	case Bridge:
-		return 150
+		return d32.FromInt(150)
 	case Cannon:
-		return 250
+		return d32.FromInt(250)
 	case Watchtower:
-		return 200
+		return d32.FromInt(200)
 	case ArcheryRange, MagicSchool, TurtlePen:
-		return 300
+		return d32.FromInt(300)
 	case GiantPen:
-		return 400
+		return d32.FromInt(400)
 	case SiegeWorkshop:
-		return 350
+		return d32.FromInt(350)
 	case ThievesGuild:
-		return 250
+		return d32.FromInt(250)
 	case Path:
-		return 80
+		return d32.FromInt(80)
 	case DistrictHall:
-		return 600
+		return d32.FromInt(600)
 	case Granary:
-		return 250
+		return d32.FromInt(250)
 	case BuildingOrder:
 		switch _ in v.type {
 		case GiantMortar:
-			return 350
+			return d32.FromInt(350)
 		case Harbor:
-			return 300
+			return d32.FromInt(300)
 		case MagicSchool:
-			return 300
+			return d32.FromInt(300)
 		case SiegeWorkshop:
-			return 350
+			return d32.FromInt(350)
 		case AlchemistWorkshop:
-			return 300
+			return d32.FromInt(300)
 		case FireworksGuild:
-			return 350
+			return d32.FromInt(350)
 		case StarfallSpire:
-			return 500
+			return d32.FromInt(500)
 		}
 	}
 	unreachable()
@@ -311,10 +312,11 @@ BuildingDamageStage :: proc(w: ^World, buildingSlot: int) -> int {
 		return 0
 	}
 	maximum := BuildingMaxHealth(w, buildingSlot)
-	if maximum <= 0 do return 0
-	ratio := clamp(w.buildings.health[buildingSlot]/maximum, 0, 1)
-	if ratio <= 0.33 do return 2
-	if ratio <= 0.66 do return 1
+	if maximum <= d32.ZERO do return 0
+	// Raw values share one scale, so the percent ratio stays integral.
+	percent := i64(d32.Raw(w.buildings.health[buildingSlot]))*100/i64(d32.Raw(maximum))
+	if percent <= 33 do return 2
+	if percent <= 66 do return 1
 	return 0
 }
 
@@ -389,33 +391,33 @@ BuildingDistraction :: proc(kind: BuildingKind) -> f32 {
 	unreachable()
 }
 
-BuildingWoodCost :: proc(kind: BuildingKind) -> f32 {
+BuildingWoodCost :: proc(kind: BuildingKind) -> d32.Value {
 	switch kind {
 	case .TownHall, .Wall, .Bridge, .Cannon, .Watchtower, .Path, .DistrictHall, .GiantMortar, .FireworksGuild, .StarfallSpire:
 		// Halls, combat works and decorative paths are paid for elsewhere or free.
-		return 0
+		return d32.ZERO
 	case .Harbor:
-		return 25
+		return d32.FromInt(25)
 	case .Granary:
-		return 20
+		return d32.FromInt(20)
 	case .Home:
-		return 5
+		return d32.FromInt(5)
 	case .Farmland:
-		return 8
+		return d32.FromInt(8)
 	case .ArcheryRange:
-		return 25
+		return d32.FromInt(25)
 	case .MagicSchool:
-		return 30
+		return d32.FromInt(30)
 	case .GiantPen:
-		return 40
+		return d32.FromInt(40)
 	case .SiegeWorkshop:
-		return 35
+		return d32.FromInt(35)
 	case .TurtlePen:
-		return 30
+		return d32.FromInt(30)
 	case .ThievesGuild:
-		return 30
+		return d32.FromInt(30)
 	case .AlchemistWorkshop:
-		return 65
+		return d32.FromInt(65)
 	}
 	unreachable()
 }
@@ -426,7 +428,7 @@ BuildingValidTileType :: proc(bType: BuildingType, tType: TileType) -> bool {
 		return TileIsWater(tType)
 
 	case Farmland:
-		return TILE_DEFS[tType].food >= 0.5
+		return TILE_DEFS[tType].food >= d32.HALF
 
 	case TownHall, Home, Wall, Cannon, Watchtower, ArcheryRange, MagicSchool, GiantPen, SiegeWorkshop, TurtlePen, ThievesGuild, Path, DistrictHall, Granary:
 		return TILE_DEFS[tType].buildable
@@ -479,13 +481,13 @@ BuildingIsTraining :: proc(kind: BuildingKind) -> bool {
 }
 
 Unit :: struct {
-	x, y: f32,
-	previousX, previousY: f32,
-	health: f32,
-	burning: f32,
-	cooldown: f32,
-	poisonRemaining: f32,
-	decisionTimer: f32, // Seconds until the next expensive AI decision
+	x, y: d32.Value,
+	previousX, previousY: d32.Value,
+	health: d32.Value,
+	burning: d32.Value,
+	cooldown: d32.Value,
+	poisonRemaining: d32.Value,
+	decisionTimer: d32.Value, // Seconds until the next expensive AI decision
 	decisionReady: bool, // Set once per update by WorldUnitUpdate
 	updateStride: u8, // Simulation slices between updates (idle LOD)
 	updateTime: f32, // Simulation time of the last update
@@ -590,7 +592,7 @@ StateWarrior :: struct {
 	orderKingdom, orderTown: int,
 	orderRevision: u64,
 	target: WarriorTarget,
-	scanTimer: f32,
+	scanTimer: d32.Value,
 	scanSequence: int,
 	patrolSequence: int,
 	escortTarget: int,
@@ -640,14 +642,14 @@ StateConverting :: struct {
 	to: UnitKind,
 	building: int,
 	accessX, accessY: int,
-	timer: f32,
-	retryTimer: f32,
+	timer: d32.Value,
+	retryTimer: d32.Value,
 	inside: bool,
 }
 
 Villager :: struct {}
 Builder :: struct {
-	carriedResource:    f32,
+	carriedResource:    d32.Value,
 	taskSequence:       int,
 	targetDecoration:   int,
 	constructionSite:   int, // active town construction slot, or -1
@@ -664,7 +666,7 @@ CombatBuilder :: struct {
 	siteSequence:    int,
 	failedSite:      int,
 	failedRevision:  u64,
-	scanTimer:       f32,
+	scanTimer:       d32.Value,
 }
 WaterCollector :: struct {
 	carriedResource: f32,
@@ -682,7 +684,7 @@ Turtle :: struct {}
 Catapult :: struct {}
 Rogue :: struct {}
 Explorer :: struct {
-	restTimer: f32,
+	restTimer: d32.Value,
 	tripsLeft: int,
 	journey: int,
 }
@@ -804,28 +806,28 @@ UnitTrainingBuildingKind :: proc(kind: UnitKind) -> BuildingKind {
 	unreachable()
 }
 
-UnitDefaultHealth :: proc(type: UnitType) -> f32 {
+UnitDefaultHealth :: proc(type: UnitType) -> d32.Value {
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
-		return 15
+		return d32.FromInt(15)
 	case CombatBuilder:
-		return 10
+		return d32.FromInt(10)
 	case Knight:
-		return 50
+		return d32.FromInt(50)
 	case Archer:
-		return 30
+		return d32.FromInt(30)
 	case Mage:
-		return 25
+		return d32.FromInt(25)
 	case Giant:
-		return 100
+		return d32.FromInt(100)
 	case Turtle:
-		return 140
+		return d32.FromInt(140)
 	case Catapult:
-		return 60
+		return d32.FromInt(60)
 	case Rogue:
-		return 35
+		return d32.FromInt(35)
 	case Explorer:
-		return 18
+		return d32.FromInt(18)
 	}
 	unreachable()
 }
@@ -834,63 +836,64 @@ UnitDamageStage :: proc(w: ^World, unitSlot: int) -> int {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return 0
 	if w.units.type[unitSlot] == nil do return 0
 	maximum := UnitMaxHealth(w, unitSlot)
-	if maximum <= 0 do return 0
-	ratio := clamp(w.units.health[unitSlot]/maximum, 0, 1)
-	if ratio <= 0.33 do return 2
-	if ratio <= 0.66 do return 1
+	if maximum <= d32.ZERO do return 0
+	// Raw values share one scale, so the percent ratio stays integral.
+	percent := i64(d32.Raw(w.units.health[unitSlot]))*100/i64(d32.Raw(maximum))
+	if percent <= 33 do return 2
+	if percent <= 66 do return 1
 	return 0
 }
 
-UnitDefaultSpeed :: proc(type: UnitType) -> f32 {
+UnitDefaultSpeed :: proc(type: UnitType) -> d32.Value {
 	switch _ in type {
 	case Villager:
-		return 3
+		return d32.FromInt(3)
 	case Builder, WaterCollector, Farmer:
-		return 2.5
+		return d32.FromRatio(5, 2)
 	case CombatBuilder:
-		return 3
+		return d32.FromInt(3)
 	case Knight:
-		return 3.5
+		return d32.FromRatio(7, 2)
 	case Archer:
-		return 3.2
+		return d32.FromRatio(16, 5)
 	case Mage:
-		return 2.8
+		return d32.FromRatio(14, 5)
 	case Giant:
-		return 2
+		return d32.FromInt(2)
 	case Turtle:
-		return 2
+		return d32.FromInt(2)
 	case Catapult:
-		return 1.5
+		return d32.FromRatio(3, 2)
 	case Rogue:
-		return 4
+		return d32.FromInt(4)
 	case Explorer:
-		return 1.8
+		return d32.FromRatio(9, 5)
 	}
 	unreachable()
 }
 
-UnitDefaultCooldown :: proc(type: UnitType) -> f32 {
+UnitDefaultCooldown :: proc(type: UnitType) -> d32.Value {
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
-		return 0
+		return d32.ZERO
 	case CombatBuilder:
-		return 2
+		return d32.FromInt(2)
 	case Knight:
-		return 1
+		return d32.FromInt(1)
 	case Archer:
-		return 1.2
+		return d32.FromRatio(12, 10)
 	case Mage:
-		return 2
+		return d32.FromInt(2)
 	case Giant:
-		return 1.75
+		return d32.FromRatio(7, 4)
 	case Turtle:
-		return 2
+		return d32.FromInt(2)
 	case Catapult:
-		return 3
+		return d32.FromInt(3)
 	case Rogue:
-		return 0.6
+		return d32.FromRatio(3, 5)
 	case Explorer:
-		return 0
+		return d32.ZERO
 	}
 	unreachable()
 }
@@ -983,72 +986,72 @@ UnitDistraction :: proc(type: UnitType) -> f32 {
 	unreachable()
 }
 
-UnitDefaultDamage :: proc(type: UnitType) -> f32 {
+UnitDefaultDamage :: proc(type: UnitType) -> d32.Value {
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
-		return 0
+		return d32.ZERO
 	case CombatBuilder:
-		return 3
+		return d32.FromInt(3)
 	case Knight:
-		return 15
+		return d32.FromInt(15)
 	case Archer:
-		return 10
+		return d32.FromInt(10)
 	case Mage:
-		return 12
+		return d32.FromInt(12)
 	case Giant:
-		return 30
+		return d32.FromInt(30)
 	case Turtle:
-		return 20
+		return d32.FromInt(20)
 	case Catapult:
-		return 25
+		return d32.FromInt(25)
 	case Rogue:
-		return 20
+		return d32.FromInt(20)
 	case Explorer:
-		return 0
+		return d32.ZERO
 	}
 	unreachable()
 }
 
-UnitDefaultAreaRadius :: proc(type: UnitType) -> f32 {
+UnitDefaultAreaRadius :: proc(type: UnitType) -> d32.Value {
 	switch _ in type {
 	case Mage:
-		return 3
+		return d32.Value(3*d32.SCALE)
 	case Giant:
-		return 2
+		return d32.Value(2*d32.SCALE)
 	case Catapult:
-		return 3.5
+		return d32.Value(35*d32.SCALE/10)
 	case Villager, Builder, WaterCollector, Farmer, Knight, Archer, Turtle, Rogue, Explorer:
-		return 0
+		return d32.ZERO
 	case CombatBuilder:
-		return 0
+		return d32.ZERO
 	}
 	unreachable()
 }
 
-UnitDefaultTrainingTime :: proc(kind: UnitKind) -> f32 {
+UnitDefaultTrainingTime :: proc(kind: UnitKind) -> d32.Value {
 	switch kind {
 	case .Villager:
-		return 1
+		return d32.FromInt(1)
 	case .Builder, .WaterCollector, .Farmer:
-		return 1.5
+		return d32.FromRatio(3, 2)
 	case .CombatBuilder:
-		return 2.5
+		return d32.FromRatio(5, 2)
 	case .Knight:
-		return 2
+		return d32.FromInt(2)
 	case .Archer:
-		return 3
+		return d32.FromInt(3)
 	case .Mage:
-		return 5
+		return d32.FromInt(5)
 	case .Giant:
-		return 6
+		return d32.FromInt(6)
 	case .Turtle:
-		return 6
+		return d32.FromInt(6)
 	case .Catapult:
-		return 7
+		return d32.FromInt(7)
 	case .Rogue:
-		return 4
+		return d32.FromInt(4)
 	case .Explorer:
-		return 2
+		return d32.FromInt(2)
 	}
 	unreachable()
 }
@@ -1071,21 +1074,21 @@ UnitTypeInit :: proc(w: ^World, unitSlot: int, type: UnitType) {
 	if state, converting := unit.state.(StateConverting); converting && state.inside {
 		SpatialUnitMove(w, unitSlot)
 	}
-	if unit.burning > 0 {
-		unit.burning = 0
+	if unit.burning > d32.ZERO {
+		unit.burning = d32.ZERO
 		intrinsics.atomic_sub(&w.unitsBurning, 1)
 	}
 	unit.type = type
 	unit.health = UnitMaxHealthFor(w, unit.kingdome, type)
 	unit.cooldown = UnitDefaultCooldown(type)
-	unit.poisonRemaining = 0
+	unit.poisonRemaining = d32.ZERO
 	switch _ in type {
 	case Villager:
 		unit.type = Villager{}
 		unit.state = StatePacific.Roaming
 	case Builder:
 		unit.type = Builder{
-			carriedResource = 0,
+			carriedResource = d32.ZERO,
 			taskSequence = 0,
 			targetDecoration = -1,
 			constructionSite = -1,
@@ -1154,10 +1157,13 @@ UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32, maxExpa
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return false
+	width := i64(worldWidth)*d32.SCALE
+	height := i64(worldHeight)*d32.SCALE
 
 	unit := &w.units[unitIndex]
-	unitX := WorldWrapPosition(unit.x, f32(worldWidth))
-	unitY := WorldWrapPosition(unit.y, f32(worldHeight))
+	positionX, validX := d32.WrapRaw(i64(d32.Raw(unit.x)), d32.ZERO, width)
+	positionY, validY := d32.WrapRaw(i64(d32.Raw(unit.y)), d32.ZERO, height)
+	if !validX || !validY do return false
 	targetX := WorldWrapCoordinate(goalX, worldWidth)
 	targetY := WorldWrapCoordinate(goalY, worldHeight)
 
@@ -1180,8 +1186,8 @@ UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32, maxExpa
 		}
 	}
 	if needsPath {
-		startX := WorldWrapCoordinate(int(unitX), worldWidth)
-		startY := WorldWrapCoordinate(int(unitY), worldHeight)
+		startX := int(d32.ToInt(positionX))
+		startY := int(d32.ToInt(positionY))
 		// Nearby errands skip the search entirely; A* is only for real detours.
 		unit.pathFound = UnitDirectPath(
 			w,
@@ -1217,27 +1223,27 @@ UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32, maxExpa
 
 	speed := UnitMoveSpeed(w, unitSlot, UnitDefaultSpeed(unit.type))
 
-	remaining := speed * deltaTime
-	if remaining < 0 do remaining = 0
+	remainingRaw := i64(d32.Raw(d32.Mul(speed, PositionFromF32(deltaTime))))
+	if remainingRaw < 0 do remainingRaw = 0
 	for unit.pathIndex < len(unit.path) {
 		waypoint := unit.path[unit.pathIndex]
-		destinationX := f32(waypoint/worldHeight) + 0.5
-		destinationY := f32(waypoint%worldHeight) + 0.5
-		deltaX := WorldShortestWrappedDelta(destinationX-unitX, f32(worldWidth))
-		deltaY := WorldShortestWrappedDelta(destinationY-unitY, f32(worldHeight))
+		destinationX := TileCenterPosition(waypoint/worldHeight)
+		destinationY := TileCenterPosition(waypoint%worldHeight)
+		deltaX, validDeltaX := d32.ShortestWrappedDelta(positionX, destinationX, width)
+		deltaY, validDeltaY := d32.ShortestWrappedDelta(positionY, destinationY, height)
+		if !validDeltaX || !validDeltaY do break
 		reachedWaypoint := true
 
 		if deltaX != 0 {
-			distanceX := deltaX
-			if distanceX < 0 do distanceX = -distanceX
-			if remaining >= distanceX {
-				unitX = WorldWrapPosition(unitX+deltaX, f32(worldWidth))
-				remaining -= distanceX
-			} else if remaining > 0 {
-				step := remaining
+			distanceX := abs(deltaX)
+			if remainingRaw >= distanceX {
+				positionX, _ = d32.AddRawWrapped(i64(d32.Raw(positionX)), deltaX, d32.ZERO, width)
+				remainingRaw -= distanceX
+			} else if remainingRaw > 0 {
+				step := remainingRaw
 				if deltaX < 0 do step = -step
-				unitX = WorldWrapPosition(unitX+step, f32(worldWidth))
-				remaining = 0
+				positionX, _ = d32.AddRawWrapped(i64(d32.Raw(positionX)), step, d32.ZERO, width)
+				remainingRaw = 0
 				reachedWaypoint = false
 			} else {
 				reachedWaypoint = false
@@ -1245,31 +1251,34 @@ UnitMove :: proc(w: ^World, unitSlot, goalX, goalY: int, deltaTime: f32, maxExpa
 		}
 
 		if deltaY != 0 {
-			distanceY := deltaY
-			if distanceY < 0 do distanceY = -distanceY
-			if remaining >= distanceY {
-				unitY = WorldWrapPosition(unitY+deltaY, f32(worldHeight))
-				remaining -= distanceY
-			} else if remaining > 0 {
-				step := remaining
+			distanceY := abs(deltaY)
+			if remainingRaw >= distanceY {
+				positionY, _ = d32.AddRawWrapped(i64(d32.Raw(positionY)), deltaY, d32.ZERO, height)
+				remainingRaw -= distanceY
+			} else if remainingRaw > 0 {
+				step := remainingRaw
 				if deltaY < 0 do step = -step
-				unitY = WorldWrapPosition(unitY+step, f32(worldHeight))
-				remaining = 0
+				positionY, _ = d32.AddRawWrapped(i64(d32.Raw(positionY)), step, d32.ZERO, height)
+				remainingRaw = 0
 				reachedWaypoint = false
 			} else {
 				reachedWaypoint = false
 			}
 		}
 
-		if WorldTileFriendlyWall(w, int(unitX), int(unitY), unit.kingdome) {
+		if WorldTileFriendlyWall(
+			w,
+			int(d32.ToInt(positionX)),
+			int(d32.ToInt(positionY)),
+			unit.kingdome,
+		) {
 			unit.jumpStarted = w.simulationTime
 		}
 		if !reachedWaypoint do break
 		unit.pathIndex += 1
 	}
 
-	unit.x = unitX
-	unit.y = unitY
+	SetUnitPosition(w, unitIndex, positionX, positionY)
 	SpatialUnitMove(w, unitSlot)
 	return unit.pathIndex >= len(unit.path)
 }

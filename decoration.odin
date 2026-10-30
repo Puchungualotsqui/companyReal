@@ -1,5 +1,7 @@
 package main
 
+import "d32"
+
 // Decorations are static scenery (trees, rocks, flowers...) but they live in
 // their own slots and update loop so they can grow behaviour such as fire or
 // regrowth without touching the unit/building passes.
@@ -36,31 +38,31 @@ ALL_DECORATION_KINDS := [11]DecorationKind {
 }
 
 Decoration :: struct {
-	x, y:        f32,
+	x, y:        d32.Value,
 	kind:        DecorationKind,
 	variant:     u8,
-	health:      f32,
-	regrowTimer: f32,
+	health:      d32.Value,
+	regrowTimer: d32.Value,
 }
 
-DecorationHealth :: proc(kind: DecorationKind) -> f32 {
+DecorationHealth :: proc(kind: DecorationKind) -> d32.Value {
 	switch kind {
 	case .Tree:
-		return 60
+		return d32.FromInt(60)
 	case .Pine:
-		return 50
+		return d32.FromInt(50)
 	case .Bush, .Flowers, .Reed, .Lamp:
-		return 12
+		return d32.FromInt(12)
 	case .Rock:
-		return 120
+		return d32.FromInt(120)
 	case .Cactus:
-		return 40
+		return d32.FromInt(40)
 	case .Stump:
-		return 30
+		return d32.FromInt(30)
 	case .Rubble, .BurntRubble:
-		return 10
+		return d32.FromInt(10)
 	}
-	return 10
+	return d32.FromInt(10)
 }
 
 DecorationIsFlammable :: proc(kind: DecorationKind) -> bool {
@@ -83,63 +85,63 @@ DecorationChoppable :: proc(kind: DecorationKind) -> bool {
 	return false
 }
 
-DecorationChopSeconds :: proc(kind: DecorationKind) -> f32 {
+DecorationChopSeconds :: proc(kind: DecorationKind) -> d32.Value {
 	switch kind {
 	case .Tree:
-		return 4
+		return d32.FromInt(4)
 	case .Pine:
-		return 3
+		return d32.FromInt(3)
 	case .Bush:
-		return 1.2
+		return d32.FromRatio(6, 5)
 	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp, .Rubble, .BurntRubble:
-		return 0
+		return d32.ZERO
 	}
-	return 0
+	return d32.ZERO
 }
 
 // Time a builder needs to clear a decoration off a construction site. Unlike
 // harvesting, even stones and brush take work to remove.
-DecorationClearSeconds :: proc(kind: DecorationKind) -> f32 {
+DecorationClearSeconds :: proc(kind: DecorationKind) -> d32.Value {
 	switch kind {
 	case .Tree:
-		return 4
+		return d32.FromInt(4)
 	case .Pine:
-		return 3
+		return d32.FromInt(3)
 	case .Rock:
-		return 2.5
+		return d32.FromRatio(5, 2)
 	case .Stump:
-		return 1.5
+		return d32.FromRatio(3, 2)
 	case .Bush:
-		return 1.2
+		return d32.FromRatio(6, 5)
 	case .Cactus:
-		return 1
+		return d32.ONE
 	case .Flowers, .Reed:
-		return 0.4
+		return d32.FromRatio(2, 5)
 	case .Lamp:
-		return 0.6
+		return d32.FromRatio(3, 5)
 	case .Rubble:
-		return 2
+		return d32.FromInt(2)
 	case .BurntRubble:
-		return 2.5
+		return d32.FromRatio(5, 2)
 	}
-	return 0
+	return d32.ZERO
 }
 
-DecorationWoodYield :: proc(kind: DecorationKind) -> f32 {
+DecorationWoodYield :: proc(kind: DecorationKind) -> d32.Value {
 	switch kind {
 	case .Tree:
-		return 6
+		return d32.FromInt(6)
 	case .Pine:
-		return 4
+		return d32.FromInt(4)
 	case .Bush:
-		return 1
+		return d32.FromInt(1)
 	case .Rock, .Flowers, .Cactus, .Reed, .Stump, .Lamp, .Rubble, .BurntRubble:
-		return 0
+		return d32.ZERO
 	}
-	return 0
+	return d32.ZERO
 }
 
-WorldDecorationSpawn :: proc(w: ^World, x, y: f32, kind: DecorationKind, variant: u8) -> (int, bool) {
+WorldDecorationSpawn :: proc(w: ^World, x, y: d32.Value, kind: DecorationKind, variant: u8) -> (int, bool) {
 	slot := -1
 	for step in 0 ..< DECORATION_CAPACITY {
 		candidate := (w.decorationCursor+step)%DECORATION_CAPACITY
@@ -155,7 +157,7 @@ WorldDecorationSpawn :: proc(w: ^World, x, y: f32, kind: DecorationKind, variant
 	w.decorations.kind[slot] = kind
 	w.decorations.variant[slot] = variant
 	w.decorations.health[slot] = DecorationHealth(kind)
-	w.decorations.regrowTimer[slot] = 0
+	w.decorations.regrowTimer[slot] = d32.ZERO
 	w.decorationUsed[slot] = true
 	if kind == .Stump do w.decorationStumps += 1
 	w.decorationCursor = (slot+1)%DECORATION_CAPACITY
@@ -193,9 +195,9 @@ BuildingSpawnDebris :: proc(w: ^World, buildingSlot: int, burnt: bool) {
 		tileIndex := (i*5+buildingSlot)%area
 		tileX := building.x+tileIndex%width
 		tileY := building.y+tileIndex/width
-		x := f32(tileX)+0.15+WorldNoiseHash(buildingSlot, i, seed+0x3)*0.7
-		y := f32(tileY)+0.6+WorldNoiseHash(i, buildingSlot, seed+0x4)*0.35
-		variant := u8(int(WorldNoiseHash(buildingSlot, i, seed+0x5)*4) & 3)
+		x := PositionFromF32(f32(tileX)+0.15+WorldNoiseHash(buildingSlot, i, seed+0x3)*0.7)
+		y := PositionFromF32(f32(tileY)+0.6+WorldNoiseHash(i, buildingSlot, seed+0x4)*0.35)
+		variant := u8(WorldNoiseHashInt(buildingSlot, i, seed+0x5)/250_000)
 		if _, spawned := WorldDecorationSpawn(w, x, y, kind, variant); !spawned do break
 	}
 }
@@ -205,15 +207,21 @@ WorldSpawnStreetLamp :: proc(w: ^World, x, y: int) {
 	if w.spatial.chunkSize <= 0 || !WorldTileHasPath(w, x, y) do return
 	tileX := WorldWrapCoordinate(x, int(w.maxX))
 	tileY := WorldWrapCoordinate(y, int(w.maxY))
-	roll := WorldNoiseHash(tileX, tileY, 0x1A3B)
-	if roll >= 0.18 do return
-	if roll >= 0.08 {
+	roll := WorldNoiseHashInt(tileX, tileY, 0x1A3B)
+	if roll >= 180_000 do return
+	if roll >= 80_000 {
 		horizontal := WorldTileHasPath(w, tileX-1, tileY) || WorldTileHasPath(w, tileX+1, tileY)
 		vertical := WorldTileHasPath(w, tileX, tileY-1) || WorldTileHasPath(w, tileX, tileY+1)
 		if !horizontal || !vertical do return
 	}
 	if WorldHasNearbyStreetLamp(w, tileX, tileY) do return
-	WorldDecorationSpawn(w, f32(tileX)+0.5, f32(tileY)+0.9, .Lamp, u8(WorldNoiseHash(tileY, tileX, 0x1A3C)*4) & 3)
+	WorldDecorationSpawn(
+		w,
+		PositionFromF32(f32(tileX)+0.5),
+		PositionFromF32(f32(tileY)+0.9),
+		.Lamp,
+		u8(WorldNoiseHashInt(tileY, tileX, 0x1A3C)/250_000),
+	)
 }
 
 WorldHasNearbyStreetLamp :: proc(w: ^World, x, y: int) -> bool {
@@ -222,6 +230,12 @@ WorldHasNearbyStreetLamp :: proc(w: ^World, x, y: int) -> bool {
 	if chunkSize <= 0 || worldWidth <= 0 || worldHeight <= 0 do return false
 	centerX := WorldWrapCoordinate(x, worldWidth)
 	centerY := WorldWrapCoordinate(y, worldHeight)
+	centerPositionX := d32.FromInt(i32(centerX))
+	centerPositionY := d32.FromInt(i32(centerY))
+	worldWidthRaw := i64(worldWidth)*d32.SCALE
+	worldHeightRaw := i64(worldHeight)*d32.SCALE
+	spacingRaw := i64(STREET_LAMP_MIN_SPACING)*d32.SCALE
+	spacingSquaredRaw := u64(spacingRaw)*u64(spacingRaw)
 
 	// Wrap tiles before selecting buckets: edge chunks can be shorter than chunkSize.
 	for tileX := centerX-STREET_LAMP_MIN_SPACING; tileX <= centerX+STREET_LAMP_MIN_SPACING; {
@@ -232,9 +246,15 @@ WorldHasNearbyStreetLamp :: proc(w: ^World, x, y: int) -> bool {
 			chunk := chunkX*w.spatial.chunksY+wrappedY/chunkSize
 			for slot := w.spatial.decorationHead[chunk]; slot >= 0; slot = w.spatial.decorationNext[slot] {
 				if w.decorations.kind[slot] != .Lamp do continue
-				deltaX := WorldShortestWrappedDelta(f32(int(w.decorations.x[slot])-centerX), f32(worldWidth))
-				deltaY := WorldShortestWrappedDelta(f32(int(w.decorations.y[slot])-centerY), f32(worldHeight))
-				if deltaX*deltaX+deltaY*deltaY < f32(STREET_LAMP_MIN_SPACING*STREET_LAMP_MIN_SPACING) {
+				distanceSquared, validDistance := d32.WrappedDistanceSquared(
+					w.decorations.x[slot],
+					w.decorations.y[slot],
+					centerPositionX,
+					centerPositionY,
+					worldWidthRaw,
+					worldHeightRaw,
+				)
+				if validDistance && distanceSquared < spacingSquaredRaw {
 					return true
 				}
 			}
@@ -253,7 +273,8 @@ WorldTileHasLamp :: proc(w: ^World, x, y: int) -> bool {
 	chunk := (wrappedX/chunkSize)*w.spatial.chunksY+wrappedY/chunkSize
 	for slot := w.spatial.decorationHead[chunk]; slot >= 0; slot = w.spatial.decorationNext[slot] {
 		if w.decorations.kind[slot] != .Lamp do continue
-		if int(w.decorations.x[slot]) == wrappedX && int(w.decorations.y[slot]) == wrappedY {
+		if int(d32.ToInt(w.decorations.x[slot])) == wrappedX &&
+			int(d32.ToInt(w.decorations.y[slot])) == wrappedY {
 			return true
 		}
 	}
@@ -273,13 +294,18 @@ WorldDecorationDespawn :: proc(w: ^World, slot: int) -> bool {
 DecorationFell :: proc(w: ^World, slot: int) {
 	RecursiveLockGuard(&w.unitMutex)
 	kind := w.decorations.kind[slot]
-	DecorationDebris(w, w.decorations.x[slot], w.decorations.y[slot], kind)
+	DecorationDebris(
+		w,
+		PositionToF32(w.decorations.x[slot]),
+		PositionToF32(w.decorations.y[slot]),
+		kind,
+	)
 	switch kind {
 	case .Tree, .Pine:
 		w.decorations.kind[slot] = .Stump
 		w.decorations.variant[slot] = 0
 		w.decorations.health[slot] = DecorationHealth(.Stump)
-		w.decorations.regrowTimer[slot] = 0
+		w.decorations.regrowTimer[slot] = d32.ZERO
 		w.decorationStumps += 1
 	case .Bush, .Flowers, .Cactus, .Reed, .Stump, .Lamp, .Rubble, .BurntRubble:
 		WorldDecorationDespawn(w, slot)
@@ -294,34 +320,37 @@ DecorationRegrowth :: proc(w: ^World, slot: int, deltaTime: f32) -> bool {
 	if slot < 0 || slot >= DECORATION_CAPACITY || !w.decorationUsed[slot] do return false
 	if w.decorations.kind[slot] != .Stump do return false
 
-	tileX := int(w.decorations.x[slot])
-	tileY := int(w.decorations.y[slot])
+	tileX := int(d32.ToInt(w.decorations.x[slot]))
+	tileY := int(d32.ToInt(w.decorations.y[slot]))
 	if WorldFireAt(w, tileX, tileY) do return false
 	if WorldTileOccupied(w, tileX, tileY) {
 		WorldDecorationDespawn(w, slot)
 		return false
 	}
 
-	w.decorations.regrowTimer[slot] += deltaTime
-	if w.decorations.regrowTimer[slot] < DECORATION_REGROW_SECONDS do return false
+	w.decorations.regrowTimer[slot] = d32.Add(
+		w.decorations.regrowTimer[slot],
+		PositionFromF32(deltaTime),
+	)
+	if w.decorations.regrowTimer[slot] < d32.FromInt(DECORATION_REGROW_SECONDS) do return false
 
 	kind := DecorationKind.Tree
-	if WorldNoiseHash(tileX, tileY, 0xA11CE) < 0.35 do kind = .Pine
+	if WorldNoiseHashInt(tileX, tileY, 0xA11CE) < 350_000 do kind = .Pine
 	w.decorations.kind[slot] = kind
-	w.decorations.variant[slot] = u8(int(WorldNoiseHash(tileY, tileX, 0xA11CF)*4) & 3)
+	w.decorations.variant[slot] = u8(WorldNoiseHashInt(tileY, tileX, 0xA11CF)/250_000)
 	w.decorations.health[slot] = DecorationHealth(kind)
-	w.decorations.regrowTimer[slot] = 0
+	w.decorations.regrowTimer[slot] = d32.ZERO
 	w.decorationStumps -= 1
 	return true
 }
 
 
 
-WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> f32 {
+WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> d32.Value {
 	chunkSize := w.spatial.chunkSize
-	if chunkSize <= 0 || width <= 0 || height <= 0 do return 0
+	if chunkSize <= 0 || width <= 0 || height <= 0 do return d32.ZERO
 
-	harvested: f32 = 0
+	harvested := d32.ZERO
 	firstChunkX := x/chunkSize
 	lastChunkX := (x+width-1)/chunkSize
 	firstChunkY := y/chunkSize
@@ -334,11 +363,11 @@ WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> f32 {
 			slot := w.spatial.decorationHead[chunk]
 			for slot >= 0 {
 				next := w.spatial.decorationNext[slot]
-				decorationX := int(w.decorations.x[slot])
-				decorationY := int(w.decorations.y[slot])
+				decorationX := int(d32.ToInt(w.decorations.x[slot]))
+				decorationY := int(d32.ToInt(w.decorations.y[slot]))
 				if decorationX >= x && decorationX < x+width &&
 					decorationY >= y && decorationY < y+height {
-					harvested += DecorationWoodYield(w.decorations.kind[slot])
+					harvested = d32.Add(harvested, DecorationWoodYield(w.decorations.kind[slot]))
 					WorldDecorationDespawn(w, slot)
 				}
 				slot = next
@@ -349,8 +378,8 @@ WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> f32 {
 }
 
 // Splash damage fells trees and brush around the impact; stone takes longer.
-WorldDecorationAreaDamage :: proc(w: ^World, x, y, radius, damage: f32) {
-	if radius <= 0 || damage <= 0 do return
+WorldDecorationAreaDamage :: proc(w: ^World, x, y: f32, radius: d32.Value, damage: d32.Value) {
+	if radius <= d32.ZERO || damage <= d32.ZERO do return
 	RecursiveLockGuard(&w.unitMutex)
 	chunkSize := w.spatial.chunkSize
 	if chunkSize <= 0 do return
@@ -358,12 +387,17 @@ WorldDecorationAreaDamage :: proc(w: ^World, x, y, radius, damage: f32) {
 	worldHeight := f32(w.maxY)
 	centerX := WorldWrapPosition(x, worldWidth)
 	centerY := WorldWrapPosition(y, worldHeight)
-	radiusSquared := radius*radius
+	centerPositionX := PositionFromF32(centerX)
+	centerPositionY := PositionFromF32(centerY)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	radiusRaw := i64(d32.Raw(radius))
+	radiusSquaredRaw := u64(radiusRaw)*u64(radiusRaw)
 	hit := 0
 
 	centerChunkX := int(centerX)/chunkSize
 	centerChunkY := int(centerY)/chunkSize
-	chunkRadius := int(radius)/chunkSize+1
+	chunkRadius := int(d32.ToInt(radius))/chunkSize+1
 	for offsetX in -chunkRadius..=chunkRadius {
 		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
 		for offsetY in -chunkRadius..=chunkRadius {
@@ -372,19 +406,25 @@ WorldDecorationAreaDamage :: proc(w: ^World, x, y, radius, damage: f32) {
 			slot := w.spatial.decorationHead[chunk]
 			for slot >= 0 {
 				next := w.spatial.decorationNext[slot]
-				deltaX := WorldShortestWrappedDelta(w.decorations.x[slot]-centerX, worldWidth)
-				deltaY := WorldShortestWrappedDelta(w.decorations.y[slot]-centerY, worldHeight)
-				if deltaX*deltaX+deltaY*deltaY <= radiusSquared {
-					w.decorations.health[slot] -= damage
+				distanceSquared, validDistance := d32.WrappedDistanceSquared(
+					w.decorations.x[slot],
+					w.decorations.y[slot],
+					centerPositionX,
+					centerPositionY,
+					worldWidthRaw,
+					worldHeightRaw,
+				)
+				if validDistance && distanceSquared <= radiusSquaredRaw {
+					w.decorations.health[slot] = d32.Sub(w.decorations.health[slot], damage)
 					hit += 1
-					if w.decorations.health[slot] <= 0 do DecorationFell(w, slot)
+					if w.decorations.health[slot] <= d32.ZERO do DecorationFell(w, slot)
 				}
 				slot = next
 			}
 		}
 	}
 
-	if hit > 0 do DecorationBlastBurst(w, centerX, centerY, radius)
+	if hit > 0 do DecorationBlastBurst(w, centerX, centerY, PositionToF32(radius))
 }
 
 WorldDecorationUpdate :: proc(w: ^World, deltaTime: f32) {
@@ -406,120 +446,120 @@ WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
 		for y in 0 ..< worldHeight {
 			kind: DecorationKind
 			found := true
-			roll := WorldNoiseHash(x, y, seed+901)
+			roll := WorldNoiseHashInt(x, y, seed+901)
 			switch w.ground[x][y].type {
 			case .Forest:
 				switch {
-				case roll < 0.30:
+				case roll < 300_000:
 					kind = .Tree
-				case roll < 0.38:
+				case roll < 380_000:
 					kind = .Pine
-				case roll < 0.40:
+				case roll < 400_000:
 					kind = .Bush
 				case:
 					found = false
 				}
 			case .Taiga:
 				switch {
-				case roll < 0.24:
+				case roll < 240_000:
 					kind = .Pine
-				case roll < 0.34:
+				case roll < 340_000:
 					kind = .Tree
-				case roll < 0.38:
+				case roll < 380_000:
 					kind = .Bush
 				case:
 					found = false
 				}
 			case .Plains:
 				switch {
-				case roll < 0.06:
+				case roll < 60_000:
 					kind = .Flowers
-				case roll < 0.075:
+				case roll < 75_000:
 					kind = .Bush
 				case:
 					found = false
 				}
 			case .Grassland:
 				switch {
-				case roll < 0.012:
+				case roll < 12_000:
 					kind = .Flowers
-				case roll < 0.020:
+				case roll < 20_000:
 					kind = .Rock
-				case roll < 0.026:
+				case roll < 26_000:
 					kind = .Bush
 				case:
 					found = false
 				}
 			case .Steppe:
 				switch {
-				case roll < 0.018:
+				case roll < 18_000:
 					kind = .Bush
-				case roll < 0.026:
+				case roll < 26_000:
 					kind = .Flowers
-				case roll < 0.032:
+				case roll < 32_000:
 					kind = .Rock
 				case:
 					found = false
 				}
 			case .Hill:
 				switch {
-				case roll < 0.045:
+				case roll < 45_000:
 					kind = .Rock
-				case roll < 0.060:
+				case roll < 60_000:
 					kind = .Pine
 				case:
 					found = false
 				}
 			case .Mountain:
 				switch {
-				case roll < 0.10:
+				case roll < 100_000:
 					kind = .Rock
 				case:
 					found = false
 				}
 			case .Sand:
 				switch {
-				case roll < 0.015:
+				case roll < 15_000:
 					kind = .Rock
-				case roll < 0.030:
+				case roll < 30_000:
 					kind = .Reed
 				case:
 					found = false
 				}
 			case .Marsh:
 				switch {
-				case roll < 0.16:
+				case roll < 160_000:
 					kind = .Reed
-				case roll < 0.19:
+				case roll < 190_000:
 					kind = .Bush
 				case:
 					found = false
 				}
 			case .Desert:
 				switch {
-				case roll < 0.020:
+				case roll < 20_000:
 					kind = .Cactus
-				case roll < 0.028:
+				case roll < 28_000:
 					kind = .Rock
 				case:
 					found = false
 				}
 			case .Tundra:
 				switch {
-				case roll < 0.030:
+				case roll < 30_000:
 					kind = .Rock
 				case:
 					found = false
 				}
 			case .Ash:
 				switch {
-				case roll < 0.045:
+				case roll < 45_000:
 					kind = .Rock
 				case:
 					found = false
 				}
 			case .Lake, .River:
-				if roll < 0.020 {
+				if roll < 20_000 {
 					kind = .Reed
 				} else {
 					found = false
@@ -532,10 +572,16 @@ WorldGenerateDecorations :: proc(w: ^World, seed: u64) {
 				continue
 			}
 
-			variant := u8(int(WorldNoiseHash(y, x, seed+907)*4) & 3)
+			variant := u8(WorldNoiseHashInt(y, x, seed+907)/250_000)
 			jitterX := 0.15+WorldNoiseHash(x, y, seed+911)*0.7
 			jitterY := 0.86+WorldNoiseHash(y, x, seed+913)*0.12
-			WorldDecorationSpawn(w, f32(x)+jitterX, f32(y)+jitterY, kind, variant)
+			WorldDecorationSpawn(
+				w,
+				PositionFromF32(f32(x)+jitterX),
+				PositionFromF32(f32(y)+jitterY),
+				kind,
+				variant,
+			)
 		}
 	}
 }

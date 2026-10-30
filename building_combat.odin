@@ -1,12 +1,14 @@
 package main
 
+import "d32"
+
 COMBAT_SITE_CAPACITY :: 256
 
 // Combat builders are almost harmless: they only lash out when something
 // hostile happens to stand on top of them.
-COMBAT_BUILDER_DEFEND_RADIUS :: 1.8
-COMBAT_BUILDER_DEFEND_CHANCE :: 0.5
-COMBAT_BUILDER_RESCAN_SECONDS :: 1.5
+COMBAT_BUILDER_DEFEND_RADIUS :: d32.Value((18*d32.SCALE+5)/10)
+COMBAT_BUILDER_DEFEND_CHANCE_PERCENT :: 50
+COMBAT_BUILDER_RESCAN_SECONDS :: d32.Value(3*d32.SCALE/2)
 
 // A player-placed combat building. It costs no wood and can sit anywhere,
 // including unreachable water. Builders re-evaluate it whenever navigation
@@ -14,28 +16,28 @@ COMBAT_BUILDER_RESCAN_SECONDS :: 1.5
 CombatSite :: struct {
 	kind: BuildingKind,
 	x, y: int,
-	work: f32,
+	work: d32.Value,
 	kingdom, town: int,
 }
 
-CombatBuildingSeconds :: proc(kind: BuildingKind) -> f32 {
+CombatBuildingSeconds :: proc(kind: BuildingKind) -> d32.Value {
 	switch kind {
 	case .Wall:
-		return 2
+		return d32.FromInt(2)
 	case .Bridge:
-		return 5
+		return d32.FromInt(5)
 	case .Watchtower:
-		return 8
+		return d32.FromInt(8)
 	case .Cannon:
-		return 12
+		return d32.FromInt(12)
 	case .GiantMortar:
-		return 14
+		return d32.FromInt(14)
 	case .FireworksGuild:
-		return 75
+		return d32.FromInt(75)
 	case .StarfallSpire:
-		return 120
+		return d32.FromInt(120)
 	case .TownHall, .Home, .Farmland, .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild, .Path, .DistrictHall, .Harbor, .Granary, .AlchemistWorkshop:
-		return 6
+		return d32.FromInt(6)
 	}
 	unreachable()
 }
@@ -127,7 +129,7 @@ CombatSiteAccessPoint :: proc(w: ^World, siteSlot, unitSlot: int) -> (int, int, 
 	site := &w.combatSites[siteSlot]
 	width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
 	unit := &w.units[unitSlot]
-	return BuildingFindWorkAccessPoint(w, site.x, site.y, width, height, unit.type, unit.kingdome, int(unit.x), int(unit.y))
+	return BuildingFindWorkAccessPoint(w, site.x, site.y, width, height, unit.type, unit.kingdome, UnitTileX(w, unitSlot), UnitTileY(w, unitSlot))
 }
 
 // Nearest reachable-looking site of the builder's town. The previous failure is
@@ -135,14 +137,12 @@ CombatSiteAccessPoint :: proc(w: ^World, siteSlot, unitSlot: int) -> (int, int, 
 // reachable.
 CombatSiteFindNearest :: proc(w: ^World, unitSlot: int, sequence: int, skipSlot: int, skipRevision: u64) -> (siteSlot, accessX, accessY: int, found: bool) {
 	unit := &w.units[unitSlot]
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
-	unitX := WorldWrapPosition(unit.x, worldWidth)
-	unitY := WorldWrapPosition(unit.y, worldHeight)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	seed := u64(unitSlot+sequence*1013)
 
-	bestDistance: f32 = 0
-	bestScore: f32 = -1
+	bestDistanceSquared: u64 = 0
+	bestScore: u32
 	for slot in 0..<COMBAT_SITE_CAPACITY {
 		if !w.combatSiteUsed[slot] do continue
 		if w.combatSites.kingdom[slot] != unit.kingdome || w.combatSites.town[slot] != unit.town {
@@ -156,21 +156,27 @@ CombatSiteFindNearest :: proc(w: ^World, unitSlot: int, sequence: int, skipSlot:
 		siteWidth, siteHeight := BuildingTileSize(
 			BuildingTypeFromKind(w.combatSites.kind[slot]),
 		)
-		centerX := f32(w.combatSites.x[slot])+f32(siteWidth)*0.5
-		centerY := f32(w.combatSites.y[slot])+f32(siteHeight)*0.5
-		deltaX := WorldShortestWrappedDelta(centerX-unitX, worldWidth)
-		deltaY := WorldShortestWrappedDelta(centerY-unitY, worldHeight)
-		distanceSquared := deltaX*deltaX+deltaY*deltaY
-		score := WorldNoiseHash(slot, sequence, seed)
-		if found && (distanceSquared > bestDistance ||
-			(distanceSquared == bestDistance && score <= bestScore)) {
+		centerX := d32.FromRaw(i32(i64(w.combatSites.x[slot])*d32.SCALE+i64(siteWidth)*(d32.SCALE/2)))
+		centerY := d32.FromRaw(i32(i64(w.combatSites.y[slot])*d32.SCALE+i64(siteHeight)*(d32.SCALE/2)))
+		distanceSquared, valid := d32.WrappedDistanceSquared(
+			unit.x,
+			unit.y,
+			centerX,
+			centerY,
+			worldWidthRaw,
+			worldHeightRaw,
+		)
+		if !valid do continue
+		score := WorldNoiseHashInt(slot, sequence, seed)
+		if found && (distanceSquared > bestDistanceSquared ||
+			(distanceSquared == bestDistanceSquared && score <= bestScore)) {
 			continue
 		}
 
 		siteSlot = slot
 		accessX = x
 		accessY = y
-		bestDistance = distanceSquared
+		bestDistanceSquared = distanceSquared
 		bestScore = score
 		found = true
 	}
@@ -188,8 +194,10 @@ CombatSiteAdvance :: proc(w: ^World, siteSlot: int, deltaTime: f32) -> bool {
 
 	site := &w.combatSites[siteSlot]
 	speed := KingdomTechBuildSpeedMultiplier(w, site.kingdom)
-	if site.kind == .Bridge do speed *= KingdomTechBridgeBuildMultiplier(w, site.kingdom)
-	site.work += deltaTime*speed
+	if site.kind == .Bridge {
+		speed = d32.Mul(speed, KingdomTechBridgeBuildMultiplier(w, site.kingdom))
+	}
+	site.work = d32.Add(site.work, d32.Mul(PositionFromF32(deltaTime), speed))
 	if site.work < CombatBuildingSeconds(site.kind) do return false
 
 	if _, ok := BuildingSpawn(
@@ -283,8 +291,8 @@ CombatBuilderUpdate :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 
 	switch state^ {
 	case .Roaming:
-		if builder.scanTimer > 0 {
-			builder.scanTimer -= deltaTime
+		if builder.scanTimer > d32.ZERO {
+			builder.scanTimer = d32.Sub(builder.scanTimer, PositionFromF32(deltaTime))
 			UnitUpdateRoaming(w, unitSlot, deltaTime)
 			return
 		}
@@ -332,7 +340,7 @@ CombatBuilderUpdate :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		if CombatSiteAdvance(w, builder.site, deltaTime) {
 			builder.site = -1
 			builder.failedSite = -1
-			builder.scanTimer = 0
+			builder.scanTimer = d32.ZERO
 			state^ = .Roaming
 			w.units[unitSlot].pathReady = false
 		}
@@ -344,8 +352,8 @@ CombatBuilderUpdate :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 CombatBuilderPatrol :: proc(w: ^World, unitSlot, kingdomSlot, townSlot: int, deltaTime: f32) {
 	unit := &w.units[unitSlot]
 	builder := &unit.type.(CombatBuilder)
-	atTarget := int(WorldWrapPosition(unit.x, f32(w.maxX))) == unit.pathTargetX &&
-		int(WorldWrapPosition(unit.y, f32(w.maxY))) == unit.pathTargetY
+	atTarget := UnitTileX(w, unitSlot) == unit.pathTargetX &&
+		UnitTileY(w, unitSlot) == unit.pathTargetY
 	if !unit.pathReady || atTarget {
 		x, y, found := UnitFindPatrolTarget(w, unitSlot, kingdomSlot, townSlot,
 			WARRIOR_DEFEND_PATROL_RADIUS, builder.patrolSequence)
@@ -356,9 +364,9 @@ CombatBuilderPatrol :: proc(w: ^World, unitSlot, kingdomSlot, townSlot: int, del
 		builder.patrolSequence += 1
 	}
 	speed := UnitDefaultSpeed(unit.type)
-	if unit.effects[.NoWater] do speed *= 0.7
+	if unit.effects[.NoWater] do speed = d32.Mul(speed, d32.FromRatio(7, 10))
 	reached, blocked, _ := UnitStepTowards(w, unitSlot,
-		f32(unit.pathTargetX)+0.5, f32(unit.pathTargetY)+0.5, speed*deltaTime)
+		TileCenterRaw(unit.pathTargetX), TileCenterRaw(unit.pathTargetY), d32.Mul(speed, PositionFromF32(deltaTime)))
 	if reached || blocked do unit.pathReady = false
 }
 
@@ -366,37 +374,41 @@ CombatBuilderPatrol :: proc(w: ^World, unitSlot, kingdomSlot, townSlot: int, del
 // swing once, then get back to work.
 CombatBuilderDefend :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 	unit := &w.units[unitSlot]
-	if unit.cooldown > 0 {
-		unit.cooldown -= deltaTime
+	if unit.cooldown > d32.ZERO {
+		unit.cooldown = max(d32.Sub(unit.cooldown, PositionFromF32(deltaTime)), d32.ZERO)
 		return false
 	}
 
-	roll := WorldNoiseHash(unitSlot, int(w.simulationTime*4), 0xC0B1)
-	if roll >= COMBAT_BUILDER_DEFEND_CHANCE do return false
+	roll := d32.FromRatio(
+		i32(WorldNoiseHashInt(unitSlot, int(WorldCurrentTick(w)), 0xC0B1)),
+		1_000_000,
+	)
+	if roll >= d32.FromRatio(COMBAT_BUILDER_DEFEND_CHANCE_PERCENT, 100) do return false
 
 	target := CombatBuilderFindEnemy(w, unitSlot, COMBAT_BUILDER_DEFEND_RADIUS)
 	if target < 0 do return false
 
 	unit.cooldown = UnitDefaultCooldown(unit.type)
-	UnitAttackBurst(w, unitSlot, w.units[target].x, w.units[target].y)
-	UnitApplyDamage(w, target, UnitDefaultDamage(unit.type), unit.x, unit.y, .Melee)
+	UnitAttackBurst(w, unitSlot, UnitX(w, target), UnitY(w, target))
+	UnitApplyDamage(w, target, UnitDefaultDamage(unit.type), UnitX(w, unitSlot), UnitY(w, unitSlot), .Melee)
 	return true
 }
 
-CombatBuilderFindEnemy :: proc(w: ^World, unitSlot: int, radius: f32) -> int {
+CombatBuilderFindEnemy :: proc(w: ^World, unitSlot: int, radius: d32.Value) -> int {
 	unit := &w.units[unitSlot]
 	builder := &unit.type.(CombatBuilder)
 	combatState := StateWarrior{order = builder.order, retreating = builder.returning}
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	chunkSize := w.spatial.chunkSize
-	if chunkSize <= 0 || radius <= 0 do return -1
+	if chunkSize <= 0 || radius <= d32.ZERO do return -1
 
-	centerChunkX := int(unit.x)/chunkSize
-	centerChunkY := int(unit.y)/chunkSize
-	chunkRadius := int(radius)/chunkSize+1
+	centerChunkX := UnitTileX(w, unitSlot)/chunkSize
+	centerChunkY := UnitTileY(w, unitSlot)/chunkSize
+	chunkRadius := int(d32.ToInt(radius))/chunkSize+1
 	bestSlot := -1
-	bestDistance := radius*radius
+	radiusRaw := i64(d32.Raw(radius))
+	bestDistanceSquared := u64(radiusRaw)*u64(radiusRaw)
 	for offsetX in -chunkRadius..=chunkRadius {
 		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
 		for offsetY in -chunkRadius..=chunkRadius {
@@ -408,14 +420,20 @@ CombatBuilderFindEnemy :: proc(w: ^World, unitSlot: int, radius: f32) -> int {
 				otherSlot = w.spatial.unitNext[otherSlot] {
 				if otherSlot == unitSlot do continue
 				if !WarriorCanTargetUnit(w, unitSlot, &combatState, otherSlot) do continue
-				deltaX := WorldShortestWrappedDelta(w.units.x[otherSlot]-unit.x, worldWidth)
-				deltaY := WorldShortestWrappedDelta(w.units.y[otherSlot]-unit.y, worldHeight)
-				distanceSquared := deltaX*deltaX+deltaY*deltaY
-				if distanceSquared > bestDistance ||
-					(distanceSquared == bestDistance && bestSlot >= 0 && otherSlot >= bestSlot) {
+				distanceSquared, valid := d32.WrappedDistanceSquared(
+					unit.x,
+					unit.y,
+					w.units[otherSlot].x,
+					w.units[otherSlot].y,
+					worldWidthRaw,
+					worldHeightRaw,
+				)
+				if !valid do continue
+				if distanceSquared > bestDistanceSquared ||
+					(distanceSquared == bestDistanceSquared && bestSlot >= 0 && otherSlot >= bestSlot) {
 					continue
 				}
-				bestDistance = distanceSquared
+				bestDistanceSquared = distanceSquared
 				bestSlot = otherSlot
 			}
 		}

@@ -3,6 +3,7 @@ package main
 import rl "vendor:raylib"
 import "core:math"
 import "core:slice"
+import "d32"
 
 RenderItem :: struct {
 	baseY:  f32,
@@ -380,7 +381,7 @@ WorldAmbientColor :: proc(w: ^World) -> rl.Color {
 	case .Ashfall:
 		tint = rl.Color{170, 156, 148, 255}
 	}
-	mix := w.weather.value*(0.35+0.25*(1-WorldNightAmount(w)))
+	mix := PositionToF32(w.weather.value)*(0.35+0.25*(1-WorldNightAmount(w)))
 	return WorldLerpColor(base, tint, mix)
 }
 
@@ -395,7 +396,7 @@ WorldLerpColor :: proc(a, b: rl.Color, t: f32) -> rl.Color {
 
 // Screen-space weather: cheap, camera-independent and deterministic.
 WorldRenderWeather :: proc(w: ^World) {
-	value := w.weather.value
+	value := PositionToF32(w.weather.value)
 	flash := w.weather.lightningFlash
 	if value <= 0.01 && flash <= 0.01 do return
 
@@ -403,6 +404,7 @@ WorldRenderWeather :: proc(w: ^World) {
 	screenHeight := f32(rl.GetScreenHeight())
 	time := w.simulationTime+w.simulationAccumulator
 	seed := w.seed+u64(w.weather.sequence)*7919
+	windX := PositionToF32(w.weather.windX)
 
 	overlay := rl.Color{0, 0, 0, 0}
 	switch w.weather.kind {
@@ -463,8 +465,8 @@ WorldRenderWeather :: proc(w: ^World) {
 			h2 := WorldNoiseHash(i, 1, seed)
 			speed := 700+h2*500
 			y := WorldWrapPosition(h2*screenHeight+time*speed, screenHeight+40)-20
-			x := WorldWrapPosition(h1*screenWidth+time*w.weather.windX*220, screenWidth+80)-40
-			slant := w.weather.windX*160
+			x := WorldWrapPosition(h1*screenWidth+time*windX*220, screenWidth+80)-40
+			slant := windX*160
 			rl.DrawLineEx(
 				rl.Vector2{x, y},
 				rl.Vector2{x+slant, y+12+h1*16},
@@ -482,7 +484,7 @@ WorldRenderWeather :: proc(w: ^World) {
 			fall := 30+h1*70
 			y := WorldWrapPosition(h2*screenHeight+time*fall, screenHeight+20)-10
 			x := WorldWrapPosition(
-				h1*screenWidth+time*w.weather.windX*120+math.sin(time*0.8+f32(i))*16,
+				h1*screenWidth+time*windX*120+math.sin(time*0.8+f32(i))*16,
 				screenWidth+20,
 			)-10
 			rl.DrawCircleV(rl.Vector2{x, y}, 1+h1*1.6, rl.Color{240, 245, 252, u8(120+90*h2)})
@@ -502,7 +504,7 @@ WorldRenderWeather :: proc(w: ^World) {
 			h2 := WorldNoiseHash(i, 7, seed)
 			y := WorldWrapPosition(h2*screenHeight+time*(20+h1*40), screenHeight+20)-10
 			x := WorldWrapPosition(
-				h1*screenWidth+time*(60+w.weather.windX*140),
+				h1*screenWidth+time*(60+windX*140),
 				screenWidth+60,
 			)-30
 			rl.DrawCircleV(rl.Vector2{x, y}, 1+h1*2, rl.Color{196, 168, 120, u8(70+60*h2)})
@@ -514,7 +516,7 @@ WorldRenderWeather :: proc(w: ^World) {
 			h2 := WorldNoiseHash(i, 9, seed)
 			y := WorldWrapPosition(h2*screenHeight+time*(18+h1*30), screenHeight+20)-10
 			x := WorldWrapPosition(
-				h1*screenWidth+time*w.weather.windX*100,
+				h1*screenWidth+time*windX*100,
 				screenWidth+40,
 			)-20
 			rl.DrawCircleV(rl.Vector2{x, y}, 0.8+h1*1.6, rl.Color{188, 166, 154, u8(80+60*h2)})
@@ -534,22 +536,25 @@ WorldRenderEnvironmentEvent :: proc(w: ^World, camera: rl.Camera2D) {
 	outline.a = u8(140+90*pulse)
 	fill := color
 	fill.a = e.phase == .Telegraph ? 18 : 30
-	center := rl.Vector2{e.centerX, e.centerY}
+	centerX := PositionToF32(e.centerX)
+	centerY := PositionToF32(e.centerY)
+	radius := PositionToF32(e.radius)
+	center := rl.Vector2{centerX, centerY}
 
 	rl.BeginMode2D(camera)
-	rl.DrawCircleV(center, e.radius, fill)
-	rl.DrawCircleLines(i32(e.centerX), i32(e.centerY), e.radius, outline)
+	rl.DrawCircleV(center, radius, fill)
+	rl.DrawCircleLines(i32(centerX), i32(centerY), radius, outline)
 
 	for tick in 0..<6 {
 		angle := time*0.8+f32(tick)*6.2831853/6
 		rl.DrawLineEx(
 			rl.Vector2{
-				e.centerX+math.cos(angle)*e.radius*0.86,
-				e.centerY+math.sin(angle)*e.radius*0.86,
+				centerX+math.cos(angle)*radius*0.86,
+				centerY+math.sin(angle)*radius*0.86,
 			},
 			rl.Vector2{
-				e.centerX+math.cos(angle)*e.radius*0.96,
-				e.centerY+math.sin(angle)*e.radius*0.96,
+				centerX+math.cos(angle)*radius*0.96,
+				centerY+math.sin(angle)*radius*0.96,
 			},
 			2,
 			outline,
@@ -562,17 +567,17 @@ WorldRenderEnvironmentEvent :: proc(w: ^World, camera: rl.Camera2D) {
 			h1 := WorldNoiseHash(i, int(e.sequence), w.seed+0x6A1)
 			h2 := WorldNoiseHash(i, int(e.sequence)+3, w.seed+0x6A3)
 			angle := h1*6.2831853
-			distance := e.radius*math.sqrt(h2)
-			x := e.centerX+math.cos(angle)*distance
-			y := e.centerY+math.sin(angle)*distance
+			distance := radius*math.sqrt(h2)
+			x := centerX+math.cos(angle)*distance
+			y := centerY+math.sin(angle)*distance
 			rl.DrawCircleV(rl.Vector2{x, y}, 0.12+h1*0.18, outline)
 		}
 	case .Flood:
 		for line in 0..<5 {
-			yy := e.centerY-e.radius*0.6+f32(line)*e.radius*0.3
+			yy := centerY-radius*0.6+f32(line)*radius*0.3
 			rl.DrawLineEx(
-				rl.Vector2{e.centerX-e.radius*0.9, yy},
-				rl.Vector2{e.centerX+e.radius*0.9, yy},
+				rl.Vector2{centerX-radius*0.9, yy},
+				rl.Vector2{centerX+radius*0.9, yy},
 				2,
 				outline,
 			)
@@ -581,8 +586,8 @@ WorldRenderEnvironmentEvent :: proc(w: ^World, camera: rl.Camera2D) {
 		for i in 0..<20 {
 			h1 := WorldNoiseHash(i, int(e.sequence), w.seed+0x6B1)
 			h2 := WorldNoiseHash(i, int(e.sequence)+5, w.seed+0x6B3)
-			x := e.centerX+(h1-0.5)*e.radius*1.8
-			y := e.centerY+(h2-0.5)*e.radius*1.8
+			x := centerX+(h1-0.5)*radius*1.8
+			y := centerY+(h2-0.5)*radius*1.8
 			rl.DrawLineEx(
 				rl.Vector2{x, y},
 				rl.Vector2{x-0.25, y+0.45},
@@ -592,34 +597,34 @@ WorldRenderEnvironmentEvent :: proc(w: ^World, camera: rl.Camera2D) {
 		}
 	case .Drought:
 		for line in 0..<4 {
-			yy := e.centerY-e.radius*0.5+f32(line)*e.radius*0.34
+			yy := centerY-radius*0.5+f32(line)*radius*0.34
 			rl.DrawLineEx(
-				rl.Vector2{e.centerX-e.radius*0.8, yy},
-				rl.Vector2{e.centerX+e.radius*0.8, yy},
+				rl.Vector2{centerX-radius*0.8, yy},
+				rl.Vector2{centerX+radius*0.8, yy},
 				1.5,
 				outline,
 			)
 		}
 	case .Earthquake:
 		for ring in 0..<3 {
-			r := e.radius*(0.3+f32(ring)*0.22)+pulse*0.3
-			rl.DrawCircleLines(i32(e.centerX), i32(e.centerY), r, outline)
+			r := radius*(0.3+f32(ring)*0.22)+pulse*0.3
+			rl.DrawCircleLines(i32(centerX), i32(centerY), r, outline)
 		}
 	case .Locusts:
 		for i in 0..<34 {
 			h1 := WorldNoiseHash(i, int(e.sequence), w.seed+0x6C1)
 			h2 := WorldNoiseHash(i, int(e.sequence)+7, w.seed+0x6C3)
-			x := e.centerX+(h1-0.5)*e.radius*1.6
-			y := e.centerY+(h2-0.5)*e.radius*1.6
+			x := centerX+(h1-0.5)*radius*1.6
+			y := centerY+(h2-0.5)*radius*1.6
 			rl.DrawCircleV(rl.Vector2{x, y}, 0.11+h1*0.1, outline)
 		}
 	case .Hurricane:
 		for ring in 0..<4 {
-			offset := math.sin(time*1.4+f32(ring))*e.radius*0.15
+			offset := math.sin(time*1.4+f32(ring))*radius*0.15
 			rl.DrawCircleLines(
-				i32(e.centerX+offset),
-				i32(e.centerY-offset*0.6),
-				e.radius*(0.35+f32(ring)*0.2),
+				i32(centerX+offset),
+				i32(centerY-offset*0.6),
+				radius*(0.35+f32(ring)*0.2),
 				outline,
 			)
 		}
@@ -627,12 +632,12 @@ WorldRenderEnvironmentEvent :: proc(w: ^World, camera: rl.Camera2D) {
 			angle := time*0.7+f32(ray)*6.2831853/8
 			rl.DrawLineEx(
 				rl.Vector2{
-					e.centerX+math.cos(angle)*e.radius*0.5,
-					e.centerY+math.sin(angle)*e.radius*0.5,
+					centerX+math.cos(angle)*radius*0.5,
+					centerY+math.sin(angle)*radius*0.5,
 				},
 				rl.Vector2{
-					e.centerX+math.cos(angle+0.5)*e.radius*0.95,
-					e.centerY+math.sin(angle+0.5)*e.radius*0.95,
+					centerX+math.cos(angle+0.5)*radius*0.95,
+					centerY+math.sin(angle+0.5)*radius*0.95,
 				},
 				1.5,
 				outline,
@@ -641,11 +646,15 @@ WorldRenderEnvironmentEvent :: proc(w: ^World, camera: rl.Camera2D) {
 	}
 
 	if e.phase == .Telegraph {
-		progress := 1-clamp(e.remaining/max(e.telegraph, 0.01), 0, 1)
+		progress := 1-clamp(
+			PositionToF32(e.remaining)/max(PositionToF32(e.telegraph), 0.01),
+			0,
+			1,
+		)
 		rl.DrawCircleLines(
-			i32(e.centerX),
-			i32(e.centerY),
-			e.radius*(1-progress*0.45),
+			i32(centerX),
+			i32(centerY),
+			radius*(1-progress*0.45),
 			outline,
 		)
 	}
@@ -660,8 +669,8 @@ DECORATION_MIN_ZOOM : f32 : 4
 // Every unit carries the time of its last update, so skipped (LOD) updates
 // stretch the interpolation window instead of snapping.
 UnitRenderPosition :: proc(w: ^World, unitSlot: int) -> (x, y: f32) {
-	x = w.units.x[unitSlot]
-	y = w.units.y[unitSlot]
+	x = UnitX(w, unitSlot)
+	y = UnitY(w, unitSlot)
 	now := w.simulationTime+w.simulationAccumulator
 	interval := w.units.updateInterval[unitSlot]
 	alpha: f32 = 1
@@ -671,14 +680,14 @@ UnitRenderPosition :: proc(w: ^World, unitSlot: int) -> (x, y: f32) {
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
 	x = WorldWrapPosition(
-		w.units.previousX[unitSlot]+
-		WorldShortestWrappedDelta(w.units.x[unitSlot]-w.units.previousX[unitSlot], worldWidth)*
+		UnitPrevX(w, unitSlot)+
+		WorldShortestWrappedDelta(UnitX(w, unitSlot)-UnitPrevX(w, unitSlot), worldWidth)*
 			alpha,
 		worldWidth,
 	)
 	y = WorldWrapPosition(
-		w.units.previousY[unitSlot]+
-		WorldShortestWrappedDelta(w.units.y[unitSlot]-w.units.previousY[unitSlot], worldHeight)*
+		UnitPrevY(w, unitSlot)+
+		WorldShortestWrappedDelta(UnitY(w, unitSlot)-UnitPrevY(w, unitSlot), worldHeight)*
 			alpha,
 		worldHeight,
 	)
@@ -1046,8 +1055,8 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 							variantScale := 0.94+f32((variant>>1)&3)*0.04
 							width := f32(texture.width)/PIXELS_PER_TILE*variantScale
 							height := f32(texture.height)/PIXELS_PER_TILE*variantScale
-							decorationX := w.decorations.x[decorationSlot]
-							decorationY := w.decorations.y[decorationSlot]
+							decorationX := PositionToF32(w.decorations.x[decorationSlot])
+							decorationY := PositionToF32(w.decorations.y[decorationSlot])
 							if !FogTileVisible(w, int(decorationX), int(decorationY)) do continue
 							if decorationX+width*0.5 < minX || decorationX-width*0.5 > maxX ||
 								decorationY < minY || decorationY-height > maxY {
@@ -1146,7 +1155,7 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				flipX := false
 				if w.units[unitSlot].pathReady {
 					deltaX := WorldShortestWrappedDelta(
-						f32(w.units[unitSlot].pathTargetX)+0.5-unitX,
+						TileCenterRaw(w.units[unitSlot].pathTargetX)-unitX,
 						f32(w.maxX),
 					)
 					flipX = deltaX < -0.5
@@ -1433,8 +1442,8 @@ WorldRenderHazards :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 		x := w.hazardCells.x[slot]
 		y := w.hazardCells.y[slot]
 		if !FogTileExplored(w, x, y) do continue
-		tileX := f32(x)+0.5
-		tileY := f32(y)+0.5
+		tileX := TileCenterRaw(x)
+		tileY := TileCenterRaw(y)
 		if abs(WorldShortestWrappedDelta(tileX-camera.target.x, worldWidth)) > halfWidth+1 ||
 			abs(WorldShortestWrappedDelta(tileY-camera.target.y, worldHeight)) > halfHeight+1 {
 			continue
@@ -1479,8 +1488,12 @@ WorldRenderHazards :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 		}
 		if !FogTileExplored(w, int(x), int(y)) do continue
 		lifeRatio: f32 = 1
-		if w.gasClouds.duration[cloud] > 0 {
-			lifeRatio = clamp(w.gasClouds.remaining[cloud]/w.gasClouds.duration[cloud], 0, 1)
+		if w.gasClouds.duration[cloud] > d32.ZERO {
+			lifeRatio = clamp(
+				PositionToF32(d32.Div(w.gasClouds.remaining[cloud], w.gasClouds.duration[cloud])),
+				0,
+				1,
+			)
 		}
 		pulse := 0.75+0.25*math.sin(w.simulationTime*2.5+f32(cloud))
 		rl.DrawCircleV(rl.Vector2{x, y}, radius, rl.Color{82, 166, 74, u8(10+16*lifeRatio)})
@@ -1514,8 +1527,8 @@ WorldRenderTerrainScars :: proc(w: ^World, camera: rl.Camera2D) {
 		tile := w.ground[x][y]
 		if tile.scar == .None do continue
 		if !FogTileExplored(w, x, y) do continue
-		tileX := f32(x)+0.5
-		tileY := f32(y)+0.5
+		tileX := TileCenterRaw(x)
+		tileY := TileCenterRaw(y)
 		if abs(WorldShortestWrappedDelta(tileX-camera.target.x, worldWidth)) > halfWidth+1 ||
 			abs(WorldShortestWrappedDelta(tileY-camera.target.y, worldHeightF)) > halfHeight+1 {
 			continue
@@ -1539,7 +1552,7 @@ WorldRenderTerrainScars :: proc(w: ^World, camera: rl.Camera2D) {
 		case .None:
 			continue
 		}
-		fade := clamp(tile.scarTimer/18, 0, 1)
+		fade := clamp(PositionToF32(tile.scarTimer)/18, 0, 1)
 		pulse := 0.5+0.5*math.sin(time*4.5+f32(tileIndex%23))
 		if tile.scar == .Volcanic {
 			alpha += 38*pulse

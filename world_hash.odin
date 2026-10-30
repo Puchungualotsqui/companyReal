@@ -2,6 +2,7 @@ package main
 
 import "base:intrinsics"
 import "core:testing"
+import "d32"
 
 // FNV-1a over fixed-width, little-endian scalar encodings.
 WorldHashValue :: proc(hash: ^u64, value: $T) {
@@ -11,6 +12,8 @@ WorldHashValue :: proc(hash: ^u64, value: $T) {
 		WorldHashValue(hash, i64(value))
 	} else when intrinsics.type_is_bit_set(T) {
 		WorldHashValue(hash, transmute(intrinsics.type_bit_set_underlying_type(T))value)
+	} else when T == d32.Value {
+		WorldHashValue(hash, d32.Raw(value))
 	} else when intrinsics.type_is_integer(T) {
 		bits := u64(value)
 		for _ in 0..<8 {
@@ -202,15 +205,15 @@ WorldHashTown :: proc(hash: ^u64, town: ^Town) {
 	WorldHashValue(hash, town.growthBatchBonus)
 	WorldHashValue(hash, town.growthPending)
 	WorldHashValue(hash, town.constructionProgress)
-	WorldHashValue(hash, town.constructionFailUntil)
-	WorldHashValue(hash, town.siteFailUntil)
-	WorldHashValue(hash, town.pathSearchFailUntil)
-	WorldHashValue(hash, town.woodSearchFailUntil)
+	WorldHashValue(hash, town.constructionFailUntilTick)
+	WorldHashValue(hash, town.siteFailUntilTick)
+	WorldHashValue(hash, town.pathSearchFailUntilTick)
+	WorldHashValue(hash, town.woodSearchFailUntilTick)
 	WorldHashValue(hash, town.waterSourceX)
 	WorldHashValue(hash, town.waterSourceY)
 	WorldHashValue(hash, town.waterSourceRevision)
 	WorldHashValue(hash, town.waterSourceReady)
-	WorldHashValue(hash, town.waterSearchFailUntil)
+	WorldHashValue(hash, town.waterSearchFailUntilTick)
 	WorldHashValue(hash, town.returnPointX)
 	WorldHashValue(hash, town.returnPointY)
 	WorldHashValue(hash, town.returnPointRevision)
@@ -259,7 +262,7 @@ WorldHashTown :: proc(hash: ^u64, town: ^Town) {
 	WorldHashValue(hash, town.coastalTerrainRevision)
 	WorldHashValue(hash, town.coastalAreaRadius)
 	WorldHashValue(hash, town.coastalDistricts)
-	WorldHashValue(hash, town.blockadeUntil)
+	WorldHashValue(hash, town.blockadeUntilTick)
 	WorldHashValue(hash, town.blockadeBy)
 	WorldHashValue(hash, town.orderWard)
 	WorldHashValue(hash, town.orderWardRegenDelay)
@@ -392,8 +395,8 @@ WorldStateHash :: proc(w: ^World) -> u64 {
 			WorldHashValue(&hash, brain.expandTimer)
 			WorldHashValue(&hash, brain.aggression)
 			WorldHashValue(&hash, brain.expansion)
-			WorldHashValue(&hash, brain.warCommitUntil)
-			WorldHashValue(&hash, brain.truceUntil)
+			WorldHashValue(&hash, brain.warCommitUntilTick)
+			WorldHashValue(&hash, brain.truceUntilTick)
 			WorldHashValue(&hash, brain.truceKingdom)
 		}
 	}
@@ -504,7 +507,7 @@ WorldStateHash :: proc(w: ^World) -> u64 {
 		WorldHashValue(&hash, field.walkWater)
 		WorldHashValue(&hash, field.valid)
 		WorldHashValue(&hash, field.stamp)
-		WorldHashValue(&hash, field.builtAt)
+		WorldHashValue(&hash, field.builtAtTick)
 		WorldHashValue(&hash, field.building)
 		WorldHashValue(&hash, field.queued)
 		WorldHashValue(&hash, field.buildMask)
@@ -540,7 +543,7 @@ WorldStateHashCoverage :: proc(t: ^testing.T) {
 
 	baseline := WorldStateHash(w)
 	testing.expect(t, baseline == WorldStateHash(w))
-	w.units.health[7] = 10
+	w.units.health[7] = d32.FromInt(10)
 	w.particleCount = 1
 	w.simulationAccumulator = 0.5
 	visible := [2]bool{true, false}
@@ -563,19 +566,19 @@ WorldStateHashCoverage :: proc(t: ^testing.T) {
 	testing.expect(t, baseline == WorldStateHash(w))
 
 	w.unitUsed[7] = true
-	w.units.type[7] = Builder{carriedResource = 2}
+	w.units.type[7] = Builder{carriedResource = d32.FromInt(2)}
 	unitHash := WorldStateHash(w)
 	testing.expect(t, unitHash != baseline)
-	w.units.type[7] = Builder{carriedResource = 3}
+	w.units.type[7] = Builder{carriedResource = d32.FromInt(3)}
 	testing.expect(t, unitHash != WorldStateHash(w))
-	w.units.type[7] = Builder{carriedResource = 2}
+	w.units.type[7] = Builder{carriedResource = d32.FromInt(2)}
 	testing.expect(t, unitHash == WorldStateHash(w))
 
 	w.kingdomUsed[0] = true
 	w.kingdoms[0].townUsed[0] = true
-	w.kingdoms[0].towns[0].wood = 12
+	w.kingdoms[0].towns[0].wood = d32.FromInt(12)
 	townHash := WorldStateHash(w)
-	w.kingdoms[0].towns[0].wood = 13
+	w.kingdoms[0].towns[0].wood = d32.FromInt(13)
 	testing.expect(t, townHash != WorldStateHash(w))
 
 	directionsA := [2]FlowDirection{.East, .West}

@@ -7,6 +7,7 @@ import "core:sync"
 import "core:sys/info"
 import "core:thread"
 import "core:time"
+import "d32"
 
 // Coarse fork/join parallelism. A persistent pool is sized from the machine at
 // startup; passes only submit ranges and join before returning. Bodies run on
@@ -196,7 +197,7 @@ RecursiveLockGuard :: proc(l: ^RecursiveLock) -> bool {
 // Hits collected during the unit loop and applied after it.
 PendingDamage :: struct {
 	victim: int,
-	damage: f32,
+	damage: d32.Value,
 	sourceX, sourceY: f32,
 	kind: DamageKind,
 }
@@ -224,7 +225,7 @@ PendingDamageQueueAppend :: proc(queue: ^PendingDamageQueue, hit: PendingDamage)
 PendingDamageLess :: proc(a, b: PendingDamage) -> bool {
 	if a.victim != b.victim do return a.victim < b.victim
 	if a.kind != b.kind do return a.kind < b.kind
-	if transmute(u32)a.damage != transmute(u32)b.damage do return transmute(u32)a.damage < transmute(u32)b.damage
+	if d32.Raw(a.damage) != d32.Raw(b.damage) do return d32.Raw(a.damage) < d32.Raw(b.damage)
 	if transmute(u32)a.sourceX != transmute(u32)b.sourceX do return transmute(u32)a.sourceX < transmute(u32)b.sourceX
 	return transmute(u32)a.sourceY < transmute(u32)b.sourceY
 }
@@ -236,7 +237,8 @@ PendingConstructionKind :: enum { None, Work, Wood }
 PendingConstruction :: struct {
 	kind: PendingConstructionKind,
 	kingdom, town, site: int,
-	amount: f32,
+	amount: d32.Value, // Work seconds when kind is .Work
+	wood:   d32.Value, // Quantized wood contribution when kind is .Wood
 }
 
 CONSTRUCTION_MASK_BITS :: 64
@@ -245,8 +247,9 @@ pendingConstructionMask: [(UNIT_CAPACITY+CONSTRUCTION_MASK_BITS-1)/CONSTRUCTION_
 
 ParallelQueueConstruction :: proc(
 	unitSlot, kingdom, town, site: int,
-	amount: f32,
+	amount: d32.Value,
 	kind: PendingConstructionKind,
+	wood: d32.Value = d32.ZERO,
 ) {
 	pendingConstruction[unitSlot] = PendingConstruction {
 		kind = kind,
@@ -254,6 +257,7 @@ ParallelQueueConstruction :: proc(
 		town = town,
 		site = site,
 		amount = amount,
+		wood = wood,
 	}
 	pendingConstructionMask[unitSlot/CONSTRUCTION_MASK_BITS] |= u64(1) << uint(unitSlot%CONSTRUCTION_MASK_BITS)
 }

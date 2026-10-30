@@ -1,6 +1,9 @@
 package main
 
-import "core:math"
+import "d32"
+
+// Turns per radian, for converting f32 noise angles into d32.SinCos inputs.
+TURNS_PER_RADIAN :: 0.15915494309189535
 
 WorldLandPlate :: struct {
 	x, y: f32,
@@ -92,7 +95,7 @@ WorldGenerate :: proc(w: ^World, settings: WorldGenerationSettings) {
 			plates[index] = WorldLandPlate{
 				x = (f32(column)+0.12+WorldNoiseHash(index, 0, settings.seed+101)*0.76)*f32(worldWidth)/f32(columns),
 				y = (f32(row)+0.12+WorldNoiseHash(index, 1, settings.seed+101)*0.76)*f32(worldHeight)/f32(rows),
-				land = WorldNoiseHash(index, 2, settings.seed+101) < 0.29,
+				land = WorldNoiseHashInt(index, 2, settings.seed+101) < 290_000,
 			}
 		}
 	}
@@ -116,18 +119,26 @@ WorldGenerate :: proc(w: ^World, settings: WorldGenerationSettings) {
 	for island in 0..<max(0, settings.islandCount) {
 		seed := settings.seed+u64(island)*719+401
 		for attempt in 0..<48 {
-			x := int(WorldNoiseHash(attempt, 0, seed)*f32(worldWidth))
-			y := int(WorldNoiseHash(attempt, 1, seed)*f32(worldHeight))
+			x := WorldNoiseIndex(attempt, 0, seed, worldWidth)
+			y := WorldNoiseIndex(attempt, 1, seed, worldHeight)
 			elevation := field[x*worldHeight+y]
 			if elevation > settings.landThreshold-0.12 || elevation < -0.6 do continue
 			radius := 4+WorldNoiseHash(island, 2, seed)*9
-			angle := WorldNoiseHash(island, 3, seed)*6.2831853
-			steps := 2+int(WorldNoiseHash(island, 4, seed)*3)
+			angle := d32.FromRatio(i32(WorldNoiseHashInt(island, 3, seed)), 1_000_000)
+			steps := 2+int(WorldNoiseHashInt(island, 4, seed)*3/1_000_000)
 			for step in 0..<steps {
 				WorldStampIsland(field[:], worldWidth, worldHeight, f32(x), f32(y), radius)
-				angle += (WorldNoiseHash(step, 5, seed)-0.5)*1.2
-				x += int(math.cos(angle)*radius*0.9)
-				y += int(math.sin(angle)*radius*0.9)
+				// 1.2 radians of jitter expressed in turns.
+				jitter := d32.Mul(
+					d32.FromRatio(i32(WorldNoiseHashInt(step, 5, seed))-500_000, 1_000_000),
+					d32.FromRatio(190_986, 1_000_000),
+				)
+				angle = d32.Add(angle, jitter)
+				sine, cosine := d32.SinCos(angle)
+				// Radius stays f32 for stamping; truncate its scaled step to Q16.16.
+				stepRadius := d32.FromRaw(i32(radius*0.9*f32(d32.SCALE)))
+				x += int(d32.Raw(d32.Mul(cosine, stepRadius)))/int(d32.SCALE)
+				y += int(d32.Raw(d32.Mul(sine, stepRadius)))/int(d32.SCALE)
 				radius *= 0.76
 			}
 			break
@@ -241,18 +252,20 @@ WorldGenerateLakes :: proc(w: ^World, settings: WorldGenerationSettings) {
 	for lakeIndex in 0..<settings.lakeCount {
 		lakeSeed := settings.seed + u64(lakeIndex)*101 + 1009
 		radiusCount := maximumRadius - minimumRadius + 1
-		radius := minimumRadius + int(WorldNoiseHash(lakeIndex, 2, lakeSeed)*f32(radiusCount))
-		if radius > maximumRadius do radius = maximumRadius
-		angle := WorldNoiseHash(lakeIndex, 5, lakeSeed)*6.2831853
-		axisX, axisY := math.cos(angle), math.sin(angle)
+		radius := minimumRadius + WorldNoiseIndex(lakeIndex, 2, lakeSeed, radiusCount)
+		angle := d32.FromRatio(i32(WorldNoiseHashInt(lakeIndex, 5, lakeSeed)), 1_000_000)
+		sine, cosine := d32.SinCos(angle)
+		// The ellipse test below stays f32; convert the deterministic axis once.
+		axisX := RawToF32(i64(d32.Raw(cosine)))
+		axisY := RawToF32(i64(d32.Raw(sine)))
 		radiusX := f32(radius)*(1.0+WorldNoiseHash(lakeIndex, 6, lakeSeed)*0.4)
 		radiusY := f32(radius)*(0.5+WorldNoiseHash(lakeIndex, 7, lakeSeed)*0.35)
 		extent := int(radiusX*1.25)+2
 
 		centerX, centerY := -1, -1
 		for attempt in 0..<64 {
-			x := int(WorldNoiseHash(lakeIndex, attempt*2+3, lakeSeed)*f32(worldWidth))
-			y := int(WorldNoiseHash(lakeIndex, attempt*2+4, lakeSeed)*f32(worldHeight))
+			x := WorldNoiseIndex(lakeIndex, attempt*2+3, lakeSeed, worldWidth)
+			y := WorldNoiseIndex(lakeIndex, attempt*2+4, lakeSeed, worldHeight)
 			clearance := extent+settings.beachWidth+2
 			if w.ground[x][y].type == .Ocean ||
 				w.ground[WorldWrapCoordinate(x+clearance, worldWidth)][y].type == .Ocean ||
@@ -280,7 +293,7 @@ WorldGenerateLakes :: proc(w: ^World, settings: WorldGenerationSettings) {
 					w.ground[x][y].type != .Lava &&
 					along*along/(radiusX*radiusX)+across*across/(radiusY*radiusY) <= shore*shore {
 					if w.ground[x][y].climate == .Boreal &&
-						WorldNoiseHash(x, y, lakeSeed+13) < 0.35 {
+						WorldNoiseHashInt(x, y, lakeSeed+13) < 350_000 {
 						w.ground[x][y].type = .Ice
 					} else {
 						w.ground[x][y].type = .Lake
@@ -353,8 +366,8 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 		start := -1
 		fallback := -1
 		for attempt in 0..<128 {
-			x := int(WorldNoiseHash(attempt, 0, riverSeed)*f32(worldWidth))
-			y := int(WorldNoiseHash(attempt, 1, riverSeed)*f32(worldHeight))
+			x := WorldNoiseIndex(attempt, 0, riverSeed, worldWidth)
+			y := WorldNoiseIndex(attempt, 1, riverSeed, worldHeight)
 			index := x*worldHeight+y
 			if distance[index] < 10 do continue
 			if w.ground[x][y].type == .River do continue
@@ -371,8 +384,8 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 		lateralBudget := max(2, startDistance/2)
 		stamp += 1
 		current := start
-		headingX: f32 = 0
-		headingY: f32 = 0
+		headingX := d32.ZERO
+		headingY := d32.ZERO
 		// The BFS queue is free now; reuse it for the river centre line.
 		pathLength := 0
 		maxSteps := startDistance*3+20
@@ -400,20 +413,22 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 				WorldWrapCoordinate(y-1, worldHeight)]
 			down := distance[WorldWrapCoordinate(x, worldWidth)*worldHeight+
 				WorldWrapCoordinate(y+1, worldHeight)]
-			flowX := f32(left-right)
-			flowY := f32(up-down)
-			flowLength := math.sqrt(flowX*flowX+flowY*flowY)
-			if flowLength > 0.001 {
-				flowX /= flowLength
-				flowY /= flowLength
+			flowX := d32.FromInt(i32(left-right))
+			flowY := d32.FromInt(i32(up-down))
+			flowLength := d32.Sqrt(d32.Add(d32.Mul(flowX, flowX), d32.Mul(flowY, flowY)))
+			// 0.001 world units in Q16.16 raw units.
+			if d32.Raw(flowLength) > 65 {
+				flowX = d32.Div(flowX, flowLength)
+				flowY = d32.Div(flowY, flowLength)
 			} else {
 				flowX = headingX
 				flowY = headingY
 			}
-			if flowX == 0 && flowY == 0 {
-				angle := WorldNoiseHash(x, y, riverSeed+3301)*6.2831853
-				flowX = math.cos(angle)
-				flowY = math.sin(angle)
+			if flowX == d32.ZERO && flowY == d32.ZERO {
+				angle := d32.FromRatio(i32(WorldNoiseHashInt(x, y, riverSeed+3301)), 1_000_000)
+				sine, cosine := d32.SinCos(angle)
+				flowX = cosine
+				flowY = sine
 			}
 
 			fine := WorldPeriodicNoise(
@@ -435,15 +450,20 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 				riverSeed+3377,
 			)
 			meander := (fine-0.5)*1.6+(broad-0.5)*0.8
-			cosA := math.cos(meander)
-			sinA := math.sin(meander)
-			desiredX := flowX*cosA-flowY*sinA
-			desiredY := flowX*sinA+flowY*cosA
+			meanderTurns := d32.FromRaw(i32(meander*f32(d32.SCALE)*TURNS_PER_RADIAN))
+			sineA, cosineA := d32.SinCos(meanderTurns)
+			desiredX := d32.Sub(d32.Mul(flowX, cosineA), d32.Mul(flowY, sineA))
+			desiredY := d32.Add(d32.Mul(flowX, sineA), d32.Mul(flowY, cosineA))
+			// Direction scoring stays f32; convert the deterministic vectors once.
+			desiredFX := RawToF32(i64(d32.Raw(desiredX)))
+			desiredFY := RawToF32(i64(d32.Raw(desiredY)))
+			headingFX := RawToF32(i64(d32.Raw(headingX)))
+			headingFY := RawToF32(i64(d32.Raw(headingY)))
 
 			best := -1
 			bestScore: f32 = -1e9
-			bestDirX: f32 = 0
-			bestDirY: f32 = 0
+			bestDirX := d32.ZERO
+			bestDirY := d32.ZERO
 			currentDistance := distance[current]
 			for offset in offsets {
 				nx := WorldWrapCoordinate(x+offset[0], worldWidth)
@@ -454,9 +474,11 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 				if nextDistance < 0 || nextDistance > currentDistance do continue
 				if nextDistance == currentDistance && lateralBudget <= 0 do continue
 
-				dirLength := math.sqrt(f32(offset[0]*offset[0]+offset[1]*offset[1]))
-				dirX := f32(offset[0])/dirLength
-				dirY := f32(offset[1])/dirLength
+				dirLength := d32.Sqrt(d32.FromInt(i32(offset[0]*offset[0]+offset[1]*offset[1])))
+				dirX := d32.Div(d32.FromInt(i32(offset[0])), dirLength)
+				dirY := d32.Div(d32.FromInt(i32(offset[1])), dirLength)
+				dirFX := RawToF32(i64(d32.Raw(dirX)))
+				dirFY := RawToF32(i64(d32.Raw(dirY)))
 				score: f32 = 0
 				if nextDistance < currentDistance {
 					score += 0.75
@@ -464,8 +486,8 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 					// Lateral steps are only for meandering; they do not progress.
 					score -= 0.45
 				}
-				score += (dirX*desiredX+dirY*desiredY)*1.2
-				score += (dirX*headingX+dirY*headingY)*0.5
+				score += (dirFX*desiredFX+dirFY*desiredFY)*1.2
+				score += (dirFX*headingFX+dirFY*headingFY)*0.5
 				switch w.ground[nx][ny].type {
 				case .Hill:
 					score -= 0.35
@@ -511,9 +533,10 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 		// centre line is complete so they cannot cut the trace short.
 		if pathLength > 2 {
 			for pathIndex in 0..<pathLength {
-				progress := f32(pathIndex)/f32(max(pathLength-1, 1))
-				if progress < 0.45 do continue
-				if WorldNoiseHash(pathIndex, river, riverSeed+3499) >= progress*0.45 {
+				length := u64(max(pathLength-1, 1))
+				progress := u64(pathIndex)
+				if progress*100 < length*45 do continue
+				if u64(WorldNoiseHashInt(pathIndex, river, riverSeed+3499))*length >= progress*450_000 {
 					continue
 				}
 				index := queue[pathIndex]
@@ -522,7 +545,7 @@ WorldGenerateRivers :: proc(w: ^World, settings: WorldGenerationSettings) {
 				next := queue[min(pathIndex+1, pathLength-1)]
 				dirX := f32(next/worldHeight-previous/worldHeight)
 				dirY := f32(next%worldHeight-previous%worldHeight)
-				side := int(WorldNoiseHash(x, y, riverSeed+3491)*2)*2-1
+				side := int(WorldNoiseHashInt(x, y, riverSeed+3491)*2/1_000_000)*2-1
 				sideX := 0
 				sideY := 0
 				if abs(dirX) > abs(dirY) {
@@ -632,12 +655,24 @@ WorldPeriodicNoise :: proc(x, y, worldWidth, worldHeight, cellsX, cellsY: int, s
 }
 
 
-WorldNoiseHash :: proc(x, y: int, seed: u64) -> f32 {
+WorldNoiseHashInt :: proc(x, y: int, seed: u64) -> u32 {
 	value := u64(x)*0x9E3779B97F4A7C15 ~ u64(y)*0xBF58476D1CE4E5B9 ~ seed
 	value = (value ~ (value >> 30)) * 0xBF58476D1CE4E5B9
 	value = (value ~ (value >> 27)) * 0x94D049BB133111EB
 	value = value ~ (value >> 31)
-	return f32(value % 1_000_000) / 1_000_000.0
+	return u32(value % 1_000_000)
+}
+
+
+// Scale a million-point hash into [0, count) without overflowing for positive counts.
+WorldNoiseIndex :: proc(x, y: int, seed: u64, count: int) -> int {
+	value := u64(WorldNoiseHashInt(x, y, seed))
+	bound := u64(count)
+	return int(value*(bound/1_000_000) + value*(bound%1_000_000)/1_000_000)
+}
+
+WorldNoiseHash :: proc(x, y: int, seed: u64) -> f32 {
+	return f32(WorldNoiseHashInt(x, y, seed)) / 1_000_000.0
 }
 
 WorldLerp :: proc(a, b, t: f32) -> f32 {
@@ -680,14 +715,19 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdomCount: int, seed: u64) -> bo
 	// snaps to the nearest valid shore and the layout whose resulting pair
 	// distances are the most uniform wins. That keeps starting kingdoms about
 	// the same distance apart instead of collapsing onto one coastline.
-	centerX := f32(worldWidth)*0.5
-	centerY := f32(worldHeight)*0.5
-	baseRadius := f32(min(worldWidth, worldHeight))*0.33
-	rotation := WorldNoiseHash(0, 0, seed+0xCA917A1)*6.2831853
+	worldWidthRaw := i64(worldWidth)*d32.SCALE
+	worldHeightRaw := i64(worldHeight)*d32.SCALE
+	centerX := d32.FromRatio(i32(worldWidth), 2)
+	centerY := d32.FromRatio(i32(worldHeight), 2)
+	baseRadius := d32.FromRatio(i32(min(worldWidth, worldHeight))*33, 100)
+	rotation := d32.FromRatio(i32(WorldNoiseHashInt(0, 0, seed+0xCA917A1)), 1_000_000)
 	minimumSpacing := f32(TOWN_FOUNDING_MIN_DISTANCE)
-	minimumSpacingSquared := minimumSpacing*minimumSpacing
-	halfWidth := f32(buildingWidth)*0.5
-	halfHeight := f32(buildingHeight)*0.5
+	minimumSpacingRaw := i64(TOWN_FOUNDING_MIN_DISTANCE)*d32.SCALE
+	minimumSpacingSquared := u64(minimumSpacingRaw*minimumSpacingRaw)
+	halfWidth := d32.FromRatio(i32(buildingWidth), 2)
+	halfHeight := d32.FromRatio(i32(buildingHeight), 2)
+	buildingSpacingRaw := i64(buildingWidth)*d32.SCALE
+	buildingSpacingSquared := u64(buildingSpacingRaw*buildingSpacingRaw)
 
 	// Capitals need a landmass large enough to support more than a single town;
 	// otherwise a kingdom is stranded on a tiny island and can never expand or
@@ -820,36 +860,57 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdomCount: int, seed: u64) -> bo
 	bestLayoutScore := f32(1e30)
 
 	for variant in 0..<LAYOUT_COUNT {
-		radiusScale := 0.82+0.36*f32(variant%LAYOUT_RADII)/f32(LAYOUT_RADII-1)
-		phase := rotation+6.2831853*f32(variant/LAYOUT_RADII) /
-			f32(kingdomCount*LAYOUT_ROTATIONS)
-		radius := baseRadius*radiusScale
+		radiusScale := d32.FromRatio(
+			i32(8200+3600*(variant%LAYOUT_RADII)/(LAYOUT_RADII-1)),
+			10_000,
+		)
+		phase := d32.Add(
+			rotation,
+			d32.FromRatio(i32(variant/LAYOUT_RADII), i32(kingdomCount*LAYOUT_ROTATIONS)),
+		)
+		radius := d32.Mul(baseRadius, radiusScale)
+		radiusRaw := i64(d32.Raw(radius))
+		radiusSquared := u64(radiusRaw*radiusRaw)
 
 		variantOk := true
 		for kingdomIndex in 0..<kingdomCount {
-			angle := phase+6.2831853*f32(kingdomIndex)/f32(kingdomCount)
-			targetX := centerX+math.cos(angle)*radius
-			targetY := centerY+math.sin(angle)*radius
+			angle := d32.Add(phase, d32.FromRatio(i32(kingdomIndex), i32(kingdomCount)))
+			sine, cosine := d32.SinCos(angle)
+			targetX := d32.Add(centerX, d32.Mul(cosine, radius))
+			targetY := d32.Add(centerY, d32.Mul(sine, radius))
 
 			bestSite := -1
 			bestScore := f32(1e30)
 			bestTieBreak := f32(-1.0)
 			for site in 0..<len(siteX) {
-				candidateX := f32(siteX[site])+halfWidth
-				candidateY := f32(siteY[site])+halfHeight
-				deltaX := WorldShortestWrappedDelta(candidateX-targetX, f32(worldWidth))
-				deltaY := WorldShortestWrappedDelta(candidateY-targetY, f32(worldHeight))
-				score := (deltaX*deltaX+deltaY*deltaY)/(radius*radius)
+				candidateX := d32.Add(d32.FromInt(i32(siteX[site])), halfWidth)
+				candidateY := d32.Add(d32.FromInt(i32(siteY[site])), halfHeight)
+				distanceSquared, valid := d32.WrappedDistanceSquared(
+					candidateX,
+					candidateY,
+					targetX,
+					targetY,
+					worldWidthRaw,
+					worldHeightRaw,
+				)
+				assert(valid)
+				score := f32(distanceSquared)/f32(radiusSquared)
 
 				for previous in 0..<kingdomIndex {
-					previousX := f32(layoutX[variant][previous])+halfWidth
-					previousY := f32(layoutY[variant][previous])+halfHeight
-					spacingX := WorldShortestWrappedDelta(candidateX-previousX, f32(worldWidth))
-					spacingY := WorldShortestWrappedDelta(candidateY-previousY, f32(worldHeight))
-					spacingSquared := spacingX*spacingX+spacingY*spacingY
+					previousX := d32.Add(d32.FromInt(i32(layoutX[variant][previous])), halfWidth)
+					previousY := d32.Add(d32.FromInt(i32(layoutY[variant][previous])), halfHeight)
+					spacingSquared, spacingValid := d32.WrappedDistanceSquared(
+						candidateX,
+						candidateY,
+						previousX,
+						previousY,
+						worldWidthRaw,
+						worldHeightRaw,
+					)
+					assert(spacingValid)
 					if spacingSquared < minimumSpacingSquared {
-						score += 1000*(1-spacingSquared/minimumSpacingSquared)
-						if spacingSquared < f32(buildingWidth*buildingWidth) do score += 1_000_000
+						score += 1000*(1-f32(spacingSquared)/f32(minimumSpacingSquared))
+						if spacingSquared < buildingSpacingSquared do score += 1_000_000
 					}
 				}
 
@@ -879,23 +940,25 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdomCount: int, seed: u64) -> bo
 		// ended up closer than the minimum founding distance.
 		layoutScore := f32(0)
 		if kingdomCount > 1 {
-			minimumPair := f32(1e30)
-			maximumPair := f32(0)
+			minimumPairSquared := ~u64(0)
+			maximumPairSquared := u64(0)
 			for a in 0..<kingdomCount {
 				for b in a+1..<kingdomCount {
-					deltaX := WorldShortestWrappedDelta(
-						f32(layoutX[variant][a])-f32(layoutX[variant][b]),
-						f32(worldWidth),
+					deltaSquared, valid := d32.WrappedDistanceSquared(
+						d32.Add(d32.FromInt(i32(layoutX[variant][a])), halfWidth),
+						d32.Add(d32.FromInt(i32(layoutY[variant][a])), halfHeight),
+						d32.Add(d32.FromInt(i32(layoutX[variant][b])), halfWidth),
+						d32.Add(d32.FromInt(i32(layoutY[variant][b])), halfHeight),
+						worldWidthRaw,
+						worldHeightRaw,
 					)
-					deltaY := WorldShortestWrappedDelta(
-						f32(layoutY[variant][a])-f32(layoutY[variant][b]),
-						f32(worldHeight),
-					)
-					distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-					minimumPair = min(minimumPair, distance)
-					maximumPair = max(maximumPair, distance)
+					assert(valid)
+					minimumPairSquared = min(minimumPairSquared, deltaSquared)
+					maximumPairSquared = max(maximumPairSquared, deltaSquared)
 				}
 			}
+			minimumPair := RawToF32(d32.SqrtRaw(minimumPairSquared))
+			maximumPair := RawToF32(d32.SqrtRaw(maximumPairSquared))
 			layoutScore = maximumPair-minimumPair
 			if minimumPair < minimumSpacing {
 				layoutScore += (minimumSpacing-minimumPair)*8
@@ -915,80 +978,91 @@ WorldSpawnInitialKingdoms :: proc(w: ^World, kingdomCount: int, seed: u64) -> bo
 	// while directly minimising the spread between the shortest and longest
 	// pair distance, anchored to its ring position so the capitals stay evenly
 	// distributed around the map.
-	bestPhase := rotation+6.2831853*f32(bestLayout/LAYOUT_RADII) /
-		f32(kingdomCount*LAYOUT_ROTATIONS)
-	bestRadiusScale := 0.82+0.36*f32(bestLayout%LAYOUT_RADII)/f32(LAYOUT_RADII-1)
-	bestRadius := baseRadius*bestRadiusScale
+	bestPhase := d32.Add(
+		rotation,
+		d32.FromRatio(i32(bestLayout/LAYOUT_RADII), i32(kingdomCount*LAYOUT_ROTATIONS)),
+	)
+	bestRadiusScale := d32.FromRatio(
+		i32(8200+3600*(bestLayout%LAYOUT_RADII)/(LAYOUT_RADII-1)),
+		10_000,
+	)
+	bestRadius := d32.Mul(baseRadius, bestRadiusScale)
+	bestRadiusRaw := i64(d32.Raw(bestRadius))
+	bestRadiusSquared := u64(bestRadiusRaw*bestRadiusRaw)
 
 	if kingdomCount > 2 {
 		for _ in 0..<3 {
 			for kingdomIndex in 0..<kingdomCount {
-				otherMin := f32(1e30)
-				otherMax := f32(0)
+				otherMinSquared := ~u64(0)
+				otherMaxSquared := u64(0)
 				for a in 0..<kingdomCount {
 					if a == kingdomIndex do continue
 					for b in a+1..<kingdomCount {
 						if b == kingdomIndex do continue
-						deltaX := WorldShortestWrappedDelta(
-							f32(layoutX[bestLayout][a])-f32(layoutX[bestLayout][b]),
-							f32(worldWidth),
+						distanceSquared, valid := d32.WrappedDistanceSquared(
+							d32.Add(d32.FromInt(i32(layoutX[bestLayout][a])), halfWidth),
+							d32.Add(d32.FromInt(i32(layoutY[bestLayout][a])), halfHeight),
+							d32.Add(d32.FromInt(i32(layoutX[bestLayout][b])), halfWidth),
+							d32.Add(d32.FromInt(i32(layoutY[bestLayout][b])), halfHeight),
+							worldWidthRaw,
+							worldHeightRaw,
 						)
-						deltaY := WorldShortestWrappedDelta(
-							f32(layoutY[bestLayout][a])-f32(layoutY[bestLayout][b]),
-							f32(worldHeight),
-						)
-						distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-						otherMin = min(otherMin, distance)
-						otherMax = max(otherMax, distance)
+						assert(valid)
+						otherMinSquared = min(otherMinSquared, distanceSquared)
+						otherMaxSquared = max(otherMaxSquared, distanceSquared)
 					}
 				}
+				otherMin := RawToF32(d32.SqrtRaw(otherMinSquared))
+				otherMax := RawToF32(d32.SqrtRaw(otherMaxSquared))
 
-				angle := bestPhase+6.2831853*f32(kingdomIndex)/f32(kingdomCount)
-				anchorX := centerX+math.cos(angle)*bestRadius
-				anchorY := centerY+math.sin(angle)*bestRadius
+				angle := d32.Add(bestPhase, d32.FromRatio(i32(kingdomIndex), i32(kingdomCount)))
+				sine, cosine := d32.SinCos(angle)
+				anchorX := d32.Add(centerX, d32.Mul(cosine, bestRadius))
+				anchorY := d32.Add(centerY, d32.Mul(sine, bestRadius))
 
 				bestSite := -1
 				bestScore := f32(1e30)
 				bestTieBreak := f32(-1.0)
 				for site in 0..<len(siteX) {
-					candidateX := f32(siteX[site])+halfWidth
-					candidateY := f32(siteY[site])+halfHeight
+					candidateX := d32.Add(d32.FromInt(i32(siteX[site])), halfWidth)
+					candidateY := d32.Add(d32.FromInt(i32(siteY[site])), halfHeight)
 
 					tooClose := false
-					nearest := f32(1e30)
-					farthest := f32(0)
+					nearestSquared := ~u64(0)
+					farthestSquared := u64(0)
 					for other in 0..<kingdomCount {
 						if other == kingdomIndex do continue
-						deltaX := WorldShortestWrappedDelta(
-							candidateX-(f32(layoutX[bestLayout][other])+halfWidth),
-							f32(worldWidth),
+						distanceSquared, valid := d32.WrappedDistanceSquared(
+							candidateX,
+							candidateY,
+							d32.Add(d32.FromInt(i32(layoutX[bestLayout][other])), halfWidth),
+							d32.Add(d32.FromInt(i32(layoutY[bestLayout][other])), halfHeight),
+							worldWidthRaw,
+							worldHeightRaw,
 						)
-						deltaY := WorldShortestWrappedDelta(
-							candidateY-(f32(layoutY[bestLayout][other])+halfHeight),
-							f32(worldHeight),
-						)
-						distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-						if distance < f32(buildingWidth) {
+						assert(valid)
+						if distanceSquared < buildingSpacingSquared {
 							tooClose = true
 							break
 						}
-						nearest = min(nearest, distance)
-						farthest = max(farthest, distance)
+						nearestSquared = min(nearestSquared, distanceSquared)
+						farthestSquared = max(farthestSquared, distanceSquared)
 					}
 					if tooClose do continue
 
+					nearest := RawToF32(d32.SqrtRaw(nearestSquared))
+					farthest := RawToF32(d32.SqrtRaw(farthestSquared))
 					spread := max(farthest, otherMax)-min(nearest, otherMin)
-					deltaTargetX := WorldShortestWrappedDelta(
-						candidateX-anchorX,
-						f32(worldWidth),
+					anchorDistanceSquared, anchorValid := d32.WrappedDistanceSquared(
+						candidateX,
+						candidateY,
+						anchorX,
+						anchorY,
+						worldWidthRaw,
+						worldHeightRaw,
 					)
-					deltaTargetY := WorldShortestWrappedDelta(
-						candidateY-anchorY,
-						f32(worldHeight),
-					)
-					anchorCost :=
-						(deltaTargetX*deltaTargetX+deltaTargetY*deltaTargetY) /
-						(bestRadius*bestRadius)*200
+					assert(anchorValid)
+					anchorCost := f32(anchorDistanceSquared)/f32(bestRadiusSquared)*200
 					score := spread+anchorCost
 
 					tieBreak := WorldNoiseHash(
@@ -1040,9 +1114,16 @@ WorldSpawnIndependentTowns :: proc(w: ^World, siteX, siteY: []int, kingdomCount:
 	w.kingdomUsed[NEUTRAL_KINGDOM] = true
 
 	hallWidth, hallHeight := BuildingTileSize(TownHall{})
-	minDistanceSquared := f32(INDEPENDENT_TOWN_MIN_DISTANCE*INDEPENDENT_TOWN_MIN_DISTANCE)
-	maxDistanceSquared := f32(INDEPENDENT_TOWN_MAX_DISTANCE*INDEPENDENT_TOWN_MAX_DISTANCE)
-	separationSquared := f32(INDEPENDENT_TOWN_SEPARATION*INDEPENDENT_TOWN_SEPARATION)
+	halfWidth := d32.FromRatio(i32(hallWidth), 2)
+	halfHeight := d32.FromRatio(i32(hallHeight), 2)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	minDistanceRaw := i64(INDEPENDENT_TOWN_MIN_DISTANCE)*d32.SCALE
+	maxDistanceRaw := i64(INDEPENDENT_TOWN_MAX_DISTANCE)*d32.SCALE
+	separationRaw := i64(INDEPENDENT_TOWN_SEPARATION)*d32.SCALE
+	minDistanceSquared := u64(minDistanceRaw*minDistanceRaw)
+	maxDistanceSquared := u64(maxDistanceRaw*maxDistanceRaw)
+	separationSquared := u64(separationRaw*separationRaw)
 
 	// Shuffle the candidate sites deterministically so placement is random but
 	// reproducible from the world seed.
@@ -1050,8 +1131,7 @@ WorldSpawnIndependentTowns :: proc(w: ^World, siteX, siteY: []int, kingdomCount:
 	defer delete(order)
 	for i in 0..<len(order) do order[i] = i
 	for i := len(order)-1; i > 0; i -= 1 {
-		j := int(WorldNoiseHash(i, len(order), w.seed+0x51F)*f32(i+1))
-		j = clamp(j, 0, i)
+		j := WorldNoiseIndex(i, len(order), w.seed+0x51F, i+1)
 		order[i], order[j] = order[j], order[i]
 	}
 
@@ -1068,19 +1148,25 @@ WorldSpawnIndependentTowns :: proc(w: ^World, siteX, siteY: []int, kingdomCount:
 			x, y := siteX[site], siteY[site]
 			if !WorldBuildingValid(w, x, y, TownHall{}) do continue
 
-			centerX := f32(x)+f32(hallWidth)*0.5
-			centerY := f32(y)+f32(hallHeight)*0.5
+			centerX := d32.Add(d32.FromInt(i32(x)), halfWidth)
+			centerY := d32.Add(d32.FromInt(i32(y)), halfHeight)
 			nearestKingdom := -1
-			nearestDistanceSquared: f32 = 0
+			nearestDistanceSquared: u64 = 0
 			for kingdom in 0..<kingdomCount {
 				if !w.kingdomUsed[kingdom] do continue
 				capital := w.kingdoms[kingdom].capitalSlot
 				if capital < 0 || !w.kingdoms[kingdom].townUsed[capital] do continue
-				capitalX := f32(w.kingdoms[kingdom].towns[capital].x)+f32(hallWidth)*0.5
-				capitalY := f32(w.kingdoms[kingdom].towns[capital].y)+f32(hallHeight)*0.5
-				deltaX := WorldShortestWrappedDelta(centerX-capitalX, f32(w.maxX))
-				deltaY := WorldShortestWrappedDelta(centerY-capitalY, f32(w.maxY))
-				distanceSquared := deltaX*deltaX+deltaY*deltaY
+				capitalX := d32.Add(d32.FromInt(i32(w.kingdoms[kingdom].towns[capital].x)), halfWidth)
+				capitalY := d32.Add(d32.FromInt(i32(w.kingdoms[kingdom].towns[capital].y)), halfHeight)
+				distanceSquared, valid := d32.WrappedDistanceSquared(
+					centerX,
+					centerY,
+					capitalX,
+					capitalY,
+					worldWidthRaw,
+					worldHeightRaw,
+				)
+				if !valid do continue
 				if nearestKingdom < 0 || distanceSquared < nearestDistanceSquared {
 					nearestKingdom = kingdom
 					nearestDistanceSquared = distanceSquared
@@ -1100,11 +1186,18 @@ WorldSpawnIndependentTowns :: proc(w: ^World, siteX, siteY: []int, kingdomCount:
 				if !w.kingdomUsed[otherKingdom] do continue
 				for otherTown in 0..<TOWN_CAPACITY {
 					if !w.kingdoms[otherKingdom].townUsed[otherTown] do continue
-					otherX := f32(w.kingdoms[otherKingdom].towns[otherTown].x)+f32(hallWidth)*0.5
-					otherY := f32(w.kingdoms[otherKingdom].towns[otherTown].y)+f32(hallHeight)*0.5
-					spacingX := WorldShortestWrappedDelta(centerX-otherX, f32(w.maxX))
-					spacingY := WorldShortestWrappedDelta(centerY-otherY, f32(w.maxY))
-					if spacingX*spacingX+spacingY*spacingY < separationSquared {
+					otherX := d32.Add(d32.FromInt(i32(w.kingdoms[otherKingdom].towns[otherTown].x)), halfWidth)
+					otherY := d32.Add(d32.FromInt(i32(w.kingdoms[otherKingdom].towns[otherTown].y)), halfHeight)
+					spacingSquared, valid := d32.WrappedDistanceSquared(
+						centerX,
+						centerY,
+						otherX,
+						otherY,
+						worldWidthRaw,
+						worldHeightRaw,
+					)
+					if !valid do continue
+					if spacingSquared < separationSquared {
 						tooClose = true
 						break
 					}

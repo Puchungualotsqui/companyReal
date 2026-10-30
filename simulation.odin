@@ -5,6 +5,7 @@ import "core:fmt"
 import "core:math"
 import slices "core:slice"
 import rl "vendor:raylib"
+import "d32"
 
 TOWN_SIMULATION_STEP :: 0.25
 // A long render/load frame must not trigger a burst of catch-up ticks.
@@ -53,27 +54,27 @@ WeatherKind :: enum u8 {
 WeatherState :: struct {
 	kind:           WeatherKind,
 	nextKind:       WeatherKind,
-	value:          f32,
-	duration:       f32,
-	remaining:      f32,
-	windX, windY:   f32,
+	value:          d32.Value,
+	duration:       d32.Value,
+	remaining:      d32.Value,
+	windX, windY:   d32.Value,
 	season:         Season,
 	sequence:       u32,
-	lightningTimer: f32,
-	lightningFlash: f32,
+	lightningTimer: d32.Value,
+	lightningFlash: f32, // Presentation only
 }
 
 WeatherEffects :: struct {
-	food:            f32,
-	water:           f32,
-	growth:          f32,
-	vision:          f32,
-	move:            f32,
-	fireSpread:      f32,
-	fireIgnition:    f32,
-	fireExtinguish:  f32,
-	harbor:          f32,
-	exposure:        f32,
+	food:            d32.Value,
+	water:           d32.Value,
+	growth:          d32.Value,
+	vision:          d32.Value,
+	move:            d32.Value,
+	fireSpread:      d32.Value,
+	fireIgnition:    d32.Value,
+	fireExtinguish:  d32.Value,
+	harbor:          d32.Value,
+	exposure:        d32.Value,
 }
 
 WorldSeason :: proc(w: ^World) -> Season {
@@ -82,191 +83,197 @@ WorldSeason :: proc(w: ^World) -> Season {
 
 WorldWeatherEffects :: proc(w: ^World) -> WeatherEffects {
 	full := WeatherEffects {
-		food = 1,
-		water = 1,
-		growth = 1,
-		vision = 1,
-		move = 1,
-		fireSpread = 1,
-		fireIgnition = 1,
-		fireExtinguish = 1,
-		harbor = 1,
+		food = d32.ONE,
+		water = d32.ONE,
+		growth = d32.ONE,
+		vision = d32.ONE,
+		move = d32.ONE,
+		fireSpread = d32.ONE,
+		fireIgnition = d32.ONE,
+		fireExtinguish = d32.ONE,
+		harbor = d32.ONE,
 	}
 	switch w.weather.kind {
 	case .Clear:
 	case .Rain:
 		full = WeatherEffects {
-			food = 1.15,
-			water = 1.30,
-			growth = 1.10,
-			vision = 0.85,
-			move = 0.92,
-			fireSpread = 0.25,
-			fireIgnition = 0.45,
-			fireExtinguish = 2.0,
-			harbor = 0.9,
+			food = d32.FromRatio(115, 100),
+			water = d32.FromRatio(130, 100),
+			growth = d32.FromRatio(110, 100),
+			vision = d32.FromRatio(85, 100),
+			move = d32.FromRatio(92, 100),
+			fireSpread = d32.FromRatio(25, 100),
+			fireIgnition = d32.FromRatio(45, 100),
+			fireExtinguish = d32.FromInt(2),
+			harbor = d32.FromRatio(90, 100),
 		}
 	case .Storm:
 		full = WeatherEffects {
-			food = 1.05,
-			water = 1.25,
-			growth = 0.95,
-			vision = 0.65,
-			move = 0.80,
-			fireSpread = 0.10,
-			fireIgnition = 0.25,
-			fireExtinguish = 2.5,
-			harbor = 0.5,
+			food = d32.FromRatio(105, 100),
+			water = d32.FromRatio(125, 100),
+			growth = d32.FromRatio(95, 100),
+			vision = d32.FromRatio(65, 100),
+			move = d32.FromRatio(80, 100),
+			fireSpread = d32.FromRatio(10, 100),
+			fireIgnition = d32.FromRatio(25, 100),
+			fireExtinguish = d32.FromRatio(250, 100),
+			harbor = d32.FromRatio(50, 100),
 		}
 	case .Fog:
 		full = WeatherEffects {
-			food = 0.95,
-			growth = 0.95,
-			vision = 0.50,
-			move = 0.90,
-			fireSpread = 0.70,
-			fireIgnition = 0.90,
-			fireExtinguish = 1.2,
-			harbor = 0.9,
+			food = d32.FromRatio(95, 100),
+			growth = d32.FromRatio(95, 100),
+			vision = d32.FromRatio(50, 100),
+			move = d32.FromRatio(90, 100),
+			fireSpread = d32.FromRatio(70, 100),
+			fireIgnition = d32.FromRatio(90, 100),
+			fireExtinguish = d32.FromRatio(120, 100),
+			harbor = d32.FromRatio(90, 100),
 		}
 	case .Snow:
 		full = WeatherEffects {
-			food = 0.82,
-			water = 1.10,
-			growth = 0.70,
-			vision = 0.85,
-			move = 0.78,
-			fireSpread = 0.15,
-			fireIgnition = 0.25,
-			fireExtinguish = 2.0,
-			harbor = 0.8,
-			exposure = 0.0006,
+			food = d32.FromRatio(82, 100),
+			water = d32.FromRatio(110, 100),
+			growth = d32.FromRatio(70, 100),
+			vision = d32.FromRatio(85, 100),
+			move = d32.FromRatio(78, 100),
+			fireSpread = d32.FromRatio(15, 100),
+			fireIgnition = d32.FromRatio(25, 100),
+			fireExtinguish = d32.FromInt(2),
+			harbor = d32.FromRatio(80, 100),
+			exposure = d32.FromRatio(6, 10000),
 		}
 	case .Blizzard:
 		full = WeatherEffects {
-			food = 0.65,
-			water = 0.90,
-			growth = 0.00,
-			vision = 0.45,
-			move = 0.60,
-			fireSpread = 0.00,
-			fireIgnition = 0.00,
-			fireExtinguish = 4.0,
-			harbor = 0.3,
-			exposure = 0.0018,
+			food = d32.FromRatio(65, 100),
+			water = d32.FromRatio(90, 100),
+			growth = d32.ZERO,
+			vision = d32.FromRatio(45, 100),
+			move = d32.FromRatio(60, 100),
+			fireSpread = d32.ZERO,
+			fireIgnition = d32.ZERO,
+			fireExtinguish = d32.FromInt(4),
+			harbor = d32.FromRatio(30, 100),
+			exposure = d32.FromRatio(18, 10000),
 		}
 	case .Drought:
 		full = WeatherEffects {
-			food = 0.75,
-			water = 0.45,
-			growth = 0.72,
-			move = 0.95,
-			fireSpread = 1.70,
-			fireIgnition = 1.25,
-			fireExtinguish = 0.7,
-			harbor = 0.9,
-			exposure = 0.0004,
+			food = d32.FromRatio(75, 100),
+			water = d32.FromRatio(45, 100),
+			growth = d32.FromRatio(72, 100),
+			move = d32.FromRatio(95, 100),
+			fireSpread = d32.FromRatio(170, 100),
+			fireIgnition = d32.FromRatio(125, 100),
+			fireExtinguish = d32.FromRatio(70, 100),
+			harbor = d32.FromRatio(90, 100),
+			exposure = d32.FromRatio(4, 10000),
 		}
 	case .Heatwave:
 		full = WeatherEffects {
-			food = 0.86,
-			water = 0.72,
-			growth = 0.85,
-			vision = 0.95,
-			move = 0.90,
-			fireSpread = 1.40,
-			fireIgnition = 1.20,
-			fireExtinguish = 0.8,
-			harbor = 0.9,
-			exposure = 0.0012,
+			food = d32.FromRatio(86, 100),
+			water = d32.FromRatio(72, 100),
+			growth = d32.FromRatio(85, 100),
+			vision = d32.FromRatio(95, 100),
+			move = d32.FromRatio(90, 100),
+			fireSpread = d32.FromRatio(140, 100),
+			fireIgnition = d32.FromRatio(120, 100),
+			fireExtinguish = d32.FromRatio(80, 100),
+			harbor = d32.FromRatio(90, 100),
+			exposure = d32.FromRatio(12, 10000),
 		}
 	case .Sandstorm:
 		full = WeatherEffects {
-			food = 0.80,
-			water = 0.90,
-			growth = 0.80,
-			vision = 0.45,
-			move = 0.70,
-			fireSpread = 0.80,
-			fireIgnition = 0.70,
-			fireExtinguish = 1.0,
-			harbor = 0.5,
-			exposure = 0.0020,
+			food = d32.FromRatio(80, 100),
+			water = d32.FromRatio(90, 100),
+			growth = d32.FromRatio(80, 100),
+			vision = d32.FromRatio(45, 100),
+			move = d32.FromRatio(70, 100),
+			fireSpread = d32.FromRatio(80, 100),
+			fireIgnition = d32.FromRatio(70, 100),
+			fireExtinguish = d32.ONE,
+			harbor = d32.FromRatio(50, 100),
+			exposure = d32.FromRatio(20, 10000),
 		}
 	case .Ashfall:
 		full = WeatherEffects {
-			food = 0.80,
-			water = 0.90,
-			growth = 0.75,
-			vision = 0.60,
-			move = 0.90,
-			fireSpread = 0.50,
-			fireIgnition = 0.60,
-			fireExtinguish = 1.2,
-			harbor = 0.8,
-			exposure = 0.0008,
+			food = d32.FromRatio(80, 100),
+			water = d32.FromRatio(90, 100),
+			growth = d32.FromRatio(75, 100),
+			vision = d32.FromRatio(60, 100),
+			move = d32.FromRatio(90, 100),
+			fireSpread = d32.FromRatio(50, 100),
+			fireIgnition = d32.FromRatio(60, 100),
+			fireExtinguish = d32.FromRatio(120, 100),
+			harbor = d32.FromRatio(80, 100),
+			exposure = d32.FromRatio(8, 10000),
 		}
 	}
 
-	value := clamp(w.weather.value, 0, 1)
+	value := clamp(w.weather.value, d32.ZERO, d32.ONE)
 	return WeatherEffects {
-		food = 1+(full.food-1)*value,
-		water = 1+(full.water-1)*value,
-		growth = 1+(full.growth-1)*value,
-		vision = 1+(full.vision-1)*value,
-		move = 1+(full.move-1)*value,
-		fireSpread = 1+(full.fireSpread-1)*value,
-		fireIgnition = 1+(full.fireIgnition-1)*value,
-		fireExtinguish = 1+(full.fireExtinguish-1)*value,
-		harbor = 1+(full.harbor-1)*value,
-		exposure = full.exposure*value,
+		food = d32.Add(d32.ONE, d32.Mul(d32.Sub(full.food, d32.ONE), value)),
+		water = d32.Add(d32.ONE, d32.Mul(d32.Sub(full.water, d32.ONE), value)),
+		growth = d32.Add(d32.ONE, d32.Mul(d32.Sub(full.growth, d32.ONE), value)),
+		vision = d32.Add(d32.ONE, d32.Mul(d32.Sub(full.vision, d32.ONE), value)),
+		move = d32.Add(d32.ONE, d32.Mul(d32.Sub(full.move, d32.ONE), value)),
+		fireSpread = d32.Add(d32.ONE, d32.Mul(d32.Sub(full.fireSpread, d32.ONE), value)),
+		fireIgnition = d32.Add(d32.ONE, d32.Mul(d32.Sub(full.fireIgnition, d32.ONE), value)),
+		fireExtinguish = d32.Add(d32.ONE, d32.Mul(d32.Sub(full.fireExtinguish, d32.ONE), value)),
+		harbor = d32.Add(d32.ONE, d32.Mul(d32.Sub(full.harbor, d32.ONE), value)),
+		exposure = d32.Mul(full.exposure, value),
 	}
 }
 
-WorldWeatherVisionFactor :: proc(w: ^World) -> f32 {
+WorldWeatherVisionFactor :: proc(w: ^World) -> d32.Value {
 	return WorldWeatherEffects(w).vision
 }
 
-WorldWeatherMoveFactor :: proc(w: ^World) -> f32 {
+WorldWeatherMoveFactor :: proc(w: ^World) -> d32.Value {
 	return WorldWeatherEffects(w).move
 }
 
 WorldWeatherPick :: proc(w: ^World, season: Season, current: WeatherKind) -> WeatherKind {
-	weights: [WeatherKind]f32
+	weights: [WeatherKind]d32.Value
 	switch season {
 	case .Spring:
-		weights[.Clear] = 30
-		weights[.Rain] = 40
-		weights[.Storm] = 10
-		weights[.Fog] = 20
+		weights[.Clear] = d32.FromInt(30)
+		weights[.Rain] = d32.FromInt(40)
+		weights[.Storm] = d32.FromInt(10)
+		weights[.Fog] = d32.FromInt(20)
 	case .Summer:
-		weights[.Clear] = 26
-		weights[.Rain] = 14
-		weights[.Storm] = 16
-		weights[.Fog] = 6
-		weights[.Heatwave] = 20
-		weights[.Drought] = 18
+		weights[.Clear] = d32.FromInt(26)
+		weights[.Rain] = d32.FromInt(14)
+		weights[.Storm] = d32.FromInt(16)
+		weights[.Fog] = d32.FromInt(6)
+		weights[.Heatwave] = d32.FromInt(20)
+		weights[.Drought] = d32.FromInt(18)
 	case .Autumn:
-		weights[.Clear] = 24
-		weights[.Rain] = 32
-		weights[.Storm] = 20
-		weights[.Fog] = 24
+		weights[.Clear] = d32.FromInt(24)
+		weights[.Rain] = d32.FromInt(32)
+		weights[.Storm] = d32.FromInt(20)
+		weights[.Fog] = d32.FromInt(24)
 	case .Winter:
-		weights[.Clear] = 18
-		weights[.Rain] = 6
-		weights[.Snow] = 42
-		weights[.Blizzard] = 14
-		weights[.Fog] = 20
+		weights[.Clear] = d32.FromInt(18)
+		weights[.Rain] = d32.FromInt(6)
+		weights[.Snow] = d32.FromInt(42)
+		weights[.Blizzard] = d32.FromInt(14)
+		weights[.Fog] = d32.FromInt(20)
 	}
-	if current != .Clear do weights[current] *= 0.12
+	if current != .Clear do weights[current] = d32.Mul(weights[current], d32.FromRatio(12, 100))
 
-	total: f32 = 0
-	for kind in WeatherKind do total += weights[kind]
-	if total <= 0 do return .Clear
-	roll := WorldNoiseHash(int(w.weather.sequence), int(season)+13, w.seed+0x7EA5E)*total
+	total := d32.ZERO
+	for kind in WeatherKind do total = d32.Add(total, weights[kind])
+	if total <= d32.ZERO do return .Clear
+	roll := d32.Mul(
+		d32.FromRatio(
+			i32(WorldNoiseHashInt(int(w.weather.sequence), int(season)+13, w.seed+0x7EA5E)),
+			1_000_000,
+		),
+		total,
+	)
 	for kind in WeatherKind {
-		roll -= weights[kind]
-		if roll <= 0 do return kind
+		roll = d32.Sub(roll, weights[kind])
+		if roll <= d32.ZERO do return kind
 	}
 	return .Clear
 }
@@ -276,78 +283,109 @@ WorldWeatherTransition :: proc(w: ^World, kind: WeatherKind) {
 	w.weather.sequence += 1
 	w.weather.season = WorldSeason(w)
 
-	duration := WEATHER_MIN_SECONDS+
-		WorldNoiseHash(int(w.weather.sequence), 5, w.seed+0x71EA)*f32(WEATHER_MAX_SECONDS-WEATHER_MIN_SECONDS)
+	duration := d32.Add(
+		d32.FromInt(WEATHER_MIN_SECONDS),
+		d32.Mul(
+			d32.FromRatio(
+				i32(WorldNoiseHashInt(int(w.weather.sequence), 5, w.seed+0x71EA)),
+				1_000_000,
+			),
+			d32.FromInt(WEATHER_MAX_SECONDS-WEATHER_MIN_SECONDS),
+		),
+	)
 	switch kind {
 	case .Clear:
-		duration *= 1.25
+		duration = d32.Mul(duration, d32.FromRatio(125, 100))
 	case .Storm, .Blizzard:
-		duration *= 0.8
+		duration = d32.Mul(duration, d32.FromRatio(8, 10))
 	case .Drought:
-		duration *= 1.15
+		duration = d32.Mul(duration, d32.FromRatio(115, 100))
 	case .Rain, .Fog, .Snow, .Heatwave, .Sandstorm, .Ashfall:
 	}
 	w.weather.duration = duration
 	w.weather.remaining = duration
 	w.weather.nextKind = WorldWeatherPick(w, w.weather.season, kind)
 
-	speed: f32 = 0.03
+	speed := d32.FromRatio(3, 100)
 	switch kind {
 	case .Clear:
-		speed = 0.03
+		speed = d32.FromRatio(3, 100)
 	case .Rain:
-		speed = 0.16
+		speed = d32.FromRatio(16, 100)
 	case .Storm:
-		speed = 0.50
+		speed = d32.FromRatio(5, 10)
 	case .Fog:
-		speed = 0.02
+		speed = d32.FromRatio(2, 100)
 	case .Snow:
-		speed = 0.14
+		speed = d32.FromRatio(14, 100)
 	case .Blizzard:
-		speed = 0.55
+		speed = d32.FromRatio(55, 100)
 	case .Drought:
-		speed = 0.10
+		speed = d32.FromRatio(10, 100)
 	case .Heatwave:
-		speed = 0.06
+		speed = d32.FromRatio(6, 100)
 	case .Sandstorm:
-		speed = 0.60
+		speed = d32.FromRatio(60, 100)
 	case .Ashfall:
-		speed = 0.15
+		speed = d32.FromRatio(15, 100)
 	}
-	angle := WorldNoiseHash(int(w.weather.sequence), 7, w.seed+0x31D)*6.2831853
-	w.weather.windX = math.cos(angle)*speed
-	w.weather.windY = math.sin(angle)*speed
-	w.weather.lightningTimer = 1.5+WorldNoiseHash(int(w.weather.sequence), 9, w.seed+0x4A1)*3
+	turns := d32.FromRatio(i32(WorldNoiseHashInt(int(w.weather.sequence), 7, w.seed+0x31D)), 1_000_000)
+	sine, cosine := d32.SinCos(turns)
+	w.weather.windX = d32.Mul(cosine, speed)
+	w.weather.windY = d32.Mul(sine, speed)
+	w.weather.lightningTimer = d32.Add(
+		d32.FromRatio(15, 10),
+		d32.Mul(
+			d32.FromRatio(
+				i32(WorldNoiseHashInt(int(w.weather.sequence), 9, w.seed+0x4A1)),
+				1_000_000,
+			),
+			d32.FromInt(3),
+		),
+	)
 }
 
 WorldWeatherUpdate :: proc(w: ^World, deltaTime: f32) {
 	if deltaTime <= 0 do return
+	step := PositionFromF32(deltaTime)
 
 	season := WorldSeason(w)
 	if season != w.weather.season {
 		newKind := WorldWeatherPick(w, season, w.weather.kind)
 		WorldWeatherTransition(w, newKind)
 	}
-	w.weather.remaining = max(w.weather.remaining-deltaTime, 0)
-	if w.weather.remaining <= 0 do WorldWeatherTransition(w, w.weather.nextKind)
+	w.weather.remaining = max(d32.Sub(w.weather.remaining, step), d32.ZERO)
+	if w.weather.remaining <= d32.ZERO do WorldWeatherTransition(w, w.weather.nextKind)
 
-	age := w.weather.duration-w.weather.remaining
-	fadeIn := clamp(age/WEATHER_RAMP_IN, 0, 1)
-	fadeOut := clamp(w.weather.remaining/WEATHER_RAMP_OUT, 0, 1)
+	age := d32.Sub(w.weather.duration, w.weather.remaining)
+	fadeIn := clamp(d32.Div(age, d32.FromInt(WEATHER_RAMP_IN)), d32.ZERO, d32.ONE)
+	fadeOut := clamp(d32.Div(w.weather.remaining, d32.FromInt(WEATHER_RAMP_OUT)), d32.ZERO, d32.ONE)
 	w.weather.value = min(fadeIn, fadeOut)
 
-	if w.weather.kind == .Storm && w.weather.value > 0.3 {
-		w.weather.lightningTimer -= deltaTime
-		if w.weather.lightningTimer <= 0 {
-			w.weather.lightningTimer = 1.5+
-				WorldNoiseHash(int(w.simulationTime*4), int(w.weather.sequence), w.seed+0x11)*4
+	if w.weather.kind == .Storm && w.weather.value > d32.FromRatio(3, 10) {
+		w.weather.lightningTimer = d32.Sub(w.weather.lightningTimer, step)
+		if w.weather.lightningTimer <= d32.ZERO {
+			w.weather.lightningTimer = d32.Add(
+				d32.FromRatio(15, 10),
+				d32.Mul(
+					d32.FromRatio(
+						i32(WorldNoiseHashInt(
+							int(WorldCurrentTick(w)),
+							int(w.weather.sequence),
+							w.seed+0x11,
+						)),
+						1_000_000,
+					),
+					d32.FromInt(4),
+				),
+			)
 			w.weather.lightningFlash = 1
 		}
 	}
 	w.weather.lightningFlash = max(w.weather.lightningFlash-deltaTime*WEATHER_LIGHTNING_DECAY, 0)
 
 	weatherEffects := WorldWeatherEffects(w)
-	active := w.weather.value > 0.2
+	active := w.weather.value > d32.FromRatio(1, 5)
 	wet := active && (w.weather.kind == .Rain || w.weather.kind == .Storm)
 	cold := active && (w.weather.kind == .Snow || w.weather.kind == .Blizzard)
 	heat := active && (w.weather.kind == .Heatwave || w.weather.kind == .Drought ||
@@ -360,10 +398,10 @@ WorldWeatherUpdate :: proc(w: ^World, deltaTime: f32) {
 		w.units.effects[unitSlot][.Wet] = wet && !hidden
 		w.units.effects[unitSlot][.Chilled] = (cold || eventBlizzard) && !hidden
 		w.units.effects[unitSlot][.HeatStressed] = heat && !hidden
-		if hidden || weatherEffects.exposure <= 0 do continue
+		if hidden || weatherEffects.exposure <= d32.ZERO do continue
 
-		tileX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
-		tileY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+		tileX := UnitTileX(w, unitSlot)
+		tileY := UnitTileY(w, unitSlot)
 		tileData := WorldTileAt(w, tileX, tileY)
 		climate := tileData.climate
 		tile := tileData.type
@@ -373,27 +411,28 @@ WorldWeatherUpdate :: proc(w: ^World, deltaTime: f32) {
 		exposure := weatherEffects.exposure
 		switch w.weather.kind {
 		case .Snow:
-			exposure = coldTile ? exposure*1.5 : 0
+			exposure = coldTile ? d32.Mul(exposure, d32.FromRatio(3, 2)) : d32.ZERO
 		case .Blizzard:
-			exposure *= coldTile ? 1.5 : 0.7
+			exposure = d32.Mul(exposure, coldTile ? d32.FromRatio(3, 2) : d32.FromRatio(7, 10))
 		case .Drought:
-			exposure = hotTile ? exposure : 0
+			exposure = hotTile ? exposure : d32.ZERO
 		case .Heatwave:
-			exposure *= hotTile ? 1.5 : 0.6
+			exposure = d32.Mul(exposure, hotTile ? d32.FromRatio(3, 2) : d32.FromRatio(3, 5))
 		case .Sandstorm:
-			exposure *= hotTile ? 1.5 : 0.5
+			exposure = d32.Mul(exposure, hotTile ? d32.FromRatio(3, 2) : d32.HALF)
 		case .Ashfall:
 		case .Clear, .Rain, .Storm, .Fog:
-			exposure = 0
+			exposure = d32.ZERO
 		}
-		if exposure <= 0 do continue
-		damage := UnitMaxHealth(w, unitSlot)*exposure*deltaTime
+		if exposure <= d32.ZERO do continue
+		// Health, exposure and the tick are all Q16.16.
+		damage := d32.Mul(UnitMaxHealth(w, unitSlot), d32.Mul(exposure, step))
 		UnitApplyDamage(
 			w,
 			unitSlot,
 			damage,
-			w.units.x[unitSlot],
-			w.units.y[unitSlot],
+			UnitX(w, unitSlot),
+			UnitY(w, unitSlot),
 			.Weather,
 		)
 	}
@@ -430,15 +469,15 @@ EnvironmentEvent :: struct {
 	kind:      EnvironmentEventKind,
 	severity:  EventSeverity,
 	phase:     EventPhase,
-	remaining: f32,
-	telegraph: f32,
-	duration:  f32,
-	centerX:   f32,
-	centerY:   f32,
-	radius:    f32,
+	remaining: d32.Value,
+	telegraph: d32.Value,
+	duration:  d32.Value,
+	centerX:   d32.Value,
+	centerY:   d32.Value,
+	radius:    d32.Value,
 	kingdom:   int,
 	town:      int,
-	tick:      f32,
+	tick:      d32.Value,
 	sequence:  u32,
 }
 
@@ -518,50 +557,50 @@ EnvironmentSeverityColor :: proc(severity: EventSeverity) -> rl.Color {
 	unreachable()
 }
 
-EnvironmentSeverityScale :: proc(severity: EventSeverity) -> f32 {
+EnvironmentSeverityScale :: proc(severity: EventSeverity) -> d32.Value {
 	switch severity {
 	case .Minor:
-		return 0.5
+		return d32.HALF
 	case .Moderate:
-		return 0.8
+		return d32.FromRatio(4, 5)
 	case .Major:
-		return 1.1
+		return d32.FromRatio(11, 10)
 	case .Cataclysm:
-		return 1.5
+		return d32.FromRatio(3, 2)
 	}
-	return 1
+	return d32.ONE
 }
 
-EnvironmentEventRadius :: proc(severity: EventSeverity) -> f32 {
+EnvironmentEventRadius :: proc(severity: EventSeverity) -> d32.Value {
 	switch severity {
 	case .Minor:
-		return 3.5
+		return d32.FromRatio(35, 10)
 	case .Moderate:
-		return 5.5
+		return d32.FromRatio(55, 10)
 	case .Major:
-		return 7.5
+		return d32.FromRatio(75, 10)
 	case .Cataclysm:
-		return 9.5
+		return d32.FromRatio(95, 10)
 	}
-	return 5
+	return d32.FromInt(5)
 }
 
-EnvironmentTelegraphSeconds :: proc(severity: EventSeverity) -> f32 {
+EnvironmentTelegraphSeconds :: proc(severity: EventSeverity) -> d32.Value {
 	switch severity {
 	case .Minor:
-		return 1.5
+		return d32.FromRatio(15, 10)
 	case .Moderate:
-		return 3
+		return d32.FromInt(3)
 	case .Major:
-		return 5
+		return d32.FromInt(5)
 	case .Cataclysm:
-		return 8
+		return d32.FromInt(8)
 	}
-	return 3
+	return d32.FromInt(3)
 }
 
-EnvironmentEventDuration :: proc(kind: EnvironmentEventKind, severity: EventSeverity) -> f32 {
-	base: f32 = 12
+EnvironmentEventDuration :: proc(kind: EnvironmentEventKind, severity: EventSeverity) -> d32.Value {
+	base: i32 = 12
 	switch kind {
 	case .Wildfire:
 		base = 15
@@ -582,27 +621,27 @@ EnvironmentEventDuration :: proc(kind: EnvironmentEventKind, severity: EventSeve
 	case .MeteorShower:
 		base = 10
 	}
-	return base*EnvironmentSeverityScale(severity)
+	return d32.Mul(d32.FromInt(base), EnvironmentSeverityScale(severity))
 }
 
-EnvironmentEventTickSeconds :: proc(kind: EnvironmentEventKind) -> f32 {
+EnvironmentEventTickSeconds :: proc(kind: EnvironmentEventKind) -> d32.Value {
 	switch kind {
 	case .Wildfire:
-		return 0.8
+		return d32.FromRatio(8, 10)
 	case .Blizzard:
-		return 0.5
+		return d32.HALF
 	case .Earthquake:
-		return 1.2
+		return d32.FromRatio(12, 10)
 	case .Eruption:
-		return 0.9
+		return d32.FromRatio(9, 10)
 	case .Hurricane:
-		return 1.2
+		return d32.FromRatio(12, 10)
 	case .MeteorShower:
-		return 1.0
+		return d32.ONE
 	case .Flood, .Drought, .Locusts:
-		return 1.0
+		return d32.ONE
 	}
-	return 1
+	return d32.ONE
 }
 
 EnvironmentKingdomEra :: proc(w: ^World, kingdom: int) -> int {
@@ -649,31 +688,41 @@ EnvironmentLeadingKingdom :: proc(w: ^World) -> int {
 EnvironmentPickTargetKingdom :: proc(w: ^World, severity: EventSeverity) -> int {
 	maxEra := EnvironmentMaxEra(w)
 	leader := EnvironmentLeadingKingdom(w)
-	weights: [KINGDOMS_CAPACITY]f32
-	total: f32 = 0
+	weights: [KINGDOMS_CAPACITY]d32.Value
+	total := d32.ZERO
 	for kingdom in 0..<KINGDOMS_CAPACITY {
 		if kingdom == NEUTRAL_KINGDOM || !w.kingdomUsed[kingdom] do continue
-		weight := 1+w.eventDebt[kingdom]
-		if EnvironmentKingdomEra(w, kingdom) < maxEra do weight *= 0.55
-		if severity == .Cataclysm && kingdom == leader do weight *= 2.0
+		weight := d32.Add(d32.ONE, w.eventDebt[kingdom])
+		if EnvironmentKingdomEra(w, kingdom) < maxEra {
+			weight = d32.Mul(weight, d32.FromRatio(55, 100))
+		}
+		if severity == .Cataclysm && kingdom == leader {
+			weight = d32.Mul(weight, d32.FromInt(2))
+		}
 		weights[kingdom] = weight
-		total += weight
+		total = d32.Add(total, weight)
 	}
 	if severity >= .Major && w.eventLastMajorKingdom >= 0 &&
 		w.eventLastMajorKingdom < KINGDOMS_CAPACITY {
 		last := w.eventLastMajorKingdom
-		total -= weights[last]
-		weights[last] = 0
-		if total <= 0 {
-			weights[last] = 1
-			total = 1
+		total = d32.Sub(total, weights[last])
+		weights[last] = d32.ZERO
+		if total <= d32.ZERO {
+			weights[last] = d32.ONE
+			total = d32.ONE
 		}
 	}
-	if total <= 0 do return -1
-	roll := WorldNoiseHash(int(w.eventSequence)+1, int(severity)+31, w.seed+0xE7E)*total
+	if total <= d32.ZERO do return -1
+	roll := d32.Mul(
+		d32.FromRatio(
+			i32(WorldNoiseHashInt(int(w.eventSequence)+1, int(severity)+31, w.seed+0xE7E)),
+			1_000_000,
+		),
+		total,
+	)
 	for kingdom in 0..<KINGDOMS_CAPACITY {
-		roll -= weights[kingdom]
-		if weights[kingdom] > 0 && roll <= 0 do return kingdom
+		roll = d32.Sub(roll, weights[kingdom])
+		if weights[kingdom] > d32.ZERO && roll <= d32.ZERO do return kingdom
 	}
 	return -1
 }
@@ -704,51 +753,57 @@ EnvironmentKingdomHasCoastalTown :: proc(w: ^World, kingdom: int) -> bool {
 }
 
 EnvironmentPickKind :: proc(w: ^World, severity: EventSeverity, kingdom: int) -> EnvironmentEventKind {
-	weights: [EnvironmentEventKind]f32
+	weights: [EnvironmentEventKind]d32.Value
 	for kind in EnvironmentEventKind {
 		if !EnvironmentKindEligible(kind, severity) do continue
 		if kind in w.eventBag do continue
 		if kind == .Hurricane && !EnvironmentKingdomHasCoastalTown(w, kingdom) do continue
-		weights[kind] = 10
+		weights[kind] = d32.FromInt(10)
 	}
-	weights[.Wildfire] *= 2.6
-	weights[.Flood] *= 2.4
-	weights[.Drought] *= 2.0
-	weights[.Blizzard] *= 1.6
-	weights[.Earthquake] *= 1.8
-	weights[.Eruption] *= 1.6
-	weights[.Locusts] *= 1.4
-	weights[.Hurricane] *= 1.6
-	weights[.MeteorShower] *= 1.6
+	weights[.Wildfire] = d32.Mul(weights[.Wildfire], d32.FromRatio(26, 10))
+	weights[.Flood] = d32.Mul(weights[.Flood], d32.FromRatio(24, 10))
+	weights[.Drought] = d32.Mul(weights[.Drought], d32.FromInt(2))
+	weights[.Blizzard] = d32.Mul(weights[.Blizzard], d32.FromRatio(16, 10))
+	weights[.Earthquake] = d32.Mul(weights[.Earthquake], d32.FromRatio(18, 10))
+	weights[.Eruption] = d32.Mul(weights[.Eruption], d32.FromRatio(16, 10))
+	weights[.Locusts] = d32.Mul(weights[.Locusts], d32.FromRatio(14, 10))
+	weights[.Hurricane] = d32.Mul(weights[.Hurricane], d32.FromRatio(16, 10))
+	weights[.MeteorShower] = d32.Mul(weights[.MeteorShower], d32.FromRatio(16, 10))
 
 	switch w.weather.kind {
 	case .Rain, .Storm:
-		weights[.Wildfire] *= 0.3
-		weights[.Flood] *= 1.6
-		weights[.Hurricane] *= 1.5
-		weights[.Drought] *= 0.5
+		weights[.Wildfire] = d32.Mul(weights[.Wildfire], d32.FromRatio(3, 10))
+		weights[.Flood] = d32.Mul(weights[.Flood], d32.FromRatio(16, 10))
+		weights[.Hurricane] = d32.Mul(weights[.Hurricane], d32.FromRatio(15, 10))
+		weights[.Drought] = d32.Mul(weights[.Drought], d32.FromRatio(5, 10))
 	case .Snow, .Blizzard:
-		weights[.Wildfire] = 0
-		weights[.Blizzard] *= 1.6
-		weights[.Flood] *= 0.8
+		weights[.Wildfire] = d32.ZERO
+		weights[.Blizzard] = d32.Mul(weights[.Blizzard], d32.FromRatio(16, 10))
+		weights[.Flood] = d32.Mul(weights[.Flood], d32.FromRatio(8, 10))
 	case .Drought, .Heatwave:
-		weights[.Wildfire] *= 1.8
-		weights[.Drought] *= 1.6
-		weights[.Flood] *= 0.5
-		weights[.Hurricane] *= 0.5
+		weights[.Wildfire] = d32.Mul(weights[.Wildfire], d32.FromRatio(18, 10))
+		weights[.Drought] = d32.Mul(weights[.Drought], d32.FromRatio(16, 10))
+		weights[.Flood] = d32.Mul(weights[.Flood], d32.FromRatio(5, 10))
+		weights[.Hurricane] = d32.Mul(weights[.Hurricane], d32.FromRatio(5, 10))
 	case .Clear, .Fog, .Sandstorm, .Ashfall:
 	}
 
-	total: f32 = 0
-	for kind in EnvironmentEventKind do total += weights[kind]
-	if total <= 0 {
+	total := d32.ZERO
+	for kind in EnvironmentEventKind do total = d32.Add(total, weights[kind])
+	if total <= d32.ZERO {
 		w.eventBag = {}
 		return EnvironmentPickKind(w, severity, kingdom)
 	}
-	roll := WorldNoiseHash(int(w.eventSequence)+1, int(severity)+71, w.seed+0xBA6)*total
+	roll := d32.Mul(
+		d32.FromRatio(
+			i32(WorldNoiseHashInt(int(w.eventSequence)+1, int(severity)+71, w.seed+0xBA6)),
+			1_000_000,
+		),
+		total,
+	)
 	for kind in EnvironmentEventKind {
-		roll -= weights[kind]
-		if weights[kind] > 0 && roll <= 0 do return kind
+		roll = d32.Sub(roll, weights[kind])
+		if weights[kind] > d32.ZERO && roll <= d32.ZERO do return kind
 	}
 	return .Flood
 }
@@ -761,7 +816,7 @@ EnvironmentPickTown :: proc(w: ^World, kingdom: int, kind: EnvironmentEventKind)
 		count += 1
 	}
 	if count <= 0 do return -1
-	index := int(WorldNoiseHash(int(w.eventSequence)+1, count+3, w.seed+0x70A)*f32(count))
+	index := WorldNoiseIndex(int(w.eventSequence)+1, count+3, w.seed+0x70A, count)
 	for townSlot in 0..<TOWN_CAPACITY {
 		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
 		if kind == .Hurricane && !TownIsCoastal(w, kingdom, townSlot) do continue
@@ -777,7 +832,7 @@ EnvironmentPickAnyTown :: proc(w: ^World, kingdom: int) -> int {
 		if w.kingdoms[kingdom].townUsed[townSlot] do count += 1
 	}
 	if count <= 0 do return -1
-	index := int(WorldNoiseHash(int(w.eventSequence)+1, count+9, w.seed+0x70B)*f32(count))
+	index := WorldNoiseIndex(int(w.eventSequence)+1, count+9, w.seed+0x70B, count)
 	for townSlot in 0..<TOWN_CAPACITY {
 		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
 		if index <= 0 do return townSlot
@@ -820,87 +875,138 @@ EnvironmentEventStart :: proc(w: ^World, severity: EventSeverity) {
 		remaining = telegraph,
 		telegraph = telegraph,
 		duration = EnvironmentEventDuration(kind, severity),
-		centerX = f32(ref.x)+2,
-		centerY = f32(ref.y)+2,
+		centerX = d32.Add(d32.FromInt(i32(ref.x)), d32.FromInt(2)),
+		centerY = d32.Add(d32.FromInt(i32(ref.y)), d32.FromInt(2)),
 		radius = EnvironmentEventRadius(severity),
 		kingdom = kingdom,
 		town = town,
 		sequence = w.eventSequence,
 	}
 	w.eventBag += {kind}
-	w.eventDebt[kingdom] = 0
+	w.eventDebt[kingdom] = d32.ZERO
 	if severity >= .Major do w.eventLastMajorKingdom = kingdom
 
 	switch severity {
 	case .Minor:
-		w.eventMinorTimer = 70+WorldNoiseHash(int(w.eventSequence), 13, w.seed+0x2A1)*50
+		w.eventMinorTimer = d32.Add(
+			d32.FromInt(70),
+			d32.Mul(
+				d32.FromRatio(
+					i32(WorldNoiseHashInt(int(w.eventSequence), 13, w.seed+0x2A1)),
+					1_000_000,
+				),
+				d32.FromInt(50),
+			),
+		)
 	case .Moderate:
-		w.eventModerateTimer = 180+WorldNoiseHash(int(w.eventSequence), 17, w.seed+0x2A3)*120
+		w.eventModerateTimer = d32.Add(
+			d32.FromInt(180),
+			d32.Mul(
+				d32.FromRatio(
+					i32(WorldNoiseHashInt(int(w.eventSequence), 17, w.seed+0x2A3)),
+					1_000_000,
+				),
+				d32.FromInt(120),
+			),
+		)
 	case .Major:
-		w.eventMajorTimer = 420+WorldNoiseHash(int(w.eventSequence), 19, w.seed+0x2A5)*180
+		w.eventMajorTimer = d32.Add(
+			d32.FromInt(420),
+			d32.Mul(
+				d32.FromRatio(
+					i32(WorldNoiseHashInt(int(w.eventSequence), 19, w.seed+0x2A5)),
+					1_000_000,
+				),
+				d32.FromInt(180),
+			),
+		)
 	case .Cataclysm:
-		w.eventCataclysmTimer = 900+WorldNoiseHash(int(w.eventSequence), 23, w.seed+0x2A7)*600
+		w.eventCataclysmTimer = d32.Add(
+			d32.FromInt(900),
+			d32.Mul(
+				d32.FromRatio(
+					i32(WorldNoiseHashInt(int(w.eventSequence), 23, w.seed+0x2A7)),
+					1_000_000,
+				),
+				d32.FromInt(600),
+			),
+		)
 		w.eventCataclysmCount += 1
 	}
-	w.eventGap = 45+WorldNoiseHash(int(w.eventSequence), 29, w.seed+0x2A9)*30
+	w.eventGap = d32.Add(
+		d32.FromInt(45),
+		d32.Mul(
+			d32.FromRatio(
+				i32(WorldNoiseHashInt(int(w.eventSequence), 29, w.seed+0x2A9)),
+				1_000_000,
+			),
+			d32.FromInt(30),
+		),
+	)
 	WorldAlertAddEnvironment(w, &w.environment)
 }
 
 WorldEnvironmentUpdate :: proc(w: ^World, deltaTime: f32) {
 	if deltaTime <= 0 do return
+	step := PositionFromF32(deltaTime)
 	maxEra := EnvironmentMaxEra(w)
 	for kingdom in 0..<KINGDOMS_CAPACITY {
 		if kingdom == NEUTRAL_KINGDOM || !w.kingdomUsed[kingdom] do continue
 		trailing := EnvironmentKingdomEra(w, kingdom) < maxEra
-		gain: f32 = (trailing ? 0.35 : 1.0)/60
-		w.eventDebt[kingdom] = min(w.eventDebt[kingdom]+deltaTime*gain, 6)
+		rate := d32.ONE
+		if trailing do rate = d32.FromRatio(35, 100)
+		gain := d32.Div(rate, d32.FromInt(60))
+		w.eventDebt[kingdom] = min(
+			d32.Add(w.eventDebt[kingdom], d32.Mul(step, gain)),
+			d32.FromInt(6),
+		)
 	}
 
-	w.eventGap = max(w.eventGap-deltaTime, 0)
-	w.eventMinorTimer = max(w.eventMinorTimer-deltaTime, 0)
-	w.eventModerateTimer = max(w.eventModerateTimer-deltaTime, 0)
-	w.eventMajorTimer = max(w.eventMajorTimer-deltaTime, 0)
-	w.eventCataclysmTimer = max(w.eventCataclysmTimer-deltaTime, 0)
+	w.eventGap = max(d32.Sub(w.eventGap, step), d32.ZERO)
+	w.eventMinorTimer = max(d32.Sub(w.eventMinorTimer, step), d32.ZERO)
+	w.eventModerateTimer = max(d32.Sub(w.eventModerateTimer, step), d32.ZERO)
+	w.eventMajorTimer = max(d32.Sub(w.eventMajorTimer, step), d32.ZERO)
+	w.eventCataclysmTimer = max(d32.Sub(w.eventCataclysmTimer, step), d32.ZERO)
 
 	if w.environment.phase != .None {
-		w.environment.remaining = max(w.environment.remaining-deltaTime, 0)
+		w.environment.remaining = max(d32.Sub(w.environment.remaining, step), d32.ZERO)
 		switch w.environment.phase {
 		case .Telegraph:
-			if w.environment.remaining <= 0 {
+			if w.environment.remaining <= d32.ZERO {
 				w.environment.phase = .Active
 				w.environment.remaining = w.environment.duration
-				w.environment.tick = 0
+				w.environment.tick = d32.ZERO
 				EnvironmentEventActivate(w)
 			}
 		case .Active:
 			EnvironmentEventTick(w, deltaTime)
-			if w.environment.remaining <= 0 do EnvironmentEventEnd(w)
+			if w.environment.remaining <= d32.ZERO do EnvironmentEventEnd(w)
 		case .None:
 		}
 		return
 	}
 
-	if w.eventGap > 0 do return
+	if w.eventGap > d32.ZERO do return
 
 	severity: EventSeverity
 	ready := false
-	if w.eventCataclysmTimer <= 0 && w.eventCataclysmCount < 2 {
+	if w.eventCataclysmTimer <= d32.ZERO && w.eventCataclysmCount < 2 {
 		if maxEra >= 2 {
 			severity = .Cataclysm
 			ready = true
 		} else {
-			w.eventCataclysmTimer = 30
+			w.eventCataclysmTimer = d32.FromInt(30)
 		}
 	}
-	if !ready && w.eventMajorTimer <= 0 {
+	if !ready && w.eventMajorTimer <= d32.ZERO {
 		severity = .Major
 		ready = true
 	}
-	if !ready && w.eventModerateTimer <= 0 {
+	if !ready && w.eventModerateTimer <= d32.ZERO {
 		severity = .Moderate
 		ready = true
 	}
-	if !ready && w.eventMinorTimer <= 0 {
+	if !ready && w.eventMinorTimer <= d32.ZERO {
 		severity = .Minor
 		ready = true
 	}
@@ -909,16 +1015,20 @@ WorldEnvironmentUpdate :: proc(w: ^World, deltaTime: f32) {
 
 EnvironmentEventActivate :: proc(w: ^World) {
 	e := &w.environment
-	scale := EnvironmentSeverityScale(e.severity)
+	scaleValue := EnvironmentSeverityScale(e.severity)
+	scale := PositionToF32(scaleValue)
+	centerX := PositionToF32(e.centerX)
+	centerY := PositionToF32(e.centerY)
+	radius := PositionToF32(e.radius)
 	switch e.kind {
 	case .Wildfire:
-		EnvironmentFireBurst(w, e.centerX, e.centerY, e.radius, 5+int(scale*6))
+		EnvironmentFireBurst(w, centerX, centerY, radius, 5+int(scale*6))
 	case .Flood:
 		WorldHazardSpawnCircle(
 			w,
-			e.centerX,
-			e.centerY,
-			e.radius,
+			centerX,
+			centerY,
+			radius,
 			.Flood,
 			20+10*scale,
 			30+15*scale,
@@ -927,9 +1037,9 @@ EnvironmentEventActivate :: proc(w: ^World) {
 	case .Hurricane:
 		WorldHazardSpawnCircle(
 			w,
-			e.centerX,
-			e.centerY,
-			e.radius,
+			centerX,
+			centerY,
+			radius,
 			.Flood,
 			25+12*scale,
 			35+18*scale,
@@ -937,69 +1047,113 @@ EnvironmentEventActivate :: proc(w: ^World) {
 		)
 		EnvironmentDamageArea(
 			w,
-			e.centerX,
-			e.centerY,
-			e.radius,
-			8*scale,
-			30*scale,
+			centerX,
+			centerY,
+			radius,
+			d32.Mul(d32.FromInt(8), scaleValue),
+			d32.Mul(d32.FromInt(30), scaleValue),
 			.Area,
 		)
 	case .Earthquake:
 		EnvironmentDamageArea(
 			w,
-			e.centerX,
-			e.centerY,
-			e.radius,
-			10*scale,
-			70*scale,
+			centerX,
+			centerY,
+			radius,
+			d32.Mul(d32.FromInt(10), scaleValue),
+			d32.Mul(d32.FromInt(70), scaleValue),
 			.Area,
 		)
-		DecorationBlastBurst(w, e.centerX, e.centerY, e.radius*0.8)
-		WorldTerrainQuakeApply(w, e.centerX, e.centerY, e.radius, u64(e.sequence)+0x9E01)
+		DecorationBlastBurst(w, centerX, centerY, radius*0.8)
+		WorldTerrainQuakeApply(w, centerX, centerY, radius, u64(e.sequence)+0x9E01)
 	case .Eruption:
 		EnvironmentDamageArea(
 			w,
-			e.centerX,
-			e.centerY,
-			e.radius,
-			18*scale,
-			110*scale,
+			centerX,
+			centerY,
+			radius,
+			d32.Mul(d32.FromInt(18), scaleValue),
+			d32.Mul(d32.FromInt(110), scaleValue),
 			.Fire,
 		)
-		EnvironmentFireBurst(w, e.centerX, e.centerY, e.radius, 10+int(scale*8))
-		DecorationBlastBurst(w, e.centerX, e.centerY, e.radius)
-		WorldTerrainEruptionApply(w, e.centerX, e.centerY, e.radius, u64(e.sequence)+0x9E02)
+		EnvironmentFireBurst(w, centerX, centerY, radius, 10+int(scale*8))
+		DecorationBlastBurst(w, centerX, centerY, radius)
+		WorldTerrainEruptionApply(w, centerX, centerY, radius, u64(e.sequence)+0x9E02)
 	case .MeteorShower:
 		EnvironmentMeteorImpact(w)
 	case .Blizzard:
-		WorldTerrainFreezeApply(w, e.centerX, e.centerY, e.radius*1.4, u64(e.sequence)+0x9E03)
+		WorldTerrainFreezeApply(w, centerX, centerY, radius*1.4, u64(e.sequence)+0x9E03)
 	case .Drought:
-		WorldTerrainDroughtApply(w, e.centerX, e.centerY, e.radius*1.6, u64(e.sequence)+0x9E04)
+		WorldTerrainDroughtApply(w, centerX, centerY, radius*1.6, u64(e.sequence)+0x9E04)
 	case .Locusts:
 	}
 }
 
 EnvironmentEventTick :: proc(w: ^World, deltaTime: f32) {
 	e := &w.environment
-	e.tick -= deltaTime
-	if e.tick > 0 do return
+	e.tick = d32.Sub(e.tick, PositionFromF32(deltaTime))
+	if e.tick > d32.ZERO do return
 	e.tick = EnvironmentEventTickSeconds(e.kind)
-	scale := EnvironmentSeverityScale(e.severity)
+	scaleValue := EnvironmentSeverityScale(e.severity)
+	scale := PositionToF32(scaleValue)
+	centerX := PositionToF32(e.centerX)
+	centerY := PositionToF32(e.centerY)
+	radius := PositionToF32(e.radius)
 
 	switch e.kind {
 	case .Wildfire:
-		EnvironmentFireBurst(w, e.centerX, e.centerY, e.radius, 2+int(scale*2))
-		EnvironmentDamageArea(w, e.centerX, e.centerY, e.radius, 2*scale, 6*scale, .Fire)
+		EnvironmentFireBurst(w, centerX, centerY, radius, 2+int(scale*2))
+		EnvironmentDamageArea(
+			w,
+			centerX,
+			centerY,
+			radius,
+			d32.Mul(d32.FromInt(2), scaleValue),
+			d32.Mul(d32.FromInt(6), scaleValue),
+			.Fire,
+		)
 	case .Blizzard:
-		EnvironmentDamageArea(w, e.centerX, e.centerY, e.radius, 2*scale, 0, .Weather)
+		EnvironmentDamageArea(
+			w,
+			centerX,
+			centerY,
+			radius,
+			d32.Mul(d32.FromInt(2), scaleValue),
+			d32.ZERO,
+			.Weather,
+		)
 	case .Earthquake:
-		EnvironmentDamageArea(w, e.centerX, e.centerY, e.radius, 4*scale, 35*scale, .Area)
+		EnvironmentDamageArea(
+			w,
+			centerX,
+			centerY,
+			radius,
+			d32.Mul(d32.FromInt(4), scaleValue),
+			d32.Mul(d32.FromInt(35), scaleValue),
+			.Area,
+		)
 	case .Eruption:
-		EnvironmentDamageArea(w, e.centerX, e.centerY, e.radius, 8*scale, 70*scale, .Fire)
-		EnvironmentFireBurst(w, e.centerX, e.centerY, e.radius, 2+int(scale*2))
-		WorldTerrainLavaSpread(w, e.centerX, e.centerY, e.radius, u64(e.sequence)+0x9E11)
+		EnvironmentDamageArea(
+			w,
+			centerX,
+			centerY,
+			radius,
+			d32.Mul(d32.FromInt(8), scaleValue),
+			d32.Mul(d32.FromInt(70), scaleValue),
+			.Fire,
+		)
+		EnvironmentFireBurst(w, centerX, centerY, radius, 2+int(scale*2))
+		WorldTerrainLavaSpread(w, centerX, centerY, radius, u64(e.sequence)+0x9E11)
 	case .Hurricane:
-		EnvironmentDamageArea(w, e.centerX, e.centerY, e.radius, 5*scale, 25*scale, .Area)
+		EnvironmentDamageArea(
+			w,
+			centerX,
+			centerY,
+			radius,
+			d32.Mul(d32.FromInt(5), scaleValue),
+			d32.Mul(d32.FromInt(25), scaleValue),
+			.Area,
+		)
 	case .MeteorShower:
 		EnvironmentMeteorImpact(w)
 	case .Flood, .Drought, .Locusts:
@@ -1010,58 +1164,82 @@ EnvironmentEventEnd :: proc(w: ^World) {
 	w.environment.phase = .None
 	w.environment.kingdom = -1
 	w.environment.town = -1
-	w.eventGap = max(w.eventGap, 25)
+	w.eventGap = max(w.eventGap, d32.FromInt(25))
 }
 
 EnvironmentEventTownFactors :: proc(
 	w: ^World,
 	kingdom, town: int,
-) -> (food, water, growth: f32) {
-	food, water, growth = 1, 1, 1
+) -> (food, water, growth: d32.Value) {
+	food, water, growth = d32.ONE, d32.ONE, d32.ONE
 	e := &w.environment
 	if e.phase != .Active || e.kingdom != kingdom || e.town != town do return
 	scale := EnvironmentSeverityScale(e.severity)
 	switch e.kind {
 	case .Drought:
-		food = 1-0.35*scale
-		water = 1-0.65*scale
-		growth = 1-0.2*scale
+		food = d32.Sub(d32.ONE, d32.Mul(d32.FromRatio(35, 100), scale))
+		water = d32.Sub(d32.ONE, d32.Mul(d32.FromRatio(65, 100), scale))
+		growth = d32.Sub(d32.ONE, d32.Mul(d32.FromRatio(20, 100), scale))
 	case .Locusts:
-		food = 1-0.8*scale
-		growth = 1-0.1*scale
+		food = d32.Sub(d32.ONE, d32.Mul(d32.FromRatio(80, 100), scale))
+		growth = d32.Sub(d32.ONE, d32.Mul(d32.FromRatio(10, 100), scale))
 	case .Blizzard:
-		food = 1-0.2*scale
-		if e.severity >= .Major do growth = 0
+		food = d32.Sub(d32.ONE, d32.Mul(d32.FromRatio(20, 100), scale))
+		if e.severity >= .Major do growth = d32.ZERO
 	case .Flood, .Wildfire, .Earthquake, .Eruption, .Hurricane, .MeteorShower:
 	}
-	food = clamp(food, 0.05, 1)
-	water = clamp(water, 0.05, 1)
-	growth = clamp(growth, 0, 1)
+	food = clamp(food, d32.FromRatio(5, 100), d32.ONE)
+	water = clamp(water, d32.FromRatio(5, 100), d32.ONE)
+	growth = clamp(growth, d32.ZERO, d32.ONE)
 	return
+}
+
+// Unit-disc offset from deterministic d32 arithmetic; callers scale by the
+// effect's existing f32 radius at the boundary.
+@(private = "file")
+EnvironmentPlacementOffset :: proc(turnRoll, radiusRoll: u32) -> (d32.Value, d32.Value) {
+	turns := d32.FromRatio(i32(turnRoll), 1_000_000)
+	radiusFraction := d32.FromRatio(i32(radiusRoll), 1_000_000)
+	sine, cosine := d32.SinCos(turns)
+	distance := d32.Sqrt(radiusFraction)
+	return d32.Mul(cosine, distance), d32.Mul(sine, distance)
 }
 
 EnvironmentFireBurst :: proc(w: ^World, x, y, radius: f32, count: int) {
 	if count <= 0 do return
-	salt := int(w.simulationTime*8)
+	salt := int(WorldCurrentTick(w)*2)
 	for i in 0..<count {
-		angle := WorldNoiseHash(i, int(w.environment.sequence)+salt, w.seed+0x3A1)*6.2831853
-		distance := radius*math.sqrt(
-			WorldNoiseHash(i, int(w.environment.sequence)+salt+7, w.seed+0x3A3),
-		)
-		fx := WorldWrapPosition(x+math.cos(angle)*distance, f32(w.maxX))
-		fy := WorldWrapPosition(y+math.sin(angle)*distance, f32(w.maxY))
+		turnRoll := WorldNoiseHashInt(i, int(w.environment.sequence)+salt, w.seed+0x3A1)
+		radiusRoll := WorldNoiseHashInt(i, int(w.environment.sequence)+salt+7, w.seed+0x3A3)
+		offsetX, offsetY := EnvironmentPlacementOffset(turnRoll, radiusRoll)
+		fx := WorldWrapPosition(x+f32(d32.Raw(offsetX))/f32(d32.SCALE)*radius, f32(w.maxX))
+		fy := WorldWrapPosition(y+f32(d32.Raw(offsetY))/f32(d32.SCALE)*radius, f32(w.maxY))
 		WorldFireIgnite(w, fx, fy, 1.0, 1.0)
 	}
 }
 
 EnvironmentMeteorImpact :: proc(w: ^World) {
 	e := &w.environment
-	scale := EnvironmentSeverityScale(e.severity)
-	angle := WorldNoiseHash(int(e.tick*17)+int(e.sequence), int(w.simulationTime*4), w.seed+0x4A1)*6.2831853
-	distance := e.radius*math.sqrt(WorldNoiseHash(int(e.sequence), int(w.simulationTime*4), w.seed+0x4A3))
-	x := WorldWrapPosition(e.centerX+math.cos(angle)*distance, f32(w.maxX))
-	y := WorldWrapPosition(e.centerY+math.sin(angle)*distance, f32(w.maxY))
-	EnvironmentDamageArea(w, x, y, 2.5+scale, 10*scale, 45*scale, .Fire)
+	scaleValue := EnvironmentSeverityScale(e.severity)
+	scale := PositionToF32(scaleValue)
+	centerX := PositionToF32(e.centerX)
+	centerY := PositionToF32(e.centerY)
+	radius := PositionToF32(e.radius)
+	tick := PositionToF32(e.tick)
+	turnRoll := WorldNoiseHashInt(int(tick*17)+int(e.sequence), int(WorldCurrentTick(w)), w.seed+0x4A1)
+	radiusRoll := WorldNoiseHashInt(int(e.sequence), int(WorldCurrentTick(w)), w.seed+0x4A3)
+	offsetX, offsetY := EnvironmentPlacementOffset(turnRoll, radiusRoll)
+	x := WorldWrapPosition(centerX+f32(d32.Raw(offsetX))/f32(d32.SCALE)*radius, f32(w.maxX))
+	y := WorldWrapPosition(centerY+f32(d32.Raw(offsetY))/f32(d32.SCALE)*radius, f32(w.maxY))
+	EnvironmentDamageArea(
+		w,
+		x,
+		y,
+		2.5+scale,
+		d32.Mul(d32.FromInt(10), scaleValue),
+		d32.Mul(d32.FromInt(45), scaleValue),
+		.Fire,
+	)
 	EnvironmentFireBurst(w, x, y, 2+scale, 3+int(scale*2))
 	DecorationBlastBurst(w, x, y, 2+scale)
 	WorldTerrainMeteorCrater(w, int(x), int(y), u64(e.sequence)+0x3E00)
@@ -1069,7 +1247,8 @@ EnvironmentMeteorImpact :: proc(w: ^World) {
 
 EnvironmentDamageArea :: proc(
 	w: ^World,
-	x, y, radius, unitDamage, buildingDamage: f32,
+	x, y, radius: f32,
+	unitDamage, buildingDamage: d32.Value,
 	damageKind: DamageKind,
 ) {
 	chunkSize := w.spatial.chunkSize
@@ -1078,7 +1257,12 @@ EnvironmentDamageArea :: proc(
 	worldHeight := f32(w.maxY)
 	centerX := WorldWrapPosition(x, worldWidth)
 	centerY := WorldWrapPosition(y, worldHeight)
-	radiusSquared := radius*radius
+	centerPositionX := PositionFromF32(centerX)
+	centerPositionY := PositionFromF32(centerY)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	radiusRaw := UnitRawDistance(radius) // rounded once to the nearest raw unit
+	radiusSquaredRaw := u64(radiusRaw)*u64(radiusRaw)
 	centerChunkX := int(centerX)/chunkSize
 	centerChunkY := int(centerY)/chunkSize
 	chunkRadius := int(radius)/chunkSize+1
@@ -1093,9 +1277,15 @@ EnvironmentDamageArea :: proc(
 			for slot >= 0 {
 				next := w.spatial.unitNext[slot]
 				if w.unitUsed[slot] && w.units.type[slot] != nil && !UnitHiddenInside(w, slot) {
-					deltaX := WorldShortestWrappedDelta(w.units.x[slot]-centerX, worldWidth)
-					deltaY := WorldShortestWrappedDelta(w.units.y[slot]-centerY, worldHeight)
-					if deltaX*deltaX+deltaY*deltaY <= radiusSquared {
+					distanceSquared, validDistance := d32.WrappedDistanceSquared(
+						w.units.x[slot],
+						w.units.y[slot],
+						centerPositionX,
+						centerPositionY,
+						worldWidthRaw,
+						worldHeightRaw,
+					)
+					if validDistance && distanceSquared <= radiusSquaredRaw {
 						UnitApplyDamage(w, slot, unitDamage, centerX, centerY, damageKind)
 					}
 				}
@@ -1106,13 +1296,13 @@ EnvironmentDamageArea :: proc(
 			for slot >= 0 {
 				next := w.spatial.buildingNext[slot]
 				if w.buildingUsed[slot] {
-					distance, impactX, impactY := WarriorBuildingNearestPoint(
+					distanceSquared, impactX, impactY := WarriorBuildingNearestPointSquared(
 						w,
 						centerX,
 						centerY,
 						slot,
 					)
-					if distance <= radius {
+					if distanceSquared <= radiusSquaredRaw {
 						EnvironmentDamageBuilding(w, slot, buildingDamage, impactX, impactY)
 					}
 				}
@@ -1121,15 +1311,21 @@ EnvironmentDamageArea :: proc(
 		}
 	}
 
-	WorldDecorationAreaDamage(w, centerX, centerY, radius, buildingDamage*0.5)
+	WorldDecorationAreaDamage(
+		w,
+		centerX,
+		centerY,
+		PositionFromF32(radius),
+		d32.Mul(buildingDamage, d32.HALF),
+	)
 }
 
-EnvironmentDamageBuilding :: proc(w: ^World, slot: int, damage, impactX, impactY: f32) {
-	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] || damage <= 0 do return
+EnvironmentDamageBuilding :: proc(w: ^World, slot: int, damage: d32.Value, impactX, impactY: f32) {
+	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] || damage <= d32.ZERO do return
 	if w.buildings.kingdom[slot] == NEUTRAL_KINGDOM do return
 	BuildingHitBurst(w, slot, impactX, impactY)
-	w.buildings.health[slot] -= damage
-	if w.buildings.health[slot] > 0 do return
+	w.buildings.health[slot] = d32.Sub(w.buildings.health[slot], damage)
+	if w.buildings.health[slot] > d32.ZERO do return
 	wasBurning := BuildingOnFire(w, slot)
 	BuildingSpawnDebris(w, slot, wasBurning)
 	BuildingDestroyedBurst(w, slot)
@@ -1139,15 +1335,17 @@ EnvironmentDamageBuilding :: proc(w: ^World, slot: int, damage, impactX, impactY
 // Population growth is cohort-based: an era defines how many villagers arrive
 // together and how long the next cohort takes. Supply and unconverted villagers
 // speed up the countdown rather than changing the cohort size.
-GROWTH_FOOD_PER_CITIZEN :: 0.025
-GROWTH_MIN_SPEED :: 0.25
-GROWTH_MAX_SPEED :: 1.25
-GROWTH_VILLAGER_SPEED_BONUS :: 0.005
-GROWTH_VILLAGER_SPEED_CAP :: 0.5
+// Growth values stay as integer ratios so the fixed-point path is exact.
+// A citizen needs 25/1000 of a food or water unit per tick.
+GROWTH_FOOD_PER_CITIZEN_MILLE :: 25
+GROWTH_MIN_SPEED_PERCENT :: 25
+GROWTH_MAX_SPEED_PERCENT :: 125
+GROWTH_VILLAGER_SPEED_BONUS_MILLE :: 5
+GROWTH_VILLAGER_SPEED_CAP_PERCENT :: 50
 GROWTH_MAX_SPAWN_PER_TICK :: 32
 // At the unit cap or in a fully packed town, retry the spawn later instead of
 // scanning the whole town area every simulation tick.
-TOWN_GROWTH_FAIL_COOLDOWN :: 2.0
+TOWN_GROWTH_FAIL_COOLDOWN :: 2
 
 WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 	if deltaTime <= 0 do return
@@ -1171,10 +1369,15 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 	ProfilerEnd(stamp)
 }
 
+WorldCurrentTick :: proc(w: ^World) -> u64 {
+	return w.simulationTick + (w.simulationInTick ? 1 : 0)
+}
+
 // Call once after applying each lockstep command frame.
 WorldTick :: proc(w: ^World) {
 	tickStamp := ProfilerBegin("Sim:Tick")
-	w.simulationTime += TOWN_SIMULATION_STEP
+	w.simulationInTick = true
+	w.simulationTime = f32(f64(WorldCurrentTick(w))*TOWN_SIMULATION_STEP)
 	WorldAlertPrune(w)
 	w.dayTime += TOWN_SIMULATION_STEP
 	if w.dayTime >= f32(WORLD_DAY_LENGTH_SECONDS) {
@@ -1208,7 +1411,7 @@ WorldTick :: proc(w: ^World) {
 	stamp = ProfilerBegin("Sim:Lava")
 	// Lava damage is a slow environmental effect; a quarter of the rate keeps
 	// the same total damage without scanning every unit each tick.
-	if int(w.simulationTime/TOWN_SIMULATION_STEP)%4 == 0 {
+	if WorldCurrentTick(w)%4 == 0 {
 		WorldTerrainLavaUpdate(w, TOWN_SIMULATION_STEP*4)
 	}
 	ProfilerEnd(stamp)
@@ -1231,7 +1434,7 @@ WorldTick :: proc(w: ^World) {
 	WorldGasCloudUpdate(w, TOWN_SIMULATION_STEP)
 	ProfilerEnd(stamp)
 	stamp = ProfilerBegin("Sim:Fog")
-	if int(w.simulationTime/TOWN_SIMULATION_STEP)%FOG_UPDATE_INTERVAL == 0 {
+	if WorldCurrentTick(w)%FOG_UPDATE_INTERVAL == 0 {
 		FogUpdate(w)
 	}
 	ProfilerEnd(stamp)
@@ -1239,6 +1442,7 @@ WorldTick :: proc(w: ^World) {
 	WorldCheckGameEnd(w)
 	ProfilerEnd(stamp)
 	w.simulationTick += 1
+	w.simulationInTick = false
 	if w.simulationTick%WORLD_HASH_INTERVAL == 0 && profiler.file != nil {
 		buffer: [128]u8
 		line := fmt.bprintf(buffer[:], "WORLD HASH tick=%d hash=%016x\n", w.simulationTick, WorldStateHash(w))
@@ -1295,12 +1499,21 @@ TownHasNearbyEnemy :: proc(
 	chunkSize := w.spatial.chunkSize
 	if chunkSize <= 0 || w.spatial.chunksX <= 0 || w.spatial.chunksY <= 0 do return false, 0, 0
 	width, height := BuildingTileSize(TownHall{})
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	// The hall footprint is a box, so the unit delta is shrunk by its half size.
+	halfFootprintRawX := UnitRawDistance(f32(width-1)*0.5)
+	halfFootprintRawY := UnitRawDistance(f32(height-1)*0.5)
 
 	for circleIndex in 0..<TownAreaCircleCount(w, kingdom, townSlot) {
 		circleX, circleY, circleRadius := TownAreaCircle(w, kingdom, townSlot, circleIndex)
 		centerX := f32(circleX)+f32(width-1)*0.5
 		centerY := f32(circleY)+f32(height-1)*0.5
 		radius := f32(circleRadius)*TOWN_ALARM_AREA_FACTOR
+		radiusRaw := UnitRawDistance(radius)
+		radiusSquaredRaw := u64(radiusRaw)*u64(radiusRaw)
+		centerPositionX := PositionFromF32(centerX)
+		centerPositionY := PositionFromF32(centerY)
 		chunkRadius := int((radius+f32(max(width, height)))/f32(chunkSize))+1
 		centerChunkX, centerChunkY := int(centerX)/chunkSize, int(centerY)/chunkSize
 		for offsetX in 0..<min(chunkRadius*2+1, w.spatial.chunksX) {
@@ -1313,12 +1526,13 @@ TownHasNearbyEnemy :: proc(
 				for unit := w.spatial.unitHead[chunk]; unit >= 0; unit = w.spatial.unitNext[unit] {
 					if !w.unitUsed[unit] || UnitHiddenInside(w, unit) do continue
 					if !KingdomAtWar(w, kingdom, w.units[unit].kingdome) do continue
-					dx := math.abs(WorldShortestWrappedDelta(f32(int(w.units.x[unit]))-centerX, f32(w.maxX)))
-					dy := math.abs(WorldShortestWrappedDelta(f32(int(w.units.y[unit]))-centerY, f32(w.maxY)))
-					dx = max(0, dx-f32(width-1)*0.5)
-					dy = max(0, dy-f32(height-1)*0.5)
-					if dx*dx+dy*dy <= radius*radius {
-						return true, int(w.units.x[unit]), int(w.units.y[unit])
+					deltaX, validX := d32.ShortestWrappedDelta(w.units.x[unit], centerPositionX, worldWidthRaw)
+					deltaY, validY := d32.ShortestWrappedDelta(w.units.y[unit], centerPositionY, worldHeightRaw)
+					if !validX || !validY do continue
+					dx := max(0, abs(deltaX)-halfFootprintRawX)
+					dy := max(0, abs(deltaY)-halfFootprintRawY)
+					if u64(dx*dx)+u64(dy*dy) <= radiusSquaredRaw {
+						return true, UnitTileX(w, unit), UnitTileY(w, unit)
 					}
 				}
 			}
@@ -1328,7 +1542,7 @@ TownHasNearbyEnemy :: proc(
 }
 
 UnitUpdateSlice :: proc(w: ^World) -> int {
-	return int(w.simulationTime/TOWN_SIMULATION_STEP)%UNIT_UPDATE_SLICES
+	return int(WorldCurrentTick(w)%UNIT_UPDATE_SLICES)
 }
 
 // Hash the slot so contiguous spawn batches of one unit kind do not all land
@@ -1341,7 +1555,7 @@ UnitUpdateSliceOf :: proc(unitSlot: int) -> int {
 UnitLoopJob :: struct {
 	w:             ^World,
 	slice:         int,
-	tick:          int,
+	tick:          u64,
 	deltaTime:     f32,
 	shortageEpoch: int,
 	damageQueue:   ^PendingDamageQueue,
@@ -1368,7 +1582,7 @@ UnitLoopChunk :: proc(ctx: rawptr, start, end, worker: int) {
 		}
 		if UnitUpdateSliceOf(unitSlot) != job.slice do continue
 		stride := int(w.units.updateStride[unitSlot])
-		if stride > 1 && (job.tick/UNIT_UPDATE_SLICES)%stride != 0 do continue
+		if stride > 1 && (job.tick/UNIT_UPDATE_SLICES)%u64(stride) != 0 do continue
 		unitDelta := job.deltaTime*f32(UNIT_UPDATE_SLICES*stride)
 		w.units.previousX[unitSlot] = w.units.x[unitSlot]
 		w.units.previousY[unitSlot] = w.units.y[unitSlot]
@@ -1377,11 +1591,20 @@ UnitLoopChunk :: proc(ctx: rawptr, start, end, worker: int) {
 		// Town upkeep rides along with the unit's own slice instead of a second
 		// full-capacity scan in the kingdom pass.
 		UnitUpdateTownUpkeep(w, unitSlot, job.shortageEpoch, unitDelta)
-		w.units.decisionTimer[unitSlot] -= unitDelta
-		w.units.decisionReady[unitSlot] = w.units.decisionTimer[unitSlot] <= 0
+		w.units.decisionTimer[unitSlot] = max(
+			d32.Sub(w.units.decisionTimer[unitSlot], PositionFromF32(unitDelta)),
+			d32.ZERO,
+		)
+		w.units.decisionReady[unitSlot] = w.units.decisionTimer[unitSlot] <= d32.ZERO
 		if w.units.decisionReady[unitSlot] {
-			jitter := 0.75+WorldNoiseHash(unitSlot, job.tick, 0xD3C1)*0.5
-			w.units.decisionTimer[unitSlot] = CIVILIAN_DECISION_INTERVAL*jitter
+			jitter := d32.Add(
+				d32.FromRatio(3, 4),
+				d32.Mul(
+					PositionFromF32(WorldNoiseHash(unitSlot, int(job.tick), 0xD3C1)),
+					d32.FromRatio(1, 2),
+				),
+			)
+			w.units.decisionTimer[unitSlot] = d32.Mul(CIVILIAN_DECISION_INTERVAL, jitter)
 		}
 		unitKind := UnitKindOf(w.units[unitSlot].type)
 		profileIndex := -1
@@ -1456,8 +1679,8 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 	WorldTownAlarmUpdate(w)
 	ProfilerEnd(stamp)
 
-	tick := int(w.simulationTime/TOWN_SIMULATION_STEP)
-	slice := tick%UNIT_UPDATE_SLICES
+	tick := WorldCurrentTick(w)
+	slice := int(tick%UNIT_UPDATE_SLICES)
 	stamp = ProfilerBegin("Unit:Loop")
 	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdomSlot] do continue
@@ -1479,7 +1702,7 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		slice         = slice,
 		tick          = tick,
 		deltaTime     = deltaTime,
-		shortageEpoch = int(w.simulationTime/5),
+		shortageEpoch = int(tick/u64(5/TOWN_SIMULATION_STEP)),
 	}
 	// Unit updates observe and mutate shared state in slot order.
 	w.deferDespawn = true
@@ -1550,7 +1773,7 @@ TownUpdateSliceOf :: proc(kingdomSlot, townSlot: int) -> int {
 }
 
 WorldKingdomUpdate :: proc(w: ^World, deltaTime: f32) {
-	townSlice := int(w.simulationTime/TOWN_SIMULATION_STEP)%TOWN_UPDATE_SLICES
+	townSlice := int(WorldCurrentTick(w)%TOWN_UPDATE_SLICES)
 	townDelta := deltaTime*f32(TOWN_UPDATE_SLICES)
 	stamp := ProfilerBegin("Kingdom:Towns")
 	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
@@ -1584,7 +1807,7 @@ WorldHousingUpdate :: proc(w: ^World) {
 	for home in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[home] do continue
 		building := &w.buildings[home]
-		if BuildingKindOf(building.type) != .Home || building.health <= 0 ||
+		if BuildingKindOf(building.type) != .Home || building.health <= d32.ZERO ||
 			!WorldTownExists(w, building.kingdom, building.town) {
 			continue
 		}
@@ -1607,13 +1830,15 @@ WorldHousingUpdate :: proc(w: ^World) {
 	for &kingdom in freeHome do for &town in kingdom do town = -1
 	nextHome := make([]int, BUILDING_CAPACITY)
 	defer delete(nextHome)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	for home in 0..<BUILDING_CAPACITY {
 		if !w.buildingUsed[home] do continue
 		building := &w.buildings[home]
 		resident := building.homeResident-1
 		if resident >= 0 && resident < UNIT_CAPACITY && UnitHome(w, resident) == home do continue
 		building.homeResident = 0
-		if BuildingKindOf(building.type) != .Home || building.health <= 0 ||
+		if BuildingKindOf(building.type) != .Home || building.health <= d32.ZERO ||
 			!WorldTownExists(w, building.kingdom, building.town) {
 			continue
 		}
@@ -1627,11 +1852,17 @@ WorldHousingUpdate :: proc(w: ^World) {
 		head := &freeHome[unit.kingdome][unit.town]
 		// Only newly assigned citizens search; existing reservations never shuffle.
 		best, previous, bestPrevious := -1, -1, -1
-		bestDistance: f32 = 0
+		bestDistance: u64 = 0
 		for home := head^; home >= 0; home = nextHome[home] {
-			dx := WorldShortestWrappedDelta(f32(w.buildings.x[home])+0.5-unit.x, f32(w.maxX))
-			dy := WorldShortestWrappedDelta(f32(w.buildings.y[home])+0.5-unit.y, f32(w.maxY))
-			distance := dx*dx+dy*dy
+			distance, validDistance := d32.WrappedDistanceSquared(
+				w.units.x[slot],
+				w.units.y[slot],
+				TileCenterPosition(w.buildings.x[home]),
+				TileCenterPosition(w.buildings.y[home]),
+				worldWidthRaw,
+				worldHeightRaw,
+			)
+			assert(validDistance)
 			if best < 0 || distance < bestDistance {
 				best, bestPrevious, bestDistance = home, previous, distance
 			}
@@ -1713,8 +1944,8 @@ WorldConversionAssign :: proc(w: ^World) {
 				height,
 				unit.type,
 				unit.kingdome,
-				int(WorldWrapPosition(unit.x, f32(w.maxX))),
-				int(WorldWrapPosition(unit.y, f32(w.maxY))),
+				UnitTileX(w, unitSlot),
+				UnitTileY(w, unitSlot),
 			)
 			if !found do continue
 
@@ -1736,60 +1967,91 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	weather := WorldWeatherEffects(w)
 	eventFood, eventWater, eventGrowth := EnvironmentEventTownFactors(w, kingdomSlot, townSlot)
-	weather.food *= eventFood
-	weather.water *= eventWater
-	weather.growth *= eventGrowth
+	weather.food = d32.Mul(weather.food, eventFood)
+	weather.water = d32.Mul(weather.water, eventWater)
+	weather.growth = d32.Mul(weather.growth, eventGrowth)
 
 	workingFarmlands := min(town.farmlands, town.farmers)
 
 	// Blockade is a visible town-level condition with a fixed multiplier.
-	blockadeFactor: f32 = 1
-	if town.blockadeUntil > w.simulationTime do blockadeFactor = 0.5
+	blockadeFactor := d32.ONE
+	if town.blockadeUntilTick > WorldCurrentTick(w) do blockadeFactor = d32.HALF
 
-	town.foodPotential = 0
+	town.foodPotential = d32.ZERO
 	if town.farmlands > 0 {
-		town.foodPotential = town.farmlandOutput*f32(workingFarmlands)/f32(town.farmlands)
+		share := d32.FromRatio(i32(workingFarmlands), i32(town.farmlands))
+		town.foodPotential = d32.Mul(town.farmlandOutput, share)
 	}
-	town.foodPotential *= KingdomTechFoodMultiplier(w, kingdomSlot, townSlot)*blockadeFactor*weather.food
+	// All weather and event factors are already Q16.16; each multiply truncates.
+	foodMultiplier := d32.Mul(KingdomTechFoodMultiplier(w, kingdomSlot, townSlot), blockadeFactor)
+	foodMultiplier = d32.Mul(foodMultiplier, weather.food)
+	town.foodPotential = d32.Mul(town.foodPotential, foodMultiplier)
 	waterStamp := ProfilerBegin("Town:WaterAccess")
 	waterAccess := TownWaterAccess(w, kingdomSlot, townSlot)
 	ProfilerEnd(waterStamp)
-	town.waterPotential =
-		TownWaterCollectorOutput(waterAccess)*
-		f32(town.waterCollectors)*KingdomTechWaterMultiplier(w, kingdomSlot, townSlot)*
-		blockadeFactor*weather.water
+	town.waterPotential = d32.Mul(
+		TownWaterCollectorOutput(waterAccess),
+		d32.FromInt(i32(town.waterCollectors)),
+	)
+	town.waterPotential = d32.Mul(
+		town.waterPotential,
+		KingdomTechWaterMultiplier(w, kingdomSlot, townSlot),
+	)
+	town.waterPotential = d32.Mul(town.waterPotential, blockadeFactor)
+	town.waterPotential = d32.Mul(town.waterPotential, weather.water)
 
 	if TownFindBuilding(w, kingdomSlot, townSlot, .Harbor) >= 0 {
-		town.wood += 0.05*deltaTime*weather.harbor
+		// Quantize each tick's income before accumulating; per-tick error is at
+		// most half a raw unit and the fixed tick order keeps it deterministic.
+		income := d32.Mul(
+			d32.Mul(d32.FromRatio(1, 20), weather.harbor),
+			PositionFromF32(deltaTime),
+		)
+		town.wood = d32.Add(town.wood, income)
 	}
 	FishingFlotillaFx(w, kingdomSlot, townSlot)
 	town.foodShortage = TownResourceShortage(town.foodPotential, town.citizens)
 	town.waterShortage = TownResourceShortage(town.waterPotential, town.citizens)
 
 	era := TownEra(w, kingdomSlot, townSlot)
-	town.growthInterval = TOWN_ERAS[era].interval
+	town.growthInterval = d32.FromInt(i32(TOWN_ERAS[era].interval))
 	town.growthBatch = TownEffectiveBatch(w, kingdomSlot, townSlot)
-	town.growthRate = f32(town.growthBatch)/town.growthInterval
+	town.growthRate = d32.Div(d32.FromInt(i32(town.growthBatch)), town.growthInterval)
 
-	populationNeed := f32(town.citizens+town.growthBatch)*GROWTH_FOOD_PER_CITIZEN
+	populationNeed := d32.FromRatio(
+		i32(town.citizens+town.growthBatch)*GROWTH_FOOD_PER_CITIZEN_MILLE,
+		1000,
+	)
 	canGrow := town.foodPotential >= populationNeed && town.waterPotential >= populationNeed
 	limitingSupply := min(town.foodPotential, town.waterPotential)
-	coverage: f32 = 1
-	if populationNeed > 0 {
-		coverage = clamp(limitingSupply/populationNeed, 0, 1.5)
+	coverage := d32.ONE
+	if populationNeed > d32.ZERO {
+		coverage = clamp(d32.Div(limitingSupply, populationNeed), d32.ZERO, d32.FromRatio(3, 2))
 	}
 	// A town always grows at least at the minimum speed, even with no food or
 	// water at all, so a bad start cannot permanently strand it.
-	speed := clamp(coverage, GROWTH_MIN_SPEED, GROWTH_MAX_SPEED)
-	speed *= 1+min(GROWTH_VILLAGER_SPEED_CAP, f32(town.villagers)*GROWTH_VILLAGER_SPEED_BONUS)
-	if town.blockadeUntil > w.simulationTime do speed *= 0.75
-	speed *= weather.growth
+	speed := clamp(
+		coverage,
+		d32.FromRatio(GROWTH_MIN_SPEED_PERCENT, 100),
+		d32.FromRatio(GROWTH_MAX_SPEED_PERCENT, 100),
+	)
+	villagerBonus := min(
+		d32.FromRatio(GROWTH_VILLAGER_SPEED_CAP_PERCENT, 100),
+		d32.FromRatio(i32(town.villagers)*GROWTH_VILLAGER_SPEED_BONUS_MILLE, 1000),
+	)
+	speed = d32.Mul(speed, d32.Add(d32.ONE, villagerBonus))
+	if town.blockadeUntilTick > WorldCurrentTick(w) {
+		speed = d32.Mul(speed, d32.FromRatio(75, 100))
+	}
+	speed = d32.Mul(speed, weather.growth)
 	isNight := WorldIsNight(w)
-	if isNight do speed = 0
+	if isNight do speed = d32.ZERO
 	town.growthSpeed = speed
 
-	town.growthCooldown -= deltaTime*speed
-	if !isNight && weather.growth > 0.01 && town.growthCooldown <= 0 {
+	// deltaTime stays f32; the whole tick's cooldown decrement is quantized once.
+	decrement := d32.Mul(PositionFromF32(deltaTime), speed)
+	town.growthCooldown = d32.Sub(town.growthCooldown, decrement)
+	if !isNight && weather.growth > d32.FromRatio(1, 100) && town.growthCooldown <= d32.ZERO {
 		if town.growthPending <= 0 do town.growthPending = town.growthBatch
 		spawnNow := min(town.growthPending, GROWTH_MAX_SPAWN_PER_TICK)
 		spawned := TownSpawnCitizens(w, kingdomSlot, townSlot, spawnNow)
@@ -1802,32 +2064,34 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 				town.growthPending = 0
 				town.growthCooldown = town.growthInterval
 			} else {
-				town.growthCooldown = 0
+				town.growthCooldown = d32.ZERO
 			}
 		} else {
-			town.growthCooldown = TOWN_GROWTH_FAIL_COOLDOWN
+			town.growthCooldown = d32.FromInt(TOWN_GROWTH_FAIL_COOLDOWN)
 		}
 	}
 
 	if town.builders > 0 {
-		town.constructionProgress += f32(town.builders)*deltaTime
-		updateTick := int(w.simulationTime/TOWN_SIMULATION_STEP)/TOWN_UPDATE_SLICES
-		phase := (updateTick+kingdomSlot*TOWN_CAPACITY+townSlot)%
+		town.constructionProgress = d32.Add(
+			town.constructionProgress,
+			PositionFromF32(f32(town.builders)*deltaTime),
+		)
+		updateTick := WorldCurrentTick(w)/TOWN_UPDATE_SLICES
+		phase := (updateTick+u64(kingdomSlot*TOWN_CAPACITY+townSlot))%
 			TOWN_CONSTRUCTION_ATTEMPT_INTERVAL
-		if w.simulationTime >= town.constructionFailUntil &&
-			town.constructionProgress >= 3 && phase == 0 {
+		if WorldCurrentTick(w) >= town.constructionFailUntilTick &&
+			town.constructionProgress >= d32.FromInt(3) && phase == 0 {
 			constructionStamp := ProfilerBegin("Town:Construction")
 			if TownBuilderConstruct(w, kingdomSlot, townSlot, canGrow) {
-				town.constructionProgress -= 3
-				town.constructionFailUntil = 0
+				town.constructionProgress = d32.Sub(town.constructionProgress, d32.FromInt(3))
+				town.constructionFailUntilTick = 0
 			} else {
-				town.constructionProgress = min(town.constructionProgress, 3)
-				town.constructionFailUntil = w.simulationTime+
-					TOWN_CONSTRUCTION_FAIL_COOLDOWN
+				town.constructionProgress = min(town.constructionProgress, d32.FromInt(3))
+				town.constructionFailUntilTick = WorldCurrentTick(w)+TOWN_CONSTRUCTION_FAIL_TICKS
 			}
 			ProfilerEnd(constructionStamp)
 		} else {
-			town.constructionProgress = min(town.constructionProgress, 3)
+			town.constructionProgress = min(town.constructionProgress, d32.FromInt(3))
 		}
 	}
 
@@ -1837,29 +2101,30 @@ KingdomTownUpdate :: proc(w: ^World, kingdomSlot, townSlot: int, deltaTime: f32)
 }
 
 
-TownResourceShortage :: proc(potential: f32, citizens: int) -> f32 {
-	need := f32(citizens)*0.025
-	if need <= 0 do return 0
-	return clamp(1-potential/need, 0, 1)
+TownResourceShortage :: proc(potential: d32.Value, citizens: int) -> d32.Value {
+	need := d32.FromRatio(i32(citizens)*GROWTH_FOOD_PER_CITIZEN_MILLE, 1000)
+	if need <= d32.ZERO do return d32.ZERO
+	return clamp(d32.Sub(d32.ONE, d32.Div(potential, need)), d32.ZERO, d32.ONE)
 }
 
 // Each collector produces a baseline even with no fresh water in reach; nearby
 // lakes and rivers add the rest. Island towns therefore keep growing, just on a
 // smaller and more expensive water supply.
-WATER_COLLECTOR_MAX_OUTPUT :: 0.20
-WATER_COLLECTOR_DRY_OUTPUT :: 0.10
+WATER_COLLECTOR_MAX_OUTPUT_PERCENT :: 20
+WATER_COLLECTOR_DRY_OUTPUT_PERCENT :: 10
 
-TownWaterCollectorOutput :: proc(waterAccess: f32) -> f32 {
-	access := clamp(waterAccess, 0, 1)
-	return WATER_COLLECTOR_DRY_OUTPUT+
-		(WATER_COLLECTOR_MAX_OUTPUT-WATER_COLLECTOR_DRY_OUTPUT)*access
+TownWaterCollectorOutput :: proc(waterAccess: d32.Value) -> d32.Value {
+	access := clamp(waterAccess, d32.ZERO, d32.ONE)
+	maximum := d32.FromRatio(WATER_COLLECTOR_MAX_OUTPUT_PERCENT, 100)
+	dry := d32.FromRatio(WATER_COLLECTOR_DRY_OUTPUT_PERCENT, 100)
+	return d32.Add(dry, d32.Mul(d32.Sub(maximum, dry), access))
 }
 
 // Water farther than this cannot realistically supply a town, and scanning the
 // whole world per town made the first simulation tick extremely slow.
 TOWN_WATER_SEARCH_RADIUS :: 64
 
-TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
+TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> d32.Value {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	if town.waterAccessCached && town.waterAccessTerrainRevision == w.terrainRevision {
 		return town.waterAccess
@@ -1867,12 +2132,12 @@ TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
-	if worldWidth <= 0 || worldHeight <= 0 do return 0
+	if worldWidth <= 0 || worldHeight <= 0 do return d32.ZERO
 
 	centerX := town.x+2
 	centerY := town.y+2
 	radius := min(TOWN_WATER_SEARCH_RADIUS, min(worldWidth, worldHeight))
-	nearestDistanceSquared: f32 = 0
+	nearestDistanceSquared := 0
 	foundWater := false
 	for offsetX in -radius..=radius {
 		x := WorldWrapCoordinate(centerX+offsetX, worldWidth)
@@ -1880,9 +2145,7 @@ TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 			y := WorldWrapCoordinate(centerY+offsetY, worldHeight)
 			tileType := WorldTileAt(w, x, y).type
 			if TILE_DEFS[tileType].water <= 0 do continue
-			deltaX := f32(offsetX)
-			deltaY := f32(offsetY)
-			distanceSquared := deltaX*deltaX + deltaY*deltaY
+			distanceSquared := offsetX*offsetX + offsetY*offsetY
 			if !foundWater || distanceSquared < nearestDistanceSquared {
 				nearestDistanceSquared = distanceSquared
 				foundWater = true
@@ -1890,8 +2153,12 @@ TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 		}
 	}
 
-	town.waterAccess = 0
-	if foundWater do town.waterAccess = 1/(1+math.sqrt(nearestDistanceSquared))
+	town.waterAccess = d32.ZERO
+	if foundWater {
+		// Sqrt rounds down and Div truncates, so access never overestimates.
+		distance := d32.Sqrt(d32.FromInt(i32(nearestDistanceSquared)))
+		town.waterAccess = d32.Div(d32.ONE, d32.Add(d32.ONE, distance))
+	}
 	town.waterAccessTerrainRevision = w.terrainRevision
 	town.waterAccessCached = true
 	return town.waterAccess
@@ -1911,7 +2178,7 @@ TownSpawnCitizen :: proc(w: ^World, kingdomSlot, townSlot: int, role: UnitType) 
 		if x < 0 || y < 0 || x >= worldWidth || y >= worldHeight do continue
 		if !UnitValidTileType(role, WorldTileAt(w, x, y).type) || WorldTileOccupied(w, x, y) do continue
 		if WorldUnitAtTile(w, x, y) do continue
-		if unitSlot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdomSlot, townSlot); ok {
+		if unitSlot, ok := UnitSpawn(w, role, TileCenterPosition(x), TileCenterPosition(y), kingdomSlot, townSlot); ok {
 			return unitSlot
 		}
 	}
@@ -1926,7 +2193,7 @@ TownSpawnCitizen :: proc(w: ^World, kingdomSlot, townSlot: int, role: UnitType) 
 				if x >= town.x && x < town.x+4 && y >= town.y && y < town.y+4 do continue
 				if !UnitValidTileType(role, WorldTileAt(w, x, y).type) || WorldTileOccupied(w, x, y) do continue
 				if WorldUnitAtTile(w, x, y) do continue
-				if unitSlot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdomSlot, townSlot); ok {
+				if unitSlot, ok := UnitSpawn(w, role, TileCenterPosition(x), TileCenterPosition(y), kingdomSlot, townSlot); ok {
 					return unitSlot
 				}
 			}
@@ -1945,7 +2212,7 @@ TownSpawnCitizen :: proc(w: ^World, kingdomSlot, townSlot: int, role: UnitType) 
 			if !TownPointInArea(w, kingdomSlot, townSlot, x, y) do continue
 			if !UnitValidTileType(role, WorldTileAt(w, x, y).type) || WorldTileOccupied(w, x, y) do continue
 			if WorldUnitAtTile(w, x, y) do continue
-			if unitSlot, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdomSlot, townSlot); ok {
+			if unitSlot, ok := UnitSpawn(w, role, TileCenterPosition(x), TileCenterPosition(y), kingdomSlot, townSlot); ok {
 				return unitSlot
 			}
 		}

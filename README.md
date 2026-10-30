@@ -88,13 +88,29 @@ Done when: no `rl.GetTime()` outside `profiler.odin`, the `crazy_world.odin` log
 
 ## Phase 5 - Float and trig portability
 
-Goal: decide the precision contract before networking exists.
+Goal: cross-platform gameplay using fixed-width integer and fixed-point math.
 
-- Sim math is all f32. Same binary on the same platform is deterministic; a different OS, arch or libm is not.
-- `math.sqrt`, `math.atan2` and `math.sin`/`math.cos` appear in movement and combat (`UnitWarriorEngage` melee fan, `UnitMove`, separation).
-- Either restrict lockstep to identical builds, or replace the sim's trig with deterministic approximations.
+Numeric contract:
 
-Done when: the chosen contract is written here and enforced by the build.
+- `d32` provides signed Q16.16 arithmetic, wide wrapped geometry, integer square roots and integer-only trigonometry. See `d32/README.md`.
+- Unit positions and previous positions are `d32`. All authoritative position updates, wrapped deltas, squared distances and range tests use integer raw units.
+- Unit, building and decoration health are `d32`. Town wood and food/water/growth state are `d32`. Damage, costs and production are quantized once at their boundary and accumulated with fixed-point arithmetic.
+- Unit, building and order cooldowns and timers, construction/combat progress, hazard/fire/gas lifetimes, town order wards, weather and environment state are `d32`. `deltaTime` is quantized once per update.
+- `CommandUseOrder` and `BuildingOrder` targets are `d32`. UI mouse positions are quantized once at command creation; AI emits fixed-point town centers.
+- Gameplay placement, target selection, AI scoring, hazard areas, fire spread, order impacts and generation choices no longer use `math.sqrt`, `math.atan2`, `math.sin` or `math.cos`; presentation-only effects still may.
+- Randomness uses integer hashes (`WorldNoiseHashInt`) and fixed-point conversion. Long-lived scheduling uses integer ticks; presentation interpolation still uses `simulationTime`.
+- Worlds are limited to 32,768 tiles per dimension and 2^28 total tiles so Q16.16 coordinates and path costs stay in range.
+- Remaining binary32 use is limited to `deltaTime` and effect/presentation APIs: authored ranges, body radii, vision, tile water/fire risk and hazard/effect coordinates are converted once where they enter fixed-point thresholds. This section assumes IEEE-754 basic operations without contraction and has not been verified on another OS, architecture or compiler build.
+
+Behavior changes: fixed-point quantization and integer comparisons can select different targets, impacts, growth batches, AI decisions and generation layouts than earlier float builds, including for existing seeds.
+
+Remaining work before cross-platform lockstep:
+
+- Verify the binary32 boundary contract across every supported build (the remaining conversions are quantization boundaries, not gameplay decisions).
+- Version the numeric, generation, command and hash schemas.
+- Compare initial-state and per-tick hashes across Windows and Linux builds, then macOS and ARM, with and without the worker pool.
+
+Done when: authoritative gameplay and initialization follow the contract and matching inputs produce matching hashes on every supported target.
 
 ## Phase 6 - Input as commands
 

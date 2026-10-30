@@ -1,6 +1,6 @@
 package main
 
-import "core:math"
+import "d32"
 
 TOWN_CAPACITY :: 100
 TOWN_WARRIOR_ORDERS_CAPACITY :: 16
@@ -12,7 +12,8 @@ TOWN_WOOD_TARGET :: 60
 // A town's area is a union of circles: its primary hall plus one circle for
 // every absorbed town. All circles expand together with town milestones.
 MAX_TOWN_DISTRICTS :: 16
-TOWN_DISTRICT_GROWTH_BONUS :: 0.10
+TOWN_DISTRICT_GROWTH_DENOMINATOR :: 10
+TOWN_DISTRICT_GROWTH_BONUS :: 1.0/TOWN_DISTRICT_GROWTH_DENOMINATOR
 
 // Fusion is a late-game consolidation sink. Both towns must be in this era.
 TOWN_FUSION_ERA :: 5
@@ -56,7 +57,7 @@ INDEPENDENT_REWARD_VILLAGERS_MAX :: 3
 GrowthEra :: struct {
 	threshold: int,
 	batch:     int,
-	interval:  f32,
+	interval:  int, // Seconds, converted to Q16.16 where the town stores it
 }
 
 TOWN_ERAS := [6]GrowthEra{
@@ -202,10 +203,10 @@ ConstructionSite :: struct {
 	active:      bool, // false marks a free slot; keeps builder site indices stable
 	kind:        BuildingKind,
 	x, y:        int,
-	paid:        f32,
+	paid:        d32.Value,
 	settlers:    int,
-	clearWork:   f32,
-	buildWork:   f32,
+	clearWork:   d32.Value,
+	buildWork:   d32.Value,
 	accessReady: bool, // Cached work access point
 	accessX:     int,
 	accessY:     int,
@@ -225,6 +226,10 @@ TOWN_CONSTRUCTION_ATTEMPT_INTERVAL :: 4/TOWN_UPDATE_SLICES
 TOWN_CONSTRUCTION_FAIL_COOLDOWN :: 2.0
 // A kind with no valid site is skipped for a while instead of resampling.
 TOWN_SITE_FAIL_COOLDOWN :: 2.0
+TOWN_CONSTRUCTION_FAIL_TICKS :: u64(TOWN_CONSTRUCTION_FAIL_COOLDOWN/TOWN_SIMULATION_STEP)
+TOWN_SITE_FAIL_TICKS :: u64(TOWN_SITE_FAIL_COOLDOWN/TOWN_SIMULATION_STEP)
+#assert(f64(TOWN_CONSTRUCTION_FAIL_TICKS) == TOWN_CONSTRUCTION_FAIL_COOLDOWN/TOWN_SIMULATION_STEP)
+#assert(f64(TOWN_SITE_FAIL_TICKS) == TOWN_SITE_FAIL_COOLDOWN/TOWN_SIMULATION_STEP)
 
 TOWN_SITE_POOL_CAPACITY :: 32
 
@@ -244,20 +249,20 @@ Town :: struct {
 	x, y: int,
 	hallSlot: int,
 	citizens: int,
-	wood: f32,
-	growthCooldown, growthInterval, growthRate, growthSpeed: f32,
+	wood: d32.Value,
+	growthCooldown, growthInterval, growthRate, growthSpeed: d32.Value,
 	growthBatch, growthBatchBonus, growthPending: int,
-	constructionProgress: f32,
-	constructionFailUntil: f32, // Skip all site searches until this time
-	siteFailUntil: [BuildingKind]f32, // Per-kind retry time after a failed search
-	pathSearchFailUntil: f32, // Street extension search retry time
-	woodSearchFailUntil: f32, // Tree search retry time when the town is bare
+	constructionProgress: d32.Value,
+	constructionFailUntilTick: u64, // Skip all site searches until this tick
+	siteFailUntilTick: [BuildingKind]u64, // Per-kind retry tick after a failed search
+	pathSearchFailUntilTick: u64, // Street extension search retry tick
+	woodSearchFailUntilTick: u64, // Tree search retry tick when the town is bare
 	// Water collectors share one shore and one hall entrance until the terrain
 	// changes, so their searches run once per town instead of once per unit.
 	waterSourceX, waterSourceY: int,
 	waterSourceRevision: u64,
 	waterSourceReady: bool,
-	waterSearchFailUntil: f32,
+	waterSearchFailUntilTick: u64,
 	returnPointX, returnPointY: int,
 	returnPointRevision: u64,
 	returnPointReady: bool,
@@ -270,20 +275,20 @@ Town :: struct {
 	farmersBySlice:          [UNIT_UPDATE_SLICES]int,
 	villagersBySlice:        [UNIT_UPDATE_SLICES]int,
 	homes, farmlands: int,
-	farmlandOutput: f32,
-	foodPotential, waterPotential: f32,
-	waterAccess: f32,
+	farmlandOutput: d32.Value,
+	foodPotential, waterPotential: d32.Value,
+	waterAccess: d32.Value,
 	waterAccessTerrainRevision: u64,
 	waterAccessCached: bool,
-	foodShortage, waterShortage: f32,
+	foodShortage, waterShortage: d32.Value,
 	coastal: bool,
 	coastalCached: bool,
 	coastalTerrainRevision: u64,
 	coastalAreaRadius, coastalDistricts: int,
-	blockadeUntil: f32,
+	blockadeUntilTick: u64,
 	blockadeBy: int,
-	orderWard: f32,
-	orderWardRegenDelay: f32,
+	orderWard: d32.Value,
+	orderWardRegenDelay: d32.Value,
 	aegisFlash: f32,
 	aegisFlashX: f32,
 	aegisFlashY: f32,
@@ -325,7 +330,7 @@ TownStart :: proc(w: ^World, x, y: int, kingdomSlot: int) -> (int, bool) {
 	bId, ok := BuildingSpawn(w, x, y, TownHall{}, kingdomSlot, i)
 	if !ok do return 0, false
 
-	TownInitialize(w, kingdomSlot, i, bId, x, y, 35)
+	TownInitialize(w, kingdomSlot, i, bId, x, y, d32.FromInt(35))
 	w.kingdoms[kingdomSlot].townUsed[i] = true
 	return i, true
 }
@@ -367,7 +372,7 @@ IndependentTownSpawn :: proc(w: ^World, x, y: int) -> (int, bool) {
 	hallSlot, ok := BuildingSpawn(w, x, y, TownHall{}, NEUTRAL_KINGDOM, townSlot)
 	if !ok do return 0, false
 
-	TownInitialize(w, NEUTRAL_KINGDOM, townSlot, hallSlot, x, y, 0)
+	TownInitialize(w, NEUTRAL_KINGDOM, townSlot, hallSlot, x, y, d32.ZERO)
 	w.kingdoms[NEUTRAL_KINGDOM].townUsed[townSlot] = true
 
 	homeRoll := WorldNoiseHash(x, y, w.seed+0x1D5)
@@ -458,13 +463,23 @@ IndependentTownDefeat :: proc(w: ^World, townSlot, destroyer: int) {
 
 IndependentTownRewardTown :: proc(w: ^World, kingdomSlot, x, y: int) -> int {
 	best := -1
-	bestDistance: f32 = 0
+	bestDistance: u64 = 0
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	originX := d32.FromInt(i32(x))
+	originY := d32.FromInt(i32(y))
 	for townSlot in 0..<TOWN_CAPACITY {
 		if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 		town := &w.kingdoms[kingdomSlot].towns[townSlot]
-		deltaX := WorldShortestWrappedDelta(f32(town.x)-f32(x), f32(w.maxX))
-		deltaY := WorldShortestWrappedDelta(f32(town.y)-f32(y), f32(w.maxY))
-		distance := deltaX*deltaX+deltaY*deltaY
+		distance, valid := d32.WrappedDistanceSquared(
+			originX,
+			originY,
+			d32.FromInt(i32(town.x)),
+			d32.FromInt(i32(town.y)),
+			worldWidthRaw,
+			worldHeightRaw,
+		)
+		if !valid do continue
 		if best < 0 || distance < bestDistance {
 			best = townSlot
 			bestDistance = distance
@@ -474,7 +489,7 @@ IndependentTownRewardTown :: proc(w: ^World, kingdomSlot, x, y: int) -> int {
 }
 
 // Shared town setup for the initial kingdom spawn and for founded towns.
-TownInitialize :: proc(w: ^World, kingdomSlot, townSlot, hallSlot, x, y: int, startingWood: f32) {
+TownInitialize :: proc(w: ^World, kingdomSlot, townSlot, hallSlot, x, y: int, startingWood: d32.Value) {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	town^ = Town{
 		x = x,
@@ -490,12 +505,12 @@ TownInitialize :: proc(w: ^World, kingdomSlot, townSlot, hallSlot, x, y: int, st
 	if KingdomHasTech(w, kingdomSlot, .Metropolis) do town.areaRadius += 1
 	town.buildingSlots[.TownHall] = hallSlot
 	town.buildingCounts[.TownHall] = 1
-	town.orderWard = TownAegisMax(w, kingdomSlot, townSlot)
-	town.growthCooldown = TOWN_ERAS[0].interval
-	town.growthInterval = TOWN_ERAS[0].interval
+	town.orderWard = PositionFromF32(TownAegisMax(w, kingdomSlot, townSlot))
+	town.growthCooldown = d32.FromInt(i32(TOWN_ERAS[0].interval))
+	town.growthInterval = town.growthCooldown
 	town.growthBatch = TOWN_ERAS[0].batch
-	town.growthRate = f32(town.growthBatch)/town.growthInterval
-	town.growthSpeed = 1
+	town.growthRate = d32.Div(d32.FromInt(i32(town.growthBatch)), town.growthInterval)
+	town.growthSpeed = d32.ONE
 	NameTownAssign(w, kingdomSlot, townSlot)
 }
 
@@ -531,19 +546,20 @@ TownAegisMax :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 TownAegisAbsorb :: proc(w: ^World, kingdomSlot, townSlot: int, cost, x, y: f32) -> f32 {
 	if cost <= 0 || !WorldTownExists(w, kingdomSlot, townSlot) do return 0
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	maximum := TownAegisMax(w, kingdomSlot, townSlot)
-	if maximum <= 0 || town.orderWard <= 0 do return 0
+	maximum := PositionFromF32(TownAegisMax(w, kingdomSlot, townSlot))
+	if maximum <= d32.ZERO || town.orderWard <= d32.ZERO do return 0
 
+	costValue := PositionFromF32(cost)
 	before := town.orderWard
-	spend := min(town.orderWard, cost)
-	mitigation := clamp(spend/cost, 0, TOWN_AEGIS_MAX_MITIGATION)
-	town.orderWard = max(town.orderWard-spend, 0)
-	town.orderWardRegenDelay = TOWN_AEGIS_REGEN_DELAY
+	spend := min(town.orderWard, costValue)
+	mitigation := clamp(PositionToF32(d32.Div(spend, costValue)), 0, TOWN_AEGIS_MAX_MITIGATION)
+	town.orderWard = max(d32.Sub(town.orderWard, spend), d32.ZERO)
+	town.orderWardRegenDelay = d32.FromInt(i32(TOWN_AEGIS_REGEN_DELAY))
 	town.aegisFlash = 0.65
 	town.aegisFlashX = x
 	town.aegisFlashY = y
 	TownAegisAbsorbBurst(w, x, y)
-	if before > 0 && town.orderWard <= 0 {
+	if before > d32.ZERO && town.orderWard <= d32.ZERO {
 		centerX, centerY, radius := TownAreaCircle(w, kingdomSlot, townSlot, 0)
 		TownAegisShatterBurst(w, kingdomSlot, f32(centerX), f32(centerY), f32(radius))
 	}
@@ -551,24 +567,26 @@ TownAegisAbsorb :: proc(w: ^World, kingdomSlot, townSlot: int, cost, x, y: f32) 
 }
 
 WorldAegisUpdate :: proc(w: ^World, deltaTime: f32) {
+	step := PositionFromF32(deltaTime)
 	for kingdomSlot in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[kingdomSlot] do continue
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			maximum := TownAegisMax(w, kingdomSlot, townSlot)
+			maximum := PositionFromF32(TownAegisMax(w, kingdomSlot, townSlot))
 			town.aegisFlash = max(town.aegisFlash-deltaTime, 0)
-			if maximum <= 0 {
-				town.orderWard = 0
+			if maximum <= d32.ZERO {
+				town.orderWard = d32.ZERO
 				continue
 			}
-			if town.orderWardRegenDelay > 0 {
-				town.orderWardRegenDelay = max(town.orderWardRegenDelay-deltaTime, 0)
+			if town.orderWardRegenDelay > d32.ZERO {
+				town.orderWardRegenDelay = max(d32.Sub(town.orderWardRegenDelay, step), d32.ZERO)
 			} else {
-				town.orderWard = min(
-					town.orderWard+TOWN_AEGIS_REGEN_PER_SECOND*deltaTime,
-					maximum,
+				regen := d32.Mul(
+					d32.FromRatio(i32(TOWN_AEGIS_REGEN_PER_SECOND*100), 100),
+					step,
 				)
+				town.orderWard = min(d32.Add(town.orderWard, regen), maximum)
 			}
 			town.orderWard = min(town.orderWard, maximum)
 		}
@@ -585,10 +603,13 @@ TownBaseBatch :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {
 // are unaffected.
 TownEffectiveBatch :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	base := f32(TownBaseBatch(w, kingdomSlot, townSlot))
-	halls := f32(town.buildingCounts[.DistrictHall])
-	growth := KingdomTechGrowthMultiplier(w, kingdomSlot, townSlot)
-	return max(1, int(math.round(base*(1+TOWN_DISTRICT_GROWTH_BONUS*halls)*growth)))
+	base := i64(TownBaseBatch(w, kingdomSlot, townSlot))
+	halls := i64(town.buildingCounts[.DistrictHall])
+	growthNumerator, growthDenominator := KingdomTechGrowthRatio(w, kingdomSlot, townSlot)
+	numerator := base*(TOWN_DISTRICT_GROWTH_DENOMINATOR+halls)*growthNumerator
+	denominator := TOWN_DISTRICT_GROWTH_DENOMINATOR*growthDenominator
+	// Round once, with positive half values rounded up.
+	return max(1, int((numerator+denominator/2)/denominator))
 }
 
 KingdomFreeTownSlot :: proc(w: ^World, kingdomSlot: int) -> int {
@@ -614,11 +635,11 @@ KingdomTownCount :: proc(w: ^World, kingdomSlot: int) -> int {
 
 // The first charter costs the base price; every town already owned beyond that
 // adds a fixed increment, so wide expansion gets steadily more expensive.
-TownFoundingWoodCost :: proc(w: ^World, kingdomSlot: int) -> f32 {
+TownFoundingWoodCost :: proc(w: ^World, kingdomSlot: int) -> d32.Value {
 	towns := max(KingdomTownCount(w, kingdomSlot)-1, 0)
-	base := f32(TOWN_FOUNDING_WOOD+TOWN_FOUNDING_WOOD_PER_TOWN*towns)
-	base *= KingdomTechFoundingCostMultiplier(w, kingdomSlot)
-	if KingdomHasHarbor(w, kingdomSlot) do base *= 0.80
+	base := d32.FromInt(i32(TOWN_FOUNDING_WOOD+TOWN_FOUNDING_WOOD_PER_TOWN*towns))
+	base = d32.Mul(base, KingdomTechFoundingCostMultiplier(w, kingdomSlot))
+	if KingdomHasHarbor(w, kingdomSlot) do base = d32.Mul(base, d32.FromRatio(80, 100))
 	return base
 }
 
@@ -629,10 +650,11 @@ TownFoundingSettlers :: proc(w: ^World, kingdomSlot: int) -> int {
 // Builders stop chopping at a routine stockpile, but expansion needs a much
 // larger reserve. While the kingdom still has room for another town, gathering
 // continues until it can pay for a charter plus a small buffer.
-TownWoodGatherTarget :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
-	target: f32 = TOWN_WOOD_TARGET
+TownWoodGatherTarget :: proc(w: ^World, kingdomSlot, townSlot: int) -> d32.Value {
+	target := d32.FromInt(TOWN_WOOD_TARGET)
 	if KingdomFreeTownSlot(w, kingdomSlot) >= 0 {
-		target = max(target, TownFoundingWoodCost(w, kingdomSlot)+TOWN_FOUNDING_WOOD_BUFFER)
+		reserve := d32.Add(TownFoundingWoodCost(w, kingdomSlot), d32.FromInt(TOWN_FOUNDING_WOOD_BUFFER))
+		if reserve > target do target = reserve
 	}
 
 	// Era-5 towns need a real stockpile to pay the fusion sink. Builders keep
@@ -640,7 +662,8 @@ TownWoodGatherTarget :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 	if TownEra(w, kingdomSlot, townSlot) >= TOWN_FUSION_ERA {
 		town := &w.kingdoms[kingdomSlot].towns[townSlot]
 		cost := TOWN_FUSION_WOOD_BASE+TOWN_FUSION_WOOD_PER_DISTRICT*town.districtCount
-		target = max(target, f32(cost+TOWN_FUSION_WOOD_BUFFER))
+		reserve := d32.Add(d32.FromInt(i32(cost)), d32.FromInt(TOWN_FUSION_WOOD_BUFFER))
+		if reserve > target do target = reserve
 	}
 	return target
 }
@@ -658,7 +681,7 @@ TownFound :: proc(w: ^World, kingdomSlot, x, y, settlers: int) -> bool {
 	hallSlot, ok := BuildingSpawn(w, x, y, TownHall{}, kingdomSlot, townSlot)
 	if !ok do return false
 
-	TownInitialize(w, kingdomSlot, townSlot, hallSlot, x, y, 0)
+	TownInitialize(w, kingdomSlot, townSlot, hallSlot, x, y, d32.ZERO)
 	w.kingdoms[kingdomSlot].townUsed[townSlot] = true
 	if kingdomSlot == w.observerKingdom {
 		WorldAlertAdd(w, .TownFounded, kingdomSlot, townSlot, -1, f32(x), f32(y))
@@ -728,11 +751,14 @@ TownFoundingOverlapsOtherConstruction :: proc(w: ^World, x, y: int) -> bool {
 
 TownFoundingTooClose :: proc(w: ^World, x, y: int) -> bool {
 	hallWidth, hallHeight := BuildingTileSize(TownHall{})
-	centerX := f32(x)+f32(hallWidth)*0.5
-	centerY := f32(y)+f32(hallHeight)*0.5
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
-	minDistance := f32(TOWN_FOUNDING_MIN_DISTANCE)
+	halfWidth := d32.FromRatio(i32(hallWidth), 2)
+	halfHeight := d32.FromRatio(i32(hallHeight), 2)
+	centerX := d32.Add(d32.FromInt(i32(x)), halfWidth)
+	centerY := d32.Add(d32.FromInt(i32(y)), halfHeight)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	minDistanceRaw := i64(TOWN_FOUNDING_MIN_DISTANCE)*d32.SCALE
+	minDistanceSquared := u64(minDistanceRaw*minDistanceRaw)
 
 	for kingdomSlot in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[kingdomSlot] do continue
@@ -741,11 +767,20 @@ TownFoundingTooClose :: proc(w: ^World, x, y: int) -> bool {
 			hallSlot := TownHallSlot(w, kingdomSlot, townSlot)
 			if hallSlot < 0 do continue
 			otherWidth, otherHeight := BuildingTileSize(w.buildings[hallSlot].type)
-			otherX := f32(w.buildings.x[hallSlot])+f32(otherWidth)*0.5
-			otherY := f32(w.buildings.y[hallSlot])+f32(otherHeight)*0.5
-			deltaX := WorldShortestWrappedDelta(centerX-otherX, worldWidth)
-			deltaY := WorldShortestWrappedDelta(centerY-otherY, worldHeight)
-			if deltaX*deltaX+deltaY*deltaY < minDistance*minDistance do return true
+			otherHalfWidth := d32.FromRatio(i32(otherWidth), 2)
+			otherHalfHeight := d32.FromRatio(i32(otherHeight), 2)
+			otherX := d32.Add(d32.FromInt(i32(w.buildings.x[hallSlot])), otherHalfWidth)
+			otherY := d32.Add(d32.FromInt(i32(w.buildings.y[hallSlot])), otherHalfHeight)
+			distanceSquared, valid := d32.WrappedDistanceSquared(
+				centerX,
+				centerY,
+				otherX,
+				otherY,
+				worldWidthRaw,
+				worldHeightRaw,
+			)
+			if !valid do continue
+			if distanceSquared < minDistanceSquared do return true
 		}
 	}
 	return false
@@ -814,10 +849,10 @@ TownStartFounding :: proc(w: ^World, kingdomSlot, townSlot, x, y: int) -> bool {
 		if slot < 0 do return false
 	}
 
-	town.wood -= cost
+	town.wood = d32.Sub(town.wood, cost)
 	settlers := TownTakeVillagers(w, kingdomSlot, townSlot, requiredSettlers)
 	if settlers < requiredSettlers {
-		town.wood += cost
+		town.wood = d32.Add(town.wood, cost)
 		for _ in 0..<settlers do TownSpawnCitizen(w, kingdomSlot, townSlot, Villager{})
 		return false
 	}
@@ -923,16 +958,27 @@ TownAreasTouch :: proc(w: ^World, kingdomSlot, townA, townB: int) -> bool {
 		return false
 	}
 	hallWidth, _ := BuildingTileSize(TownHall{})
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	for indexA in 0..<TownAreaCircleCount(w, kingdomSlot, townA) {
 		ax, ay, ar := TownAreaCircle(w, kingdomSlot, townA, indexA)
+		axRaw := d32.FromInt(i32(ax))
+		ayRaw := d32.FromInt(i32(ay))
 		for indexB in 0..<TownAreaCircleCount(w, kingdomSlot, townB) {
 			bx, by, br := TownAreaCircle(w, kingdomSlot, townB, indexB)
-			dx := WorldShortestWrappedDelta(f32(ax-bx), f32(w.maxX))
-			dy := WorldShortestWrappedDelta(f32(ay-by), f32(w.maxY))
+			distanceSquared, valid := d32.WrappedDistanceSquared(
+				axRaw,
+				ayRaw,
+				d32.FromInt(i32(bx)),
+				d32.FromInt(i32(by)),
+				worldWidthRaw,
+				worldHeightRaw,
+			)
+			if !valid do continue
 			// Both circles are measured from their hall anchors, so add the two
 			// half-footprints to the frontier tolerance.
-			limit := f32(ar+br+hallWidth+TOWN_FUSION_FRONTIER_SLACK)
-			if dx*dx+dy*dy <= limit*limit do return true
+			limitRaw := i64(ar+br+hallWidth+TOWN_FUSION_FRONTIER_SLACK)*d32.SCALE
+			if distanceSquared <= u64(limitRaw*limitRaw) do return true
 		}
 	}
 	return false
@@ -1114,9 +1160,9 @@ FusionFailure :: enum {
 	ConversionLimit,
 }
 
-TownFusionCost :: proc(w: ^World, kingdomSlot, hostSlot: int) -> f32 {
+TownFusionCost :: proc(w: ^World, kingdomSlot, hostSlot: int) -> d32.Value {
 	host := &w.kingdoms[kingdomSlot].towns[hostSlot]
-	return f32(TOWN_FUSION_WOOD_BASE+TOWN_FUSION_WOOD_PER_DISTRICT*host.districtCount)
+	return d32.FromInt(i32(TOWN_FUSION_WOOD_BASE+TOWN_FUSION_WOOD_PER_DISTRICT*host.districtCount))
 }
 
 TownFusionNewConversionSlots :: proc(w: ^World, kingdomSlot, hostSlot, guestSlot: int) -> int {
@@ -1208,7 +1254,7 @@ TownFuse :: proc(
 		if buildingSlot == guestHall {
 			w.buildings[buildingSlot].type = DistrictHall{}
 			w.buildings[buildingSlot].health = BuildingDefaultHealth(DistrictHall{})
-			w.buildings[buildingSlot].cooldown = 0
+			w.buildings[buildingSlot].cooldown = d32.ZERO
 			w.buildings[buildingSlot].homeResident = 0
 		}
 	}
@@ -1243,8 +1289,8 @@ TownFuse :: proc(
 		}
 	}
 
-	host.wood += guest.wood
-	host.wood -= cost
+	host.wood = d32.Add(host.wood, guest.wood)
+	host.wood = d32.Sub(host.wood, cost)
 	host.unlockedBuildings |= guest.unlockedBuildings
 	host.unlockedUnits |= guest.unlockedUnits
 
@@ -1253,9 +1299,9 @@ TownFuse :: proc(
 	host.growthBatchBonus += TownBaseBatch(w, kingdomSlot, guestSlot)
 	host.growthCooldown = min(host.growthCooldown, guest.growthCooldown)
 	host.growthPending += guest.growthPending
-	host.growthInterval = TOWN_ERAS[TOWN_FUSION_ERA].interval
+	host.growthInterval = d32.FromInt(i32(TOWN_ERAS[TOWN_FUSION_ERA].interval))
 	host.growthBatch = TownEffectiveBatch(w, kingdomSlot, hostSlot)
-	host.growthRate = f32(host.growthBatch)/host.growthInterval
+	host.growthRate = d32.Div(d32.FromInt(i32(host.growthBatch)), host.growthInterval)
 
 	district := TownDistrict{x = guestX, y = guestY, radius = guestRadius}
 	NameDistrictAssign(&district.name, &guestName)
@@ -1705,34 +1751,44 @@ TownHallSlot :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {
 }
 
 KingdomChooseTownForUnit :: proc(w: ^World, kingdomSlot, unitSlot, destroyedBuildingSlot: int) -> int {
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
-	unitX := WorldWrapPosition(w.units[unitSlot].x, worldWidth)
-	unitY := WorldWrapPosition(w.units[unitSlot].y, worldHeight)
+	worldWidth := int(w.maxX)
+	worldHeight := int(w.maxY)
+	if worldWidth <= 0 || worldHeight <= 0 do return -1
 	buildingWidth, buildingHeight := BuildingTileSize(TownHall{})
+	widthRaw := i64(worldWidth)*d32.SCALE
+	heightRaw := i64(worldHeight)*d32.SCALE
 
-	weights: [TOWN_CAPACITY]f32
-	totalWeight: f32 = 0
+	weights: [TOWN_CAPACITY]d32.Value
+	total := d32.ZERO
 	for townSlot in 0..<TOWN_CAPACITY {
 		if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 		town := w.kingdoms[kingdomSlot].towns[townSlot]
-		townX := f32(town.x) + f32(buildingWidth)*0.5
-		townY := f32(town.y) + f32(buildingHeight)*0.5
-		dx := WorldShortestWrappedDelta(townX-unitX, worldWidth)
-		dy := WorldShortestWrappedDelta(townY-unitY, worldHeight)
-		distance := math.sqrt(dx*dx + dy*dy)
-		weights[townSlot] = 1.0 / (1.0 + distance)
-		totalWeight += weights[townSlot]
+		townX := d32.FromInt(i32(WorldWrapCoordinate(town.x+buildingWidth/2, worldWidth)))
+		townY := d32.FromInt(i32(WorldWrapCoordinate(town.y+buildingHeight/2, worldHeight)))
+		distanceSquared, valid := d32.WrappedDistanceSquared(
+			w.units.x[unitSlot],
+			w.units.y[unitSlot],
+			townX,
+			townY,
+			widthRaw,
+			heightRaw,
+		)
+		if !valid do continue
+		distance := d32.FromRaw(i32(d32.SqrtRaw(distanceSquared)))
+		weight := d32.Div(d32.ONE, d32.Add(d32.ONE, distance))
+		weights[townSlot] = weight
+		total = d32.Add(total, weight)
 	}
-	if totalWeight == 0 do return -1
+	if total <= d32.ZERO do return -1
 
-	roll := WorldNoiseHash(unitSlot, destroyedBuildingSlot, w.navigationRevision+u64(kingdomSlot)*101)*totalWeight
+	roll := i64(d32.Raw(total))*i64(WorldNoiseHashInt(unitSlot, destroyedBuildingSlot, w.navigationRevision+u64(kingdomSlot)*101))/1_000_000
 	lastTown := -1
 	for townSlot in 0..<TOWN_CAPACITY {
 		if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 		lastTown = townSlot
-		if roll < weights[townSlot] do return townSlot
-		roll -= weights[townSlot]
+		weight := i64(d32.Raw(weights[townSlot]))
+		if roll < weight do return townSlot
+		roll -= weight
 	}
 	return lastTown
 }

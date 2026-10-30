@@ -1,11 +1,15 @@
 package main
 
 import "base:intrinsics"
+import "d32"
 import rl "vendor:raylib"
 
 UNIT_CAPACITY :: 500_000
 BUILDING_CAPACITY :: 60_000
 KINGDOMS_CAPACITY :: 5
+// Zero-origin Q16.16 coordinates support dimensions up to 32768 tiles.
+WORLD_MAX_DIMENSION :: 32768
+WORLD_MAX_TILES :: 1 << 28
 // Playable kingdoms plus the dedicated independent-town faction. Independent
 // towns live in the last slot but never get a controller, AI, diplomacy or
 // victory count.
@@ -65,19 +69,20 @@ World :: struct {
 	maxX, maxY: uint,
 	navigationRevision: u64,
 	pathRevision: u64,
-	simulationTime: f32,
-	simulationTick: u64,
+	simulationTime: f32, // Derived presentation and legacy clock
+	simulationTick: u64, // Completed ticks; advances at the end of WorldTick
+	simulationInTick: bool,
 	simulationAccumulator: f32,
 	dayTime: f32,
 	dayNumber: int,
 	weather: WeatherState,
 	environment: EnvironmentEvent,
-	eventMinorTimer: f32,
-	eventModerateTimer: f32,
-	eventMajorTimer: f32,
-	eventCataclysmTimer: f32,
-	eventGap: f32,
-	eventDebt: [KINGDOMS_CAPACITY]f32,
+	eventMinorTimer: d32.Value,
+	eventModerateTimer: d32.Value,
+	eventMajorTimer: d32.Value,
+	eventCataclysmTimer: d32.Value,
+	eventGap: d32.Value,
+	eventDebt: [KINGDOMS_CAPACITY]d32.Value,
 	eventLastMajorKingdom: int,
 	eventCataclysmCount: int,
 	eventSequence: u32,
@@ -114,7 +119,8 @@ World :: struct {
 }
 
 WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerationSettings) -> bool {
-	if maxX == 0 || maxY == 0 || kingdoms == 0 || kingdoms > uint(KINGDOMS_CAPACITY) {
+	if maxX == 0 || maxY == 0 || maxX > WORLD_MAX_DIMENSION || maxY > WORLD_MAX_DIMENSION ||
+		u64(maxX)*u64(maxY) > WORLD_MAX_TILES || kingdoms == 0 || kingdoms > uint(KINGDOMS_CAPACITY) {
 		return false
 	}
 
@@ -130,10 +136,10 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.environment.kingdom = -1
 	w.environment.town = -1
 	w.eventLastMajorKingdom = -1
-	w.eventMinorTimer = 185
-	w.eventModerateTimer = 280
-	w.eventMajorTimer = 450
-	w.eventCataclysmTimer = 900
+	w.eventMinorTimer = d32.FromInt(185)
+	w.eventModerateTimer = d32.FromInt(280)
+	w.eventMajorTimer = d32.FromInt(450)
+	w.eventCataclysmTimer = d32.FromInt(900)
 	if !FogInit(w) do return false
 	nodeCount := int(maxX)*int(maxY)
 	w.groundStorage = make([]Tile, nodeCount)
@@ -206,7 +212,7 @@ Tile :: struct {
 	climate:   ClimateKind,
 	scar:      TerrainScar,
 	scarFrom:  TileType,
-	scarTimer: f32,
+	scarTimer: d32.Value,
 }
 
 TileType :: enum u8 {
@@ -275,7 +281,7 @@ WorldTerrainChunkRevision :: proc(w: ^World, chunkX, chunkY: int) -> u64 {
 	return w.terrainChunkRevisions[chunkX*w.terrainChunkCountY+chunkY]
 }
 
-UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: int) -> (int, bool) {
+UnitSpawn :: proc(w: ^World, type: UnitType, x, y: d32.Value, kingdomSlot, townSlot: int) -> (int, bool) {
 	if w.unitCount >= UNIT_CAPACITY do return 0, false
 	i := -1
 	for slot in w.unitFreeHint..<UNIT_CAPACITY {
@@ -306,8 +312,8 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.units.homeSlot[i] = -1
 	w.units.sleepInside[i] = false
 	w.units.walkPhase[i] = 0
-	w.units.animX[i] = x
-	w.units.animY[i] = y
+	w.units.animX[i] = PositionToF32(x)
+	w.units.animY[i] = PositionToF32(y)
 	w.units.actionStarted[i] = -1e9
 	w.units.actionDirX[i] = 0
 	w.units.actionDirY[i] = 0
@@ -315,13 +321,15 @@ UnitSpawn :: proc(w: ^World, type: UnitType, x, y: f32, kingdomSlot, townSlot: i
 	w.unitUsed[i] = true
 	UnitTypeInit(w, i, type)
 	w.units[i].sleepOffsetHours = WorldNoiseHash(i, kingdomSlot+townSlot*101, u64(i)+401)-0.5
-	w.units[i].decisionTimer =
-		WorldNoiseHash(i, 7, 0xD3C1)*CIVILIAN_DECISION_INTERVAL
+	w.units[i].decisionTimer = d32.Mul(
+		PositionFromF32(WorldNoiseHash(i, 7, 0xD3C1)),
+		CIVILIAN_DECISION_INTERVAL,
+	)
 	w.units[i].decisionReady = false
 	w.units[i].updateStride = 1
 	w.units[i].updateTime = w.simulationTime
 	w.units[i].updateInterval = TOWN_SIMULATION_STEP*f32(UNIT_UPDATE_SLICES)
-	w.units[i].burning = 0
+	w.units[i].burning = d32.ZERO
 	w.units[i].effects = [UnitEffects]bool{
 		.NoHome = false,
 		.NoWater = false,
@@ -412,12 +420,12 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 	w.buildings.x[i] = x
 	w.buildings.y[i] = y
 	w.buildings.health[i] = BuildingMaxHealthFor(w, kingdomSlot, type)
-	w.buildings.cooldown[i] = 0
+	w.buildings.cooldown[i] = d32.ZERO
 	w.buildings.type[i] = type
 	w.buildings.kingdom[i] = kingdomSlot
 	w.buildings.town[i] = townSlot
 	w.buildings.homeResident[i] = 0
-	w.buildings.output[i] = 0
+	w.buildings.output[i] = d32.ZERO
 	w.buildings.outputRevision[i] = 0
 
 	width, height := BuildingTileSize(type)
@@ -437,7 +445,7 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 		town.buildingCounts[kind] += 1
 		if town.buildingSlots[kind] < 0 do town.buildingSlots[kind] = i
 		// Trees felled to clear the site are not wasted.
-		town.wood += clearedWood
+		town.wood = d32.Add(town.wood, clearedWood)
 	}
 	// A finished building stands where construction already reserved the
 	// footprint, so existing paths were planned around it. Bumping pathRevision

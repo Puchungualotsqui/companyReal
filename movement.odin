@@ -4,6 +4,7 @@ import "core:fmt"
 import "core:math"
 import "core:slice"
 import "core:sync"
+import "d32"
 import rl "vendor:raylib"
 
 FLOW_FIELD_CAPACITY :: 16
@@ -21,9 +22,10 @@ FLOW_FIELD_BUILD_BUDGET :: 262_144
 // This guarantees a build can finish and stops constant invalidation during
 // battles. Unit movement validates each step, so slightly stale fields are safe.
 FLOW_FIELD_REFRESH_SECONDS :: 8.0
+FLOW_FIELD_REFRESH_TICKS :: u64(FLOW_FIELD_REFRESH_SECONDS/TOWN_SIMULATION_STEP)
 
 // Path tiles are cheap to route through and slightly faster to walk on.
-PATH_SPEED_MULTIPLIER :: 1.25
+PATH_SPEED_MULTIPLIER :: d32.Value(5*d32.SCALE/4)
 PATH_STEP_COST :: 3
 PLAIN_STEP_COST :: 4
 PATH_HEURISTIC_COST :: 3
@@ -55,7 +57,7 @@ FlowField :: struct {
 	direction: []FlowDirection,
 	valid: bool,
 	stamp: u64,
-	builtAt: f32, // Simulation time the field last completed
+	builtAtTick: u64, // Simulation tick the field last completed
 
 	// Resumable build state. The walk mask and BFS advance a bounded number
 	// of tiles per tick instead of blocking a whole frame.
@@ -80,7 +82,9 @@ WorldNavigationInit :: proc(w: ^World) -> bool {
 	nodeCount := int(w.maxX)*int(w.maxY)
 	if nodeCount <= 0 do return false
 	for def, tile in TILE_DEFS {
-		tileStepCost[tile] = max(1, int(math.round(f32(PLAIN_STEP_COST)*def.moveCost)))
+		// Round PLAIN_STEP_COST*moveCost once in Q16.16 instead of f32.
+		stepRaw := i64(d32.Raw(def.moveCost))*i64(PLAIN_STEP_COST)
+		tileStepCost[tile] = max(1, int((stepRaw+d32.SCALE/2)/d32.SCALE))
 	}
 	w.tileConstructionBlocked = make([]bool, nodeCount)
 	w.tileSiteBlocked = make([]u8, nodeCount)
@@ -368,16 +372,27 @@ FLEE_THREAT_RADIUS :: 16
 // Clearance only needs the immediate threats; the explicit one plus the four
 // nearest cover every escape decision without scoring the whole neighbourhood.
 FLEE_CLEARANCE_ENEMIES :: 5
+// Clearance margins as Q16.16 raw units: 1.25 exact, 0.001 rounded to nearest.
+FLEE_MELEE_CLEARANCE_RAW :: i64(81920)
+FLEE_CLEARANCE_EPSILON_RAW :: i64(66)
 
 UnitNearbyEnemy :: struct {
 	slot: int,
-	distanceSquared: f32,
+	distanceSquared: u64, // Raw squared units
 }
 
-UnitEnemyDistanceSquared :: proc(w: ^World, x, y: f32, enemySlot: int) -> f32 {
-	dx := WorldShortestWrappedDelta(w.units.x[enemySlot]-x, f32(w.maxX))
-	dy := WorldShortestWrappedDelta(w.units.y[enemySlot]-y, f32(w.maxY))
-	return dx*dx+dy*dy
+// Invalid world geometry sorts as maximally far instead of being ignored.
+UnitEnemyDistanceSquared :: proc(w: ^World, x, y: d32.Value, enemySlot: int) -> u64 {
+	distanceSquared, valid := d32.WrappedDistanceSquared(
+		x,
+		y,
+		w.units.x[enemySlot],
+		w.units.y[enemySlot],
+		i64(w.maxX)*d32.SCALE,
+		i64(w.maxY)*d32.SCALE,
+	)
+	if !valid do return ~u64(0)
+	return distanceSquared
 }
 
 // A wrapped coordinate interval may cross the short final spatial bucket.
@@ -391,10 +406,26 @@ UnitNearbyChunkRange :: proc(position, radius, size: f32, chunkSize, chunkCount:
 	return first, min(count, chunkCount)
 }
 
+// Raw-coordinate variant of UnitNearbyChunkRange.
+UnitNearbyChunkRangeRaw :: proc(positionRaw, radiusRaw, sizeRaw: i64, chunkSize, chunkCount: int) -> (int, int) {
+	if sizeRaw <= 0 || chunkSize <= 0 || chunkCount <= 0 do return 0, 0
+	if radiusRaw >= sizeRaw/2 do return 0, chunkCount
+	low, high := positionRaw-radiusRaw, positionRaw+radiusRaw
+	lowWrapped := low%sizeRaw
+	if lowWrapped < 0 do lowWrapped += sizeRaw
+	highWrapped := high%sizeRaw
+	if highWrapped < 0 do highWrapped += sizeRaw
+	first := int(lowWrapped/d32.SCALE)/chunkSize
+	last := int(highWrapped/d32.SCALE)/chunkSize
+	count := last-first+1
+	if low < 0 || high >= sizeRaw do count += chunkCount
+	return first, min(count, chunkCount)
+}
+
 // Keep only the closest threats, visiting each intersecting wrapped chunk once.
 UnitCollectNearbyEnemies :: proc(w: ^World, unitSlot: int, radius: f32, enemies: []UnitNearbyEnemy) -> int {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] ||
-		w.units[unitSlot].health <= 0 || !(radius >= 0) || len(enemies) == 0 {
+		w.units[unitSlot].health <= d32.ZERO || !(radius >= 0) || len(enemies) == 0 {
 				return 0
 			}
 	if w.maxX <= 0 || w.maxY <= 0 || w.spatial.chunkSize <= 0 ||
@@ -402,10 +433,22 @@ UnitCollectNearbyEnemies :: proc(w: ^World, unitSlot: int, radius: f32, enemies:
 				return 0
 			}
 	unit := &w.units[unitSlot]
-	x := WorldWrapPosition(unit.x, f32(w.maxX))
-	y := WorldWrapPosition(unit.y, f32(w.maxY))
-	firstX, countX := UnitNearbyChunkRange(x, radius, f32(w.maxX), w.spatial.chunkSize, w.spatial.chunksX)
-	firstY, countY := UnitNearbyChunkRange(y, radius, f32(w.maxY), w.spatial.chunkSize, w.spatial.chunksY)
+	radiusRaw := UnitRawDistance(radius)
+	radiusSquared := u64(radiusRaw)*u64(radiusRaw)
+	firstX, countX := UnitNearbyChunkRangeRaw(
+		i64(d32.Raw(unit.x)),
+		radiusRaw,
+		i64(w.maxX)*d32.SCALE,
+		w.spatial.chunkSize,
+		w.spatial.chunksX,
+	)
+	firstY, countY := UnitNearbyChunkRangeRaw(
+		i64(d32.Raw(unit.y)),
+		radiusRaw,
+		i64(w.maxY)*d32.SCALE,
+		w.spatial.chunkSize,
+		w.spatial.chunksY,
+	)
 	count := 0
 	for ox in 0..<countX {
 		cx := WorldWrapCoordinate(firstX+ox, w.spatial.chunksX)
@@ -414,20 +457,23 @@ UnitCollectNearbyEnemies :: proc(w: ^World, unitSlot: int, radius: f32, enemies:
 			chunk := cx*w.spatial.chunksY+cy
 			if !SpatialChunkHasEnemy(w, chunk, unit.kingdome) do continue
 			for other := w.spatial.unitHead[chunk]; other >= 0; other = w.spatial.unitNext[other] {
-				if other == unitSlot || !w.unitUsed[other] || w.units[other].health <= 0 do continue
+				if other == unitSlot || !w.unitUsed[other] || w.units[other].health <= d32.ZERO do continue
 				if !KingdomAtWar(w, unit.kingdome, w.units[other].kingdome) || UnitHiddenInside(w, other) do continue
-				distance := UnitEnemyDistanceSquared(w, x, y, other)
-				if distance > radius*radius do continue
+				distanceSquared := UnitEnemyDistanceSquared(w, unit.x, unit.y, other)
+				if distanceSquared > radiusSquared do continue
 				position := 0
 				for position < count {
 					entry := enemies[position]
-					if distance < entry.distanceSquared || (distance == entry.distanceSquared && other < entry.slot) do break
+					if distanceSquared < entry.distanceSquared ||
+						(distanceSquared == entry.distanceSquared && other < entry.slot) {
+						break
+					}
 					position += 1
 				}
 				if position >= len(enemies) do continue
 				count = min(count+1, len(enemies))
 				for i := count-1; i > position; i -= 1 do enemies[i] = enemies[i-1]
-				enemies[position] = UnitNearbyEnemy{other, distance}
+				enemies[position] = UnitNearbyEnemy{other, distanceSquared}
 			}
 		}
 	}
@@ -441,12 +487,12 @@ UnitFindNearbyEnemy :: proc(w: ^World, unitSlot: int, radius: f32) -> int {
 	return enemies[0].slot
 }
 
-UnitFleeClearance :: proc(w: ^World, x, y: f32, enemies: []UnitNearbyEnemy) -> f32 {
-	distanceSquared: f32 = 1e30
+UnitFleeClearanceSquared :: proc(w: ^World, x, y: d32.Value, enemies: []UnitNearbyEnemy) -> u64 {
+	clearance := ~u64(0)
 	for enemy in enemies {
-		distanceSquared = min(distanceSquared, UnitEnemyDistanceSquared(w, x, y, enemy.slot))
+		clearance = min(clearance, UnitEnemyDistanceSquared(w, x, y, enemy.slot))
 	}
-	return math.sqrt(distanceSquared)
+	return clearance
 }
 
 // Builds at most 85 reachable nodes, with no full-map A*. Shared navigation
@@ -454,8 +500,8 @@ UnitFleeClearance :: proc(w: ^World, x, y: f32, enemies: []UnitNearbyEnemy) -> f
 UnitFindEscapePath :: proc(w: ^World, unitSlot: int, enemies: []UnitNearbyEnemy) -> bool {
 	unit := &w.units[unitSlot]
 	width, height := int(w.maxX), int(w.maxY)
-	startX := int(WorldWrapPosition(unit.x, f32(width)))
-	startY := int(WorldWrapPosition(unit.y, f32(height)))
+	startX := UnitTileX(w, unitSlot)
+	startY := UnitTileY(w, unitSlot)
 	start := startX*height+startY
 	clear(&unit.path)
 	unit.pathFound = false
@@ -463,8 +509,8 @@ UnitFindEscapePath :: proc(w: ^World, unitSlot: int, enemies: []UnitNearbyEnemy)
 	unit.pathRevision = w.pathRevision
 	unit.pathIndex = 0
 	// Cache failure until the primary threat changes tile or navigation changes.
-	unit.pathTargetX = int(WorldWrapPosition(w.units.x[enemies[0].slot], f32(width)))
-	unit.pathTargetY = int(WorldWrapPosition(w.units.y[enemies[0].slot], f32(height)))
+	unit.pathTargetX = UnitTileX(w, enemies[0].slot)
+	unit.pathTargetY = UnitTileY(w, enemies[0].slot)
 	if len(w.navigationStamp) < width*height || len(w.navigationQueue) < width*height ||
 		len(w.navigationCameFrom) < width*height {
 				return false
@@ -473,7 +519,13 @@ UnitFindEscapePath :: proc(w: ^World, unitSlot: int, enemies: []UnitNearbyEnemy)
 	queue := scratch.queue[:]
 	depth: [FLEE_SEARCH_CAPACITY]int
 	routeClearance: [FLEE_SEARCH_CAPACITY]f32
-	startClearance := UnitFleeClearance(w, unit.x, unit.y, enemies)
+	startClearanceSquared := UnitFleeClearanceSquared(w, w.units.x[unitSlot], w.units.y[unitSlot], enemies)
+	startClearanceRaw := d32.SqrtRaw(startClearanceSquared)
+	startClearance := RawToF32(startClearanceRaw)
+	// Do not escape through an enemy's immediate melee space, unless already
+	// that close; compare the exact squared raw threshold instead.
+	meleeClearanceRaw := min(startClearanceRaw, FLEE_MELEE_CLEARANCE_RAW)
+	meleeClearanceSquared := u64(meleeClearanceRaw)*u64(meleeClearanceRaw)
 	routeClearance[0] = startClearance
 	queue[0] = start
 	NavBfsVisit(scratch, start)
@@ -495,10 +547,9 @@ UnitFindEscapePath :: proc(w: ^World, unitSlot: int, enemies: []UnitNearbyEnemy)
 			slot, fresh := NavBfsVisit(scratch, next)
 			if !fresh do continue
 			if !WorldTileWalkable(w, nx, ny, unit.type, unit.kingdome) do continue
-			clearance := UnitFleeClearance(w, f32(nx)+0.5, f32(ny)+0.5, enemies)
-			// Do not escape through an enemy's immediate melee space, unless
-			// already that close; small temporary detours remain possible.
-			if clearance < min(startClearance, 1.25) do continue
+			clearanceSquared := UnitFleeClearanceSquared(w, TileCenterPosition(nx), TileCenterPosition(ny), enemies)
+			if clearanceSquared < meleeClearanceSquared do continue
+			clearance := RawToF32(d32.SqrtRaw(clearanceSquared))
 			if queueEnd >= FLEE_SEARCH_CAPACITY do continue
 			scratch.parents[slot] = i32(index)
 			depth[queueEnd] = depth[cursor]+1
@@ -528,12 +579,12 @@ UnitFindEscapePath :: proc(w: ^World, unitSlot: int, enemies: []UnitNearbyEnemy)
 // whether a usable escape route exists (also true for a zero-time tick).
 UnitFleeEnemy :: proc(w: ^World, unitSlot, enemySlot: int, deltaTime: f32) -> bool {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] ||
-		w.units[unitSlot].health <= 0 || deltaTime < 0 || w.maxX <= 0 || w.maxY <= 0 {
+		w.units[unitSlot].health <= d32.ZERO || deltaTime < 0 || w.maxX <= 0 || w.maxY <= 0 {
 				return false
 			}
 	unit := &w.units[unitSlot]
 	if enemySlot < 0 || enemySlot >= UNIT_CAPACITY || !w.unitUsed[enemySlot] ||
-		w.units[enemySlot].health <= 0 || UnitHiddenInside(w, enemySlot) ||
+		w.units[enemySlot].health <= d32.ZERO || UnitHiddenInside(w, enemySlot) ||
 		!KingdomAtWar(w, unit.kingdome, w.units[enemySlot].kingdome) || UnitHiddenInside(w, unitSlot) {
 		unit.pathReady, unit.pathFound = false, false
 		return false
@@ -543,37 +594,56 @@ UnitFleeEnemy :: proc(w: ^World, unitSlot, enemySlot: int, deltaTime: f32) -> bo
 	threats[0] = UnitNearbyEnemy{enemySlot, 0}
 	count := 1+UnitCollectNearbyEnemies(w, unitSlot, FLEE_THREAT_RADIUS, threats[1:])
 	enemies := threats[:count]
-	clearance := UnitFleeClearance(w, unit.x, unit.y, enemies)
+	clearanceSquared := UnitFleeClearanceSquared(w, w.units.x[unitSlot], w.units.y[unitSlot], enemies)
+	clearanceRaw := d32.SqrtRaw(clearanceSquared)
+	// Waypoint clearance must stay within 0.001 of min(clearance, 1.25).
+	waypointMarginRaw := min(clearanceRaw, FLEE_MELEE_CLEARANCE_RAW)-FLEE_CLEARANCE_EPSILON_RAW
+	waypointMarginSquared := u64(0)
+	if waypointMarginRaw > 0 do waypointMarginSquared = u64(waypointMarginRaw)*u64(waypointMarginRaw)
 	// Do not replan just because the world changed somewhere else; the route
 	// checks below detect an actual blockage or a worse local escape.
 	replan := !unit.pathReady
 	if !replan && !unit.pathFound {
-		replan = unit.pathTargetX != int(WorldWrapPosition(w.units.x[enemySlot], f32(w.maxX))) ||
-			unit.pathTargetY != int(WorldWrapPosition(w.units.y[enemySlot], f32(w.maxY)))
+		replan = unit.pathTargetX != UnitTileX(w, enemySlot) ||
+			unit.pathTargetY != UnitTileY(w, enemySlot)
 	}
 	if !replan && unit.pathFound {
-		replan = unit.pathIndex >= len(unit.path) || UnitFleeClearance(w,
-			f32(unit.pathTargetX)+0.5, f32(unit.pathTargetY)+0.5, enemies)+0.5 < clearance
+		// Target clearance plus 0.5 must still beat the current clearance.
+		targetMarginRaw := clearanceRaw-i64(d32.HALF)
+		targetMarginSquared := u64(0)
+		if targetMarginRaw > 0 do targetMarginSquared = u64(targetMarginRaw)*u64(targetMarginRaw)
+		targetClearanceSquared := UnitFleeClearanceSquared(
+			w,
+			TileCenterPosition(unit.pathTargetX),
+			TileCenterPosition(unit.pathTargetY),
+			enemies,
+		)
+		replan = unit.pathIndex >= len(unit.path) || targetClearanceSquared < targetMarginSquared
 		if !replan {
 			next := unit.path[unit.pathIndex]
 			nx, ny := next/int(w.maxY), next%int(w.maxY)
+			nextClearanceSquared := UnitFleeClearanceSquared(w, TileCenterPosition(nx), TileCenterPosition(ny), enemies)
 			replan = !WorldTileWalkable(w, nx, ny, unit.type, unit.kingdome) ||
-				UnitFleeClearance(w, f32(nx)+0.5, f32(ny)+0.5, enemies)+0.001 < min(clearance, 1.25)
+				nextClearanceSquared < waypointMarginSquared
 		}
 	}
 	if replan && !UnitFindEscapePath(w, unitSlot, enemies) do return false
 	if !unit.pathFound do return false
-	remaining := UnitMoveSpeed(w, unitSlot, UnitDefaultSpeed(unit.type))*deltaTime
+	remaining := d32.Mul(
+		UnitMoveSpeed(w, unitSlot, UnitDefaultSpeed(unit.type)),
+		PositionFromF32(deltaTime),
+	)
 	for _ in 0..<FLEE_SEARCH_STEPS {
-		if remaining <= 0 || unit.pathIndex >= len(unit.path) do break
+		if remaining <= d32.ZERO || unit.pathIndex >= len(unit.path) do break
 		next := unit.path[unit.pathIndex]
 		nx, ny := next/int(w.maxY), next%int(w.maxY)
 		// Check each waypoint, including when a long tick consumes several.
-		if UnitFleeClearance(w, f32(nx)+0.5, f32(ny)+0.5, enemies)+0.001 < min(clearance, 1.25) {
+		nextClearanceSquared := UnitFleeClearanceSquared(w, TileCenterPosition(nx), TileCenterPosition(ny), enemies)
+		if nextClearanceSquared < waypointMarginSquared {
 			unit.pathReady = false
 			return false
 		}
-		reached, blocked, left := UnitStepTowards(w, unitSlot, f32(nx)+0.5, f32(ny)+0.5, remaining)
+		reached, blocked, left := UnitStepTowards(w, unitSlot, TileCenterRaw(nx), TileCenterRaw(ny), remaining)
 		if blocked {
 			unit.pathReady, unit.pathFound = false, false
 			return false
@@ -591,15 +661,18 @@ UnitFleeEnemy :: proc(w: ^World, unitSlot, enemySlot: int, deltaTime: f32) -> bo
 UnitFollowEscapePath :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 	unit := &w.units[unitSlot]
 	if !unit.pathFound || unit.pathIndex >= len(unit.path) do return true
-	remaining := UnitMoveSpeed(w, unitSlot, UnitDefaultSpeed(unit.type))*deltaTime
-	for remaining > 0 && unit.pathIndex < len(unit.path) {
+	remaining := d32.Mul(
+		UnitMoveSpeed(w, unitSlot, UnitDefaultSpeed(unit.type)),
+		PositionFromF32(deltaTime),
+	)
+	for remaining > d32.ZERO && unit.pathIndex < len(unit.path) {
 		next := unit.path[unit.pathIndex]
 		nx, ny := next/int(w.maxY), next%int(w.maxY)
 		reached, blocked, left := UnitStepTowards(
 			w,
 			unitSlot,
-			f32(nx)+0.5,
-			f32(ny)+0.5,
+			TileCenterRaw(nx),
+			TileCenterRaw(ny),
 			remaining,
 		)
 		if blocked {
@@ -645,7 +718,7 @@ FlowFieldGet :: proc(
 		w.flowFieldStamp += 1
 		field.stamp = w.flowFieldStamp
 		if field.building do return field, false
-		if w.simulationTime-field.builtAt < FLOW_FIELD_REFRESH_SECONDS {
+		if WorldCurrentTick(w)-field.builtAtTick < FLOW_FIELD_REFRESH_TICKS {
 			return field, field.valid
 		}
 		FlowFieldBegin(w, slot)
@@ -818,7 +891,7 @@ FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int) -> bool {
 		if !FlowFieldSeed(w, field) {
 			field.valid = false
 			field.building = false
-			field.builtAt = w.simulationTime
+			field.builtAtTick = WorldCurrentTick(w)
 			return true
 		}
 		field.seeded = true
@@ -872,7 +945,7 @@ FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int) -> bool {
 	if head < tail do return false
 	field.valid = true
 	field.building = false
-	field.builtAt = w.simulationTime
+	field.builtAtTick = WorldCurrentTick(w)
 	return true
 }
 
@@ -893,14 +966,14 @@ UnitFollowFlowField :: proc(w: ^World, unitSlot: int, field: ^FlowField, deltaTi
 	unit := &w.units[unitSlot]
 	speed := UnitMoveSpeed(w, unitSlot, UnitDefaultSpeed(unit.type))
 
-	remaining := speed*deltaTime
+	remaining := d32.Mul(speed, PositionFromF32(deltaTime))
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return .Unreachable
 
 	for _ in 0..<FLOW_FIELD_MAX_STEPS {
-		tileX := int(WorldWrapPosition(unit.x, f32(worldWidth)))
-		tileY := int(WorldWrapPosition(unit.y, f32(worldHeight)))
+		tileX := UnitTileX(w, unitSlot)
+		tileY := UnitTileY(w, unitSlot)
 		direction := field.direction[tileX*worldHeight+tileY]
 		nextX, nextY := tileX, tileY
 		switch direction {
@@ -921,14 +994,14 @@ UnitFollowFlowField :: proc(w: ^World, unitSlot: int, field: ^FlowField, deltaTi
 		reached, blocked, left := UnitStepTowards(
 			w,
 			unitSlot,
-			f32(nextX)+0.5,
-			f32(nextY)+0.5,
+			TileCenterRaw(nextX),
+			TileCenterRaw(nextY),
 			remaining,
 		)
 		if blocked do return .Unreachable
 		remaining = left
 		if !reached do return .Travelling
-		if remaining <= 0 do return .Travelling
+		if remaining <= d32.ZERO do return .Travelling
 	}
 	return .Travelling
 }
@@ -953,9 +1026,13 @@ BuildingFindWorkAccessPoint :: proc(w: ^World, x, y, width, height: int, unitTyp
 				if BuildingAccessDistance(w, x, y, width, height, wrappedX, wrappedY) != radius do continue
 				if !WorldTileWalkable(w, wrappedX, wrappedY, unitType, kingdom) do continue
 				workRadius = radius
-				deltaX := WorldShortestWrappedDelta(f32(wrappedX-startTileX), f32(worldWidth))
-				deltaY := WorldShortestWrappedDelta(f32(wrappedY-startTileY), f32(worldHeight))
-				distance := int(deltaX*deltaX+deltaY*deltaY)
+				deltaX := wrappedX-startTileX
+				deltaY := wrappedY-startTileY
+				if deltaX > worldWidth/2 do deltaX -= worldWidth
+				if deltaX < -(worldWidth/2) do deltaX += worldWidth
+				if deltaY > worldHeight/2 do deltaY -= worldHeight
+				if deltaY < -(worldHeight/2) do deltaY += worldHeight
+				distance := deltaX*deltaX+deltaY*deltaY
 				if distance < fallbackDistance {
 					fallbackDistance = distance
 					fallbackX, fallbackY = wrappedX, wrappedY
@@ -1007,7 +1084,7 @@ UnitFindBuildingExit :: proc(w: ^World, unitSlot, x, y, width, height: int) -> (
 	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
 	scratch := NavBfsReset()
 	queue := scratch.queue[:]
-	start := int(unit.x)*worldHeight+int(unit.y)
+	start := UnitTileX(w, unitSlot)*worldHeight+UnitTileY(w, unitSlot)
 	queue[0] = start
 	NavBfsVisit(scratch, start)
 	queueEnd := 1
@@ -1086,53 +1163,74 @@ UnitDirectPath :: proc(
 	return len(path) > 0
 }
 
-UnitStepTowards :: proc(w: ^World, unitSlot: int, targetX, targetY, distance: f32) -> (reached: bool, blocked: bool, remaining: f32) {
+UnitStepTowards :: proc(w: ^World, unitSlot: int, targetX, targetY: f32, distance: d32.Value) -> (reached: bool, blocked: bool, remaining: d32.Value) {
 	remaining = distance
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] {
 		return false, true, remaining
 	}
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
-	if worldWidth <= 0 || worldHeight <= 0 do return false, true, remaining
+	width := i64(w.maxX)*d32.SCALE
+	height := i64(w.maxY)*d32.SCALE
+	if width <= 0 || height <= 0 do return false, true, remaining
 
 	unit := &w.units[unitSlot]
 	defer SpatialUnitMove(w, unitSlot)
-	for remaining > 0.0001 {
-		deltaX := WorldShortestWrappedDelta(targetX-unit.x, worldWidth)
-		deltaY := WorldShortestWrappedDelta(targetY-unit.y, worldHeight)
-		distanceToTarget := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-		if distanceToTarget <= 0.0001 {
-			unit.x = WorldWrapPosition(targetX, worldWidth)
-			unit.y = WorldWrapPosition(targetY, worldHeight)
-			return true, false, remaining
+	targetPositionX, validTargetX := d32.WrapRaw(
+		i64(d32.Raw(PositionFromF32(targetX))),
+		d32.ZERO,
+		width,
+	)
+	targetPositionY, validTargetY := d32.WrapRaw(
+		i64(d32.Raw(PositionFromF32(targetY))),
+		d32.ZERO,
+		height,
+	)
+	if !validTargetX || !validTargetY do return false, true, remaining
+	remainingRaw := i64(d32.Raw(remaining))
+	for remainingRaw > UNIT_POSITION_EPSILON_RAW {
+		distanceSquared, valid := d32.WrappedDistanceSquared(
+			unit.x,
+			unit.y,
+			targetPositionX,
+			targetPositionY,
+			width,
+			height,
+		)
+		if !valid do return false, true, d32.FromRaw(i32(remainingRaw))
+		distanceToTarget := d32.SqrtRaw(distanceSquared)
+		if distanceToTarget <= UNIT_POSITION_EPSILON_RAW {
+			SetUnitPosition(w, unitSlot, targetPositionX, targetPositionY)
+			return true, false, d32.FromRaw(i32(remainingRaw))
 		}
 
-		step := min(distanceToTarget, remaining, 1)
-		nextX := WorldWrapPosition(unit.x+deltaX/distanceToTarget*step, worldWidth)
-		nextY := WorldWrapPosition(unit.y+deltaY/distanceToTarget*step, worldHeight)
-		tileX := int(nextX)
-		tileY := int(nextY)
-		currentTileX := int(WorldWrapPosition(unit.x, worldWidth))
-		currentTileY := int(WorldWrapPosition(unit.y, worldHeight))
+		deltaX, validX := d32.ShortestWrappedDelta(unit.x, targetPositionX, width)
+		deltaY, validY := d32.ShortestWrappedDelta(unit.y, targetPositionY, height)
+		if !validX || !validY do return false, true, d32.FromRaw(i32(remainingRaw))
+		step := min(distanceToTarget, remainingRaw, d32.SCALE)
+		stepX := deltaX*step/distanceToTarget
+		stepY := deltaY*step/distanceToTarget
+		nextX, _ := d32.AddRawWrapped(i64(d32.Raw(unit.x)), stepX, d32.ZERO, width)
+		nextY, _ := d32.AddRawWrapped(i64(d32.Raw(unit.y)), stepY, d32.ZERO, height)
+		tileX := int(d32.ToInt(nextX))
+		tileY := int(d32.ToInt(nextY))
+		currentTileX := UnitTileX(w, unitSlot)
+		currentTileY := UnitTileY(w, unitSlot)
 		if (tileX != currentTileX || tileY != currentTileY) &&
 			!WorldTileWalkable(w, tileX, tileY, unit.type, unit.kingdome) {
-			return false, true, remaining
+			return false, true, d32.FromRaw(i32(remainingRaw))
 		}
 		if (tileX != currentTileX || tileY != currentTileY) &&
 			WorldTileFriendlyWall(w, tileX, tileY, unit.kingdome) {
 			unit.jumpStarted = w.simulationTime
 		}
 
-		unit.x = nextX
-		unit.y = nextY
-		remaining -= step
+		SetUnitPosition(w, unitSlot, nextX, nextY)
+		remainingRaw -= step
 		if step >= distanceToTarget {
-			unit.x = WorldWrapPosition(targetX, worldWidth)
-			unit.y = WorldWrapPosition(targetY, worldHeight)
-			return true, false, remaining
+			SetUnitPosition(w, unitSlot, targetPositionX, targetPositionY)
+			return true, false, d32.FromRaw(i32(remainingRaw))
 		}
 	}
-	return false, false, remaining
+	return false, false, d32.FromRaw(i32(remainingRaw))
 }
 
 WorldTileWalkable :: proc(w: ^World, x, y: int, unitType: UnitType, unitKingdom: int) -> bool {
@@ -1233,19 +1331,22 @@ WorldStepCostAt :: proc(w: ^World, index: int) -> int {
 }
 
 // Base speed adjusted by the tile the unit is standing on.
-UnitMoveSpeed :: proc(w: ^World, unitSlot: int, baseSpeed: f32) -> f32 {
+UnitMoveSpeed :: proc(w: ^World, unitSlot: int, baseSpeed: d32.Value) -> d32.Value {
 	speed := baseSpeed
-	if w.units[unitSlot].effects[.NoWater] do speed *= 0.7
-	tileX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
-	tileY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+	if w.units[unitSlot].effects[.NoWater] do speed = d32.Mul(speed, d32.FromRatio(7, 10))
+	tileX := UnitTileX(w, unitSlot)
+	tileY := UnitTileY(w, unitSlot)
 	tile := w.groundStorage[tileX*int(w.maxY)+tileY].type
 	if WorldTileHasPath(w, tileX, tileY) {
-		speed *= PATH_SPEED_MULTIPLIER*KingdomTechPathSpeedMultiplier(w, w.units[unitSlot].kingdome)
+		speed = d32.Mul(
+			speed,
+			d32.Mul(PATH_SPEED_MULTIPLIER, KingdomTechPathSpeedMultiplier(w, w.units[unitSlot].kingdome)),
+		)
 	} else {
-		speed /= max(TILE_DEFS[tile].moveCost, 0.1)
+		speed = d32.Div(speed, max(TILE_DEFS[tile].moveCost, d32.FromRatio(1, 10)))
 	}
-	speed *= UnitSeaSpeedMultiplier(w, unitSlot)
-	speed *= WorldWeatherMoveFactor(w)
+	speed = d32.Mul(speed, UnitSeaSpeedMultiplier(w, unitSlot))
+	speed = d32.Mul(speed, WorldWeatherMoveFactor(w))
 	return speed
 }
 
@@ -1263,6 +1364,93 @@ WorldWrapPosition :: proc(position, size: f32) -> f32 {
 	wrapped := math.mod(position, size)
 	if wrapped < 0 do wrapped += size
 	return wrapped
+}
+
+// Raw Q16.16 units as f32 world units.
+RawToF32 :: proc(raw: i64) -> f32 {
+	return f32(raw)/f32(d32.SCALE)
+}
+
+// Q16.16 value as f32 world units.
+PositionToF32 :: proc(value: d32.Value) -> f32 {
+	return RawToF32(i64(d32.Raw(value)))
+}
+
+// Rounds to the nearest raw Q16.16 unit, ties away from zero. Values outside the
+// d32 range saturate to MIN/MAX instead of wrapping; NaN becomes ZERO.
+PositionFromF32 :: proc(value: f32) -> d32.Value {
+	scaled := f64(value)*f64(d32.SCALE)
+	if math.is_nan(scaled) do return d32.ZERO
+	if scaled >= f64(d32.Raw(d32.MAX)) do return d32.MAX
+	if scaled <= f64(d32.Raw(d32.MIN)) do return d32.MIN
+	if scaled < 0 do return d32.FromRaw(i32(i64(scaled-0.5)))
+	return d32.FromRaw(i32(i64(scaled+0.5)))
+}
+
+// Legacy f32 distance or speed as raw units; every float conversion goes here.
+UnitRawDistance :: proc(distance: f32) -> i64 {
+	return i64(d32.Raw(PositionFromF32(distance)))
+}
+
+// Raw distance below which two positions count as the same point (~1e-4 units).
+UNIT_POSITION_EPSILON_RAW :: i64(6)
+
+// Temporary f32 adapters for readers that still consume float positions.
+UnitX :: proc(w: ^World, slot: int) -> f32 {
+	return PositionToF32(w.units.x[slot])
+}
+
+UnitY :: proc(w: ^World, slot: int) -> f32 {
+	return PositionToF32(w.units.y[slot])
+}
+
+UnitPrevX :: proc(w: ^World, slot: int) -> f32 {
+	return PositionToF32(w.units.previousX[slot])
+}
+
+UnitPrevY :: proc(w: ^World, slot: int) -> f32 {
+	return PositionToF32(w.units.previousY[slot])
+}
+
+SetUnitPosition :: proc(w: ^World, slot: int, x, y: d32.Value) {
+	w.units.x[slot] = x
+	w.units.y[slot] = y
+}
+
+// Wrapped tile holding the unit's position.
+UnitTileX :: proc(w: ^World, slot: int) -> int {
+	wrapped, valid := d32.WrapRaw(i64(d32.Raw(w.units.x[slot])), d32.ZERO, i64(w.maxX)*d32.SCALE)
+	if !valid do return 0
+	return int(d32.ToInt(wrapped))
+}
+
+UnitTileY :: proc(w: ^World, slot: int) -> int {
+	wrapped, valid := d32.WrapRaw(i64(d32.Raw(w.units.y[slot])), d32.ZERO, i64(w.maxY)*d32.SCALE)
+	if !valid do return 0
+	return int(d32.ToInt(wrapped))
+}
+
+// Center of an already-wrapped tile index.
+TileCenterRaw :: proc(tile: int) -> f32 {
+	return f32(tile)+0.5
+}
+
+// Center of an already-wrapped tile index in Q16.16 raw units.
+TileCenterPosition :: proc(tile: int) -> d32.Value {
+	return d32.FromRaw(i32(i64(tile)*d32.SCALE+i64(d32.HALF)))
+}
+
+// Wrapped tile index containing a Q16.16 position.
+PositionTile :: proc(value: d32.Value, size: int) -> int {
+	if size <= 0 do return 0
+	wrapped, valid := d32.WrapRaw(i64(d32.Raw(value)), d32.ZERO, i64(size)*d32.SCALE)
+	if !valid do return 0
+	return int(d32.ToInt(wrapped))
+}
+
+// Center of a tile index, wrapped into the world first.
+TileCenter :: proc(tile, size: int) -> f32 {
+	return TileCenterRaw(WorldWrapCoordinate(tile, size))
 }
 
 WorldShortestWrappedDelta :: proc(delta, size: f32) -> f32 {

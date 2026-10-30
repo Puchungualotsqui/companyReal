@@ -1,8 +1,8 @@
 package main
 
 import rl "vendor:raylib"
-import "core:math"
 import "core:slice"
+import "d32"
 
 // Terrain memory is observer-only. Contact uses every kingdom's actual
 // vision, independently of who is observing or controlling the game.
@@ -163,8 +163,8 @@ FogUnitVisible :: proc(w: ^World, unitSlot: int) -> bool {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return false
-	x := int(WorldWrapPosition(w.units.x[unitSlot], f32(worldWidth)))
-	y := int(WorldWrapPosition(w.units.y[unitSlot], f32(worldHeight)))
+	x := UnitTileX(w, unitSlot)
+	y := UnitTileY(w, unitSlot)
 	return FogTileVisible(w, x, y)
 }
 
@@ -279,10 +279,10 @@ FogMarkVisibleIndex :: proc(w: ^World, index: int) {
 FogRevealCircle :: proc(
 	w: ^World,
 	centerX, centerY: int,
-	radius: f32,
+	radius: d32.Value,
 	kingdom: int = -1,
 ) {
-	if radius <= 0 do return
+	if radius <= d32.ZERO do return
 	if kingdom >= 0 && (kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom]) do return
 	if kingdom >= 0 && kingdom != w.observerKingdom do return
 
@@ -290,15 +290,17 @@ FogRevealCircle :: proc(
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return
 
-	radiusSquared := radius*radius
-	extent := int(radius)+1
+	radiusRaw := i64(d32.Raw(radius))
+	radiusSquared := u64(radiusRaw)*u64(radiusRaw)
+	extent := int(d32.ToInt(radius))+1
 	// Tiles are addressed as x*worldHeight+y, so walking one column at a time
 	// keeps the writes contiguous. The row-major walk used to touch a fresh
 	// cache line for every tile, which dominated town-area reveals.
 	for offsetX in -extent..=extent {
-		distanceSquared := f32(offsetX*offsetX)
+		offsetRaw := i64(offsetX)*d32.SCALE
+		distanceSquared := u64(offsetRaw*offsetRaw)
 		if distanceSquared > radiusSquared do continue
-		halfHeight := int(math.sqrt(radiusSquared-distanceSquared))
+		halfHeight := int(d32.SqrtRaw(radiusSquared-distanceSquared)/d32.SCALE)
 		wrappedX := WorldWrapCoordinate(centerX+offsetX, worldWidth)
 		base := wrappedX*worldHeight
 		for offsetY in -halfHeight..=halfHeight {
@@ -381,7 +383,11 @@ FogDecorationDespawn :: proc(w: ^World, decorationSlot: int) {
 		!w.decorationUsed[decorationSlot] {
 		return
 	}
-	index := FogTileIndex(w, int(w.decorations.x[decorationSlot]), int(w.decorations.y[decorationSlot]))
+	index := FogTileIndex(
+		w,
+		int(d32.ToInt(w.decorations.x[decorationSlot])),
+		int(d32.ToInt(w.decorations.y[decorationSlot])),
+	)
 	if index < 0 || index >= len(w.fog.decorationKind) do return
 	if w.fog.visible[index] {
 		w.fog.decorationKind[index] = FOG_NONE
@@ -452,18 +458,18 @@ FogSnapshotConstruction :: proc(
 
 FogSnapshotDecoration :: proc(w: ^World, decorationSlot: int) {
 	decoration := &w.decorations[decorationSlot]
-	tileX := int(decoration.x)
-	tileY := int(decoration.y)
+	tileX := int(d32.ToInt(decoration.x))
+	tileY := int(d32.ToInt(decoration.y))
 	if !FogTileVisible(w, tileX, tileY) do return
 	index := FogTileIndex(w, tileX, tileY)
 	if index < 0 do return
 
-	fractionX := clamp(decoration.x-f32(tileX), 0, 1)
-	fractionY := clamp(decoration.y-f32(tileY), 0, 1)
+	fractionX := u8((i64(d32.Raw(decoration.x))%d32.SCALE)*255/d32.SCALE)
+	fractionY := u8((i64(d32.Raw(decoration.y))%d32.SCALE)*255/d32.SCALE)
 	w.fog.decorationKind[index] = u8(decoration.kind)
 	w.fog.decorationVariant[index] = decoration.variant
-	w.fog.decorationOffsetX[index] = u8(fractionX*255)
-	w.fog.decorationOffsetY[index] = u8(fractionY*255)
+	w.fog.decorationOffsetX[index] = fractionX
+	w.fog.decorationOffsetY[index] = fractionY
 }
 
 // Any visible footprint tile is enough to meet a building's owner; neither
@@ -517,15 +523,18 @@ FogUpdate :: proc(w: ^World) {
 		if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do continue
 		// Only the observer's own units reveal tiles.
 		if kingdom != w.observerKingdom do continue
-		x := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
-		y := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+		x := UnitTileX(w, unitSlot)
+		y := UnitTileY(w, unitSlot)
 		// Town area circles already cover every tile inside the town.
 		townSlot := w.units[unitSlot].town
 		if WorldTownExists(w, kingdom, townSlot) &&
 			TownPointInArea(w, kingdom, townSlot, x, y) {
 			continue
 		}
-		vision := UnitDefaultVision(w.units[unitSlot].type, isNight)*WorldWeatherVisionFactor(w)
+		vision := d32.Mul(
+			PositionFromF32(UnitDefaultVision(w.units[unitSlot].type, isNight)),
+			WorldWeatherVisionFactor(w),
+		)
 		FogRevealCircle(w, x, y, vision, kingdom)
 	}
 	ProfilerEnd(fogStamp)
@@ -542,7 +551,7 @@ FogUpdate :: proc(w: ^World) {
 			TownPointInArea(w, building.kingdom, building.town, centerX, centerY) {
 			continue
 		}
-		vision := BuildingVision(BuildingKindOf(building.type))
+		vision := PositionFromF32(BuildingVision(BuildingKindOf(building.type)))
 		FogRevealCircle(
 			w,
 			centerX,
@@ -566,7 +575,7 @@ FogUpdate :: proc(w: ^World) {
 					w,
 					site.x+width/2,
 					site.y+height/2,
-					BuildingVision(site.kind),
+					PositionFromF32(BuildingVision(site.kind)),
 					kingdomSlot,
 				)
 			}
@@ -586,7 +595,7 @@ FogUpdate :: proc(w: ^World) {
 					w,
 					circleX+width/2,
 					circleY+height/2,
-					f32(circleRadius)*FOG_TOWN_AREA_VISION_FACTOR,
+					PositionFromF32(f32(circleRadius)*FOG_TOWN_AREA_VISION_FACTOR),
 					kingdomSlot,
 				)
 			}
@@ -683,14 +692,14 @@ FogUpdate :: proc(w: ^World) {
 		if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY || kingdomSlot == observer {
 			continue
 		}
-		x := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
-		y := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+		x := UnitTileX(w, unitSlot)
+		y := UnitTileY(w, unitSlot)
 		if !FogTileVisible(w, x, y) do continue
 		KingdomMeet(w, observer, kingdomSlot)
 		visibleEnemy[kingdomSlot] = true
 		if !w.fog.enemyAlerted[kingdomSlot] {
 			w.fog.enemyAlerted[kingdomSlot] = true
-			WorldAlertAdd(w, .EnemySpotted, observer, -1, kingdomSlot, w.units.x[unitSlot], w.units.y[unitSlot])
+			WorldAlertAdd(w, .EnemySpotted, observer, -1, kingdomSlot, UnitX(w, unitSlot), UnitY(w, unitSlot))
 		}
 	}
 	for kingdomSlot in 0..<KINGDOMS_CAPACITY {

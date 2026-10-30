@@ -1,15 +1,15 @@
 package main
 
 import "base:intrinsics"
-import "core:math"
+import "d32"
 
 CANNON_RANGE :: 14
 CANNON_COOLDOWN :: 3
-CANNON_DAMAGE :: 25
+CANNON_DAMAGE :: d32.Value(25*d32.SCALE)
 
 WATCHTOWER_RANGE :: 9
 WATCHTOWER_COOLDOWN :: 2
-WATCHTOWER_DAMAGE :: 6
+WATCHTOWER_DAMAGE :: d32.Value(6*d32.SCALE)
 
 AUTO_TRAINING_BUILDINGS := [6]BuildingKind{
 	.ArcheryRange,
@@ -54,7 +54,7 @@ WorldBuildingUpdate :: proc(w: ^World, deltaTime: f32) {
 			town := &w.kingdoms[kingdomSlot].towns[townSlot]
 			town.homes = 0
 			town.farmlands = 0
-			town.farmlandOutput = 0
+			town.farmlandOutput = d32.ZERO
 			for &count in town.buildingCounts {
 				count = 0
 			}
@@ -141,13 +141,16 @@ BuildingUpdateFarmland :: proc(w: ^World, buildingSlot: int, deltaTime: f32) {
 			w.buildings.output[buildingSlot] = BuildingFarmlandOutput(w, buildingSlot)
 			w.buildings.outputRevision[buildingSlot] = w.terrainRevision
 		}
-		town.farmlandOutput += w.buildings.output[buildingSlot]
+		town.farmlandOutput = d32.Add(town.farmlandOutput, w.buildings.output[buildingSlot])
 	}
 }
 
 BuildingUpdateCannon :: proc(w: ^World, buildingSlot: int, deltaTime: f32) {
-	if w.buildings.cooldown[buildingSlot] > 0 {
-		w.buildings.cooldown[buildingSlot] -= deltaTime
+	if w.buildings.cooldown[buildingSlot] > d32.ZERO {
+		w.buildings.cooldown[buildingSlot] = max(
+			d32.Sub(w.buildings.cooldown[buildingSlot], PositionFromF32(deltaTime)),
+			d32.ZERO,
+		)
 		return
 	}
 
@@ -160,8 +163,8 @@ BuildingUpdateCannon :: proc(w: ^World, buildingSlot: int, deltaTime: f32) {
 		w,
 		centerX,
 		centerY,
-		w.units.x[nearestSlot],
-		w.units.y[nearestSlot],
+		UnitX(w, nearestSlot),
+		UnitY(w, nearestSlot),
 		18,
 		0,
 		0.20,
@@ -178,12 +181,15 @@ BuildingUpdateCannon :: proc(w: ^World, buildingSlot: int, deltaTime: f32) {
 		centerY,
 		.Projectile,
 	)
-	w.buildings.cooldown[buildingSlot] = CANNON_COOLDOWN
+	w.buildings.cooldown[buildingSlot] = d32.FromInt(CANNON_COOLDOWN)
 }
 
 BuildingUpdateWatchtower :: proc(w: ^World, buildingSlot: int, deltaTime: f32) {
-	if w.buildings.cooldown[buildingSlot] > 0 {
-		w.buildings.cooldown[buildingSlot] -= deltaTime
+	if w.buildings.cooldown[buildingSlot] > d32.ZERO {
+		w.buildings.cooldown[buildingSlot] = max(
+			d32.Sub(w.buildings.cooldown[buildingSlot], PositionFromF32(deltaTime)),
+			d32.ZERO,
+		)
 		return
 	}
 
@@ -196,8 +202,8 @@ BuildingUpdateWatchtower :: proc(w: ^World, buildingSlot: int, deltaTime: f32) {
 		w,
 		centerX,
 		centerY,
-		w.units.x[nearestSlot],
-		w.units.y[nearestSlot],
+		UnitX(w, nearestSlot),
+		UnitY(w, nearestSlot),
 		22,
 		0,
 		0.35,
@@ -214,28 +220,29 @@ BuildingUpdateWatchtower :: proc(w: ^World, buildingSlot: int, deltaTime: f32) {
 		centerY,
 		.Projectile,
 	)
-	w.buildings.cooldown[buildingSlot] = WATCHTOWER_COOLDOWN
+	w.buildings.cooldown[buildingSlot] = d32.FromInt(WATCHTOWER_COOLDOWN)
 }
 
-BuildingFindNearestHostileUnit :: proc(w: ^World, buildingSlot: int, attackRange: f32) -> int {
+BuildingFindNearestHostileUnit :: proc(w: ^World, buildingSlot: int, attackRange: int) -> int {
 	kingdomSlot := w.buildings.kingdom[buildingSlot]
 	if kingdomSlot < 0 || kingdomSlot >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdomSlot] {
 		return -1
 	}
 
 	width, height := BuildingTileSize(w.buildings[buildingSlot].type)
-	centerX := f32(w.buildings.x[buildingSlot])+f32(width)*0.5
-	centerY := f32(w.buildings.y[buildingSlot])+f32(height)*0.5
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
+	centerX := d32.FromRaw(i32(i64(w.buildings.x[buildingSlot])*d32.SCALE+i64(width)*(d32.SCALE/2)))
+	centerY := d32.FromRaw(i32(i64(w.buildings.y[buildingSlot])*d32.SCALE+i64(height)*(d32.SCALE/2)))
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	chunkSize := w.spatial.chunkSize
 	if chunkSize <= 0 do return -1
 
-	centerChunkX := int(centerX)/chunkSize
-	centerChunkY := int(centerY)/chunkSize
-	chunkRadius := int(attackRange)/chunkSize+1
+	centerChunkX := int(d32.ToInt(centerX))/chunkSize
+	centerChunkY := int(d32.ToInt(centerY))/chunkSize
+	chunkRadius := attackRange/chunkSize+1
 	nearestSlot := -1
-	nearestDistance: f32 = attackRange
+	attackRangeRaw := i64(attackRange)*d32.SCALE
+	nearestDistanceSquared := u64(attackRangeRaw)*u64(attackRangeRaw)
 	for offsetX in -chunkRadius..=chunkRadius {
 		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
 		for offsetY in -chunkRadius..=chunkRadius {
@@ -246,11 +253,18 @@ BuildingFindNearestHostileUnit :: proc(w: ^World, buildingSlot: int, attackRange
 				unitSlot = w.spatial.unitNext[unitSlot] {
 				if !w.unitUsed[unitSlot] do continue
 				if !KingdomAtWar(w, kingdomSlot, w.units[unitSlot].kingdome) do continue
-				deltaX := WorldShortestWrappedDelta(w.units.x[unitSlot]-centerX, worldWidth)
-				deltaY := WorldShortestWrappedDelta(w.units.y[unitSlot]-centerY, worldHeight)
-				distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-				if distance < nearestDistance || (distance == nearestDistance && nearestSlot >= 0 && unitSlot < nearestSlot) {
-					nearestDistance = distance
+				distanceSquared, valid := d32.WrappedDistanceSquared(
+					w.units[unitSlot].x,
+					w.units[unitSlot].y,
+					centerX,
+					centerY,
+					worldWidthRaw,
+					worldHeightRaw,
+				)
+				if !valid do continue
+				if distanceSquared < nearestDistanceSquared ||
+					(distanceSquared == nearestDistanceSquared && nearestSlot >= 0 && unitSlot < nearestSlot) {
+					nearestDistanceSquared = distanceSquared
 					nearestSlot = unitSlot
 				}
 			}
@@ -281,8 +295,6 @@ BuildingClearUnits :: proc(w: ^World, x, y: int, buildingType: BuildingType, rel
 	chunksX := w.spatial.chunksX
 	chunksY := w.spatial.chunksY
 	if chunkSize <= 0 || chunksX <= 0 || chunksY <= 0 do return true
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
 	// Buildings never wrap, so only the buckets the footprint touches can hold
 	// an occupant. Scanning every unit slot here made each placement O(units).
 	startChunkX := x/chunkSize
@@ -300,8 +312,8 @@ BuildingClearUnits :: proc(w: ^World, x, y: int, buildingType: BuildingType, rel
 				unitSlot := slot
 				slot = next
 				if !w.unitUsed[unitSlot] do continue
-				unitX := int(WorldWrapPosition(w.units.x[unitSlot], worldWidth))
-				unitY := int(WorldWrapPosition(w.units.y[unitSlot], worldHeight))
+				unitX := UnitTileX(w, unitSlot)
+				unitY := UnitTileY(w, unitSlot)
 				if unitX < x || unitX >= x+width || unitY < y || unitY >= y+height do continue
 				exitX, exitY, found := UnitFindBuildingExit(w, unitSlot, x, y, width, height)
 				if !found do return false
@@ -311,12 +323,13 @@ BuildingClearUnits :: proc(w: ^World, x, y: int, buildingType: BuildingType, rel
 				if _, converting := unit.state.(StateConverting); converting {
 					UnitConversionCancel(w, unitSlot)
 				}
-				unit.x, unit.y = f32(exitX)+0.5, f32(exitY)+0.5
-				unit.previousX, unit.previousY = unit.x, unit.y
+				positionX, positionY := TileCenterPosition(exitX), TileCenterPosition(exitY)
+				SetUnitPosition(w, unitSlot, positionX, positionY)
+				unit.previousX, unit.previousY = positionX, positionY
 				unit.pathReady = false
 				if _, pacific := unit.state.(StatePacific); pacific {
 					unit.state = StatePacific.Roaming
-					unit.cooldown = 0
+					unit.cooldown = d32.ZERO
 				}
 				SpatialUnitMove(w, unitSlot)
 			}
@@ -344,14 +357,14 @@ TownBuilderConstruct :: proc(w: ^World, kingdomSlot, townSlot: int, canGrow: boo
 
 		if !pathChecked && TownConstructionKindCount(w, kingdomSlot, townSlot, .Path) == 0 {
 			pathChecked = true
-			if w.simulationTime >= town.pathSearchFailUntil {
+			if WorldCurrentTick(w) >= town.pathSearchFailUntilTick {
 				if x, y, found := TownAutoPathSite(w, kingdomSlot, townSlot); found {
 					if TownStartConstruction(w, kingdomSlot, townSlot, .Path, x, y) {
 						startedAny = true
 						continue
 					}
 				} else {
-					town.pathSearchFailUntil = w.simulationTime+TOWN_SITE_FAIL_COOLDOWN
+					town.pathSearchFailUntilTick = WorldCurrentTick(w)+TOWN_SITE_FAIL_TICKS
 				}
 			}
 		}
@@ -412,21 +425,21 @@ TownBuilderStartBuilding :: proc(w: ^World, kingdomSlot, townSlot: int, building
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	kind := BuildingKindOf(buildingType)
 	if !(kind in town.unlockedBuildings) do return false
-	cost := BuildingWoodCost(kind)*KingdomTechBuildingKindCostMultiplier(w, kingdomSlot, kind)
+	cost := d32.Mul(BuildingWoodCost(kind), KingdomTechBuildingKindCostMultiplier(w, kingdomSlot, kind))
 	if town.wood < cost do return false
 
 	if x, y, ok := TownTakePooledSite(w, kingdomSlot, townSlot, buildingType); ok {
-		town.siteFailUntil[kind] = 0
+		town.siteFailUntilTick[kind] = 0
 		return TownStartConstruction(w, kingdomSlot, townSlot, kind, x, y)
 	}
-	if town.siteFailUntil[kind] > w.simulationTime do return false
+	if town.siteFailUntilTick[kind] > WorldCurrentTick(w) do return false
 
 	x, y, found := TownFindBuildingSite(w, kingdomSlot, townSlot, buildingType)
 	if !found {
-		town.siteFailUntil[kind] = w.simulationTime+TOWN_SITE_FAIL_COOLDOWN
+		town.siteFailUntilTick[kind] = WorldCurrentTick(w)+TOWN_SITE_FAIL_TICKS
 		return false
 	}
-	town.siteFailUntil[kind] = 0
+	town.siteFailUntilTick[kind] = 0
 	return TownStartConstruction(w, kingdomSlot, townSlot, kind, x, y)
 }
 
@@ -486,12 +499,12 @@ TownStartConstruction :: proc(w: ^World, kingdomSlot, townSlot: int, kind: Build
 
 	buildingType := BuildingTypeFromKind(kind)
 	if !TownBuildingValid(w, kingdomSlot, x, y, buildingType) do return false
-	cost := BuildingWoodCost(kind)*KingdomTechBuildingKindCostMultiplier(w, kingdomSlot, kind)
+	cost := d32.Mul(BuildingWoodCost(kind), KingdomTechBuildingKindCostMultiplier(w, kingdomSlot, kind))
 	if town.wood < cost do return false
 	if !BuildingClearUnits(w, x, y, buildingType, false) do return false
 	BuildingClearUnits(w, x, y, buildingType, true)
 
-	town.wood -= cost
+	town.wood = d32.Sub(town.wood, cost)
 	town.constructions[slot] = ConstructionSite{
 		active = true,
 		kind = kind,
@@ -512,7 +525,7 @@ TownConstructionCancel :: proc(w: ^World, kingdomSlot, townSlot, siteIndex: int)
 	site := &town.constructions[siteIndex]
 	if !site.active do return
 
-	town.wood += site.paid
+	town.wood = d32.Add(town.wood, site.paid)
 	settlers := site.settlers
 	site^ = ConstructionSite{}
 	ConstructionBlockerUntrack(w, kingdomSlot, townSlot, siteIndex)
@@ -525,10 +538,10 @@ TownConstructionCancelLeastProgress :: proc(w: ^World, kingdomSlot, townSlot: in
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return -1
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	best := -1
-	bestWork: f32 = 1e30
+	bestWork := d32.MAX
 	for site, index in town.constructions {
 		if !site.active || site.kind == .TownHall do continue
-		work := site.clearWork+site.buildWork
+		work := d32.Add(site.clearWork, site.buildWork)
 		if work < bestWork {
 			bestWork = work
 			best = index
@@ -539,15 +552,19 @@ TownConstructionCancelLeastProgress :: proc(w: ^World, kingdomSlot, townSlot: in
 	return best
 }
 
-BuildingBuildSeconds :: proc(kind: BuildingKind) -> f32 {
+BuildingBuildSeconds :: proc(kind: BuildingKind) -> d32.Value {
 	// Order infrastructure is deliberately slow to raise.
-	if kind == .AlchemistWorkshop do return 90
+	if kind == .AlchemistWorkshop do return d32.FromInt(90)
 	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
-	seconds := 4+f32(width*height)*1.5+BuildingWoodCost(kind)*0.25
+	seconds := d32.Add(
+		d32.FromInt(4),
+		d32.Mul(d32.FromInt(i32(width*height)), d32.FromRatio(3, 2)),
+	)
+	seconds = d32.Add(seconds, d32.Mul(BuildingWoodCost(kind), d32.FromRatio(1, 4)))
 	// Town halls are ordered by the player/AI; every other town building is
 	// automatic infrastructure, so it comes up faster to keep the opening from
 	// dragging.
-	if kind != .TownHall do seconds *= 0.6
+	if kind != .TownHall do seconds = d32.Mul(seconds, d32.FromRatio(6, 10))
 	return seconds
 }
 
@@ -567,8 +584,8 @@ TownConstructionPendingDecoration :: proc(w: ^World, site: ConstructionSite) -> 
 			chunk := wrappedX*w.spatial.chunksY+wrappedY
 			for slot := w.spatial.decorationHead[chunk]; slot >= 0;
 				slot = w.spatial.decorationNext[slot] {
-				decorationX := int(w.decorations.x[slot])
-				decorationY := int(w.decorations.y[slot])
+				decorationX := int(d32.ToInt(w.decorations.x[slot]))
+				decorationY := int(d32.ToInt(w.decorations.y[slot]))
 				if decorationX >= site.x && decorationX < site.x+width &&
 					decorationY >= site.y && decorationY < site.y+height {
 					return slot
@@ -605,8 +622,8 @@ TownConstructionAccessPoint :: proc(
 		height,
 		unit.type,
 		unit.kingdome,
-		int(unit.x),
-		int(unit.y),
+		UnitTileX(w, unitSlot),
+		UnitTileY(w, unitSlot),
 	)
 	if found {
 		site.accessX, site.accessY, site.accessReady = x, y, true
@@ -626,20 +643,26 @@ TownFindConstructionForBuilder :: proc(
 	unit := &w.units[unitSlot]
 	if unit.type == nil || UnitKindOf(unit.type) != .Builder do return
 	builder := &unit.type.(Builder)
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 
-	bestScore: f32 = 1e30
+	bestScore := ~u64(0)
 	fallback := -1
-	fallbackScore: f32 = 1e30
+	fallbackScore := ~u64(0)
 	for site, index in town.constructions {
 		if !site.active do continue
 		width, height := BuildingTileSize(BuildingTypeFromKind(site.kind))
-		centerX := f32(site.x)+f32(width)*0.5
-		centerY := f32(site.y)+f32(height)*0.5
-		deltaX := WorldShortestWrappedDelta(centerX-unit.x, worldWidth)
-		deltaY := WorldShortestWrappedDelta(centerY-unit.y, worldHeight)
-		score := deltaX*deltaX+deltaY*deltaY
+		centerX := d32.FromRaw(i32(i64(site.x)*d32.SCALE+i64(width)*(d32.SCALE/2)))
+		centerY := d32.FromRaw(i32(i64(site.y)*d32.SCALE+i64(height)*(d32.SCALE/2)))
+		score, valid := d32.WrappedDistanceSquared(
+			unit.x,
+			unit.y,
+			centerX,
+			centerY,
+			worldWidthRaw,
+			worldHeightRaw,
+		)
+		if !valid do continue
 		if index == builder.failedConstruction {
 			if score < fallbackScore {
 				fallbackScore = score
@@ -682,7 +705,8 @@ TownConstructionMerge :: proc(w: ^World) {
 				TownConstructionWork(w, entry.kingdom, entry.town, entry.site, entry.amount)
 			case .Wood:
 				if WorldTownExists(w, entry.kingdom, entry.town) {
-					w.kingdoms[entry.kingdom].towns[entry.town].wood += entry.amount
+					town := &w.kingdoms[entry.kingdom].towns[entry.town]
+					town.wood = d32.Add(town.wood, entry.wood)
 				}
 			}
 		}
@@ -694,7 +718,7 @@ TownConstructionMerge :: proc(w: ^World) {
 TownConstructionWork :: proc(
 	w: ^World,
 	kingdomSlot, townSlot, siteIndex: int,
-	deltaTime: f32,
+	work: d32.Value,
 ) -> ConstructionProgress {
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return .Completed
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
@@ -704,24 +728,26 @@ TownConstructionWork :: proc(
 	slot := TownConstructionPendingDecoration(w, site^)
 	if slot >= 0 {
 		kind := w.decorations.kind[slot]
-		site.clearWork += deltaTime
+		site.clearWork = d32.Add(site.clearWork, work)
 		if site.clearWork >= DecorationClearSeconds(kind) {
-			town.wood += DecorationWoodYield(kind)
+			town.wood = d32.Add(town.wood, DecorationWoodYield(kind))
 			WorldDecorationDespawn(w, slot)
-			site.clearWork = 0
+			site.clearWork = d32.ZERO
 		}
 		return .Working
 	}
 
 	buildSpeed := KingdomTechBuildSpeedMultiplier(w, kingdomSlot)
-	if site.kind == .Path && KingdomHasTech(w, kingdomSlot, .Roadworks) do buildSpeed *= 1.30
-	site.buildWork += deltaTime*buildSpeed
+	if site.kind == .Path && KingdomHasTech(w, kingdomSlot, .Roadworks) {
+		buildSpeed = d32.Mul(buildSpeed, d32.FromRatio(130, 100))
+	}
+	site.buildWork = d32.Add(site.buildWork, d32.Mul(work, buildSpeed))
 	if site.buildWork < BuildingBuildSeconds(site.kind) do return .Working
 	if !BuildingClearUnits(w, site.x, site.y, BuildingTypeFromKind(site.kind), false) do return .Working
 
 	if site.kind == .TownHall {
 		if !TownFound(w, kingdomSlot, site.x, site.y, site.settlers) {
-			town.wood += site.paid
+			town.wood = d32.Add(town.wood, site.paid)
 			for _ in 0..<site.settlers do TownSpawnCitizen(w, kingdomSlot, townSlot, Villager{})
 		}
 	} else if _, ok := BuildingSpawn(
@@ -732,7 +758,7 @@ TownConstructionWork :: proc(
 		kingdomSlot,
 		townSlot,
 	); !ok {
-		town.wood += site.paid
+		town.wood = d32.Add(town.wood, site.paid)
 	}
 	site.active = false
 	site^ = ConstructionSite{}
@@ -810,7 +836,7 @@ TownAutoPathSite :: proc(w: ^World, kingdomSlot, townSlot: int) -> (int, int, bo
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	hallWidth, hallHeight := BuildingTileSize(TownHall{})
 	offsets := [4][2]int{{1, 0}, {0, 1}, {-1, 0}, {0, -1}}
-	rotation := int(WorldNoiseHash(town.x, town.y, w.seed+0xBA7D)*4)
+	rotation := int(WorldNoiseHashInt(town.x, town.y, w.seed+0xBA7D))/250_000
 	queueEnd := 0
 
 	// Each district has a local street network rooted at its hall.
@@ -1062,7 +1088,7 @@ TOWN_BUILDING_SITE_CANDIDATES :: 8
 // identical to a sequential scan.
 TownSiteSample :: struct {
 	x, y:  int,
-	score: f32,
+	score: d32.Value,
 	valid: bool,
 }
 
@@ -1082,10 +1108,8 @@ TownSiteSampleRange :: proc(ctx: rawptr, start, end: int, worker: int) {
 	job := cast(^TownSiteSearchJob)ctx
 	town := &job.w.kingdoms[job.kingdomSlot].towns[job.townSlot]
 	for index in start..<end {
-		rollX := WorldNoiseHash(index, int(job.kind)+1, job.seed+0x51D)
-		rollY := WorldNoiseHash(index, int(job.kind)+2, job.seed+0x51E)
-		x := job.minX+min(int(rollX*f32(job.spanX)), job.spanX-1)
-		y := job.minY+min(int(rollY*f32(job.spanY)), job.spanY-1)
+		x := job.minX+WorldNoiseIndex(index, int(job.kind)+1, job.seed+0x51D, job.spanX)
+		y := job.minY+WorldNoiseIndex(index, int(job.kind)+2, job.seed+0x51E, job.spanY)
 
 		distanceX := max(max(town.x-x, 0), x-(town.x+3))
 		distanceY := max(max(town.y-y, 0), y-(town.y+3))
@@ -1112,7 +1136,10 @@ TownSiteSampleRange :: proc(ctx: rawptr, start, end: int, worker: int) {
 		job.samples[index] = TownSiteSample {
 			x     = x,
 			y     = y,
-			score = score+f32(min(access, 12))*0.12,
+			score = d32.Add(
+				score,
+				d32.Mul(d32.FromInt(i32(min(access, 12))), d32.FromRatio(12, 100)),
+			),
 			valid = true,
 		}
 	}
@@ -1160,7 +1187,7 @@ TownFindBuildingSite :: proc(w: ^World, kingdomSlot, townSlot: int, buildingType
 	ParallelFor(TOWN_BUILDING_SITE_SAMPLES, &job, TownSiteSampleRange)
 
 	bestX, bestY := 0, 0
-	bestScore: f32 = -1e30
+	bestScore := d32.MIN
 	found := false
 	considered := 0
 	for sample in samples {
@@ -1209,7 +1236,7 @@ TownPlacementAccess :: proc(w: ^World, kingdom, x, y, width, height: int) -> (in
 TownPlacementNeighborhood :: struct {
 	touching, homes: int,
 	nearestGapSquared: int,
-	roadBonus: f32,
+	roadBonus: d32.Value,
 }
 
 TownPlacementConsiderNeighbor :: proc(x, y, width, height: int, kind: BuildingKind, otherX, otherY, otherWidth, otherHeight: int, otherKind: BuildingKind, neighborhood: ^TownPlacementNeighborhood) {
@@ -1220,13 +1247,13 @@ TownPlacementConsiderNeighbor :: proc(x, y, width, height: int, kind: BuildingKi
 	if otherKind == .Path || otherKind == .Bridge {
 		frontage := (x < otherX+otherWidth && otherX < x+width) ||
 			(y < otherY+otherHeight && otherY < y+height)
-		bonus: f32 = 0
+		bonus := d32.ZERO
 		if frontage && gapSquared == 0 {
-			bonus = kind == .Home ? 8 : 2.5
+			bonus = kind == .Home ? d32.FromInt(8) : d32.FromRatio(25, 10)
 		} else if frontage && gapSquared <= 1 {
-			bonus = kind == .Home ? 3 : 1
+			bonus = kind == .Home ? d32.FromInt(3) : d32.ONE
 		} else if gapSquared <= 4 {
-			bonus = 0.5
+			bonus = d32.HALF
 		}
 		neighborhood.roadBonus = max(neighborhood.roadBonus, bonus)
 		return
@@ -1236,19 +1263,36 @@ TownPlacementConsiderNeighbor :: proc(x, y, width, height: int, kind: BuildingKi
 	if otherKind == .Home && gapSquared <= 9 do neighborhood.homes += 1
 }
 
-TownPlacementScore :: proc(w: ^World, kingdomSlot, townSlot, x, y, width, height: int, kind: BuildingKind, seed: u64) -> f32 {
-	centerX, centerY := f32(x)+f32(width)*0.5, f32(y)+f32(height)*0.5
-	distance: f32 = 1e20
+TownPlacementScore :: proc(w: ^World, kingdomSlot, townSlot, x, y, width, height: int, kind: BuildingKind, seed: u64) -> d32.Value {
+	centerX := d32.FromRaw(i32((i64(x)*2+i64(width))*d32.SCALE/2))
+	centerY := d32.FromRaw(i32((i64(y)*2+i64(height))*d32.SCALE/2))
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	nearestSquared := ~u64(0)
 	for circle in 0..<TownAreaCircleCount(w, kingdomSlot, townSlot) {
 		hallX, hallY, _ := TownAreaCircle(w, kingdomSlot, townSlot, circle)
-		dx, dy := centerX-f32(hallX+2), centerY-f32(hallY+2)
-		distance = min(distance, math.sqrt(dx*dx+dy*dy))
+		hallRawX := d32.FromInt(i32(hallX+2))
+		hallRawY := d32.FromInt(i32(hallY+2))
+		squared, valid := d32.WrappedDistanceSquared(
+			centerX,
+			centerY,
+			hallRawX,
+			hallRawY,
+			worldWidthRaw,
+			worldHeightRaw,
+		)
+		if valid && squared < nearestSquared do nearestSquared = squared
 	}
+	distance := d32.MAX
+	if nearestSquared != ~u64(0) do distance = d32.FromRaw(i32(d32.SqrtRaw(nearestSquared)))
+	hash := d32.FromRatio(i32(WorldNoiseHashInt(x, y, seed)), 1_000_000)
 	// Streets shape neighborhoods more than distance from the hall does.
-	score := WorldNoiseHash(x, y, seed)*1.5-distance*0.3
+	score := d32.Sub(d32.Mul(hash, d32.FromRatio(3, 2)), d32.Mul(distance, d32.FromRatio(3, 10)))
 	if kind == .Farmland {
 		town := &w.kingdoms[kingdomSlot].towns[townSlot]
-		score = WorldNoiseHash(x, y, seed)*1.5-math.abs(distance-f32(town.areaRadius)*0.65)*0.3
+		radius := d32.Mul(d32.FromInt(i32(town.areaRadius)), d32.FromRatio(65, 100))
+		deviation := d32.Abs(d32.Sub(distance, radius))
+		score = d32.Sub(d32.Mul(hash, d32.FromRatio(3, 2)), d32.Mul(deviation, d32.FromRatio(3, 10)))
 	}
 	minX, maxX := max(0, x-3), min(int(w.maxX)-1, x+width+2)
 	minY, maxY := max(0, y-3), min(int(w.maxY)-1, y+height+2)
@@ -1270,41 +1314,72 @@ TownPlacementScore :: proc(w: ^World, kingdomSlot, townSlot, x, y, width, height
 		TownPlacementConsiderNeighbor(x, y, width, height, kind, site.x, site.y, otherWidth, otherHeight,
 			site.kind, &neighborhood)
 	}
-	score += neighborhood.roadBonus+max(0, 3-math.sqrt(f32(neighborhood.nearestGapSquared)))*0.5
+	gapDistance := d32.FromRaw(i32(d32.SqrtRaw(u64(neighborhood.nearestGapSquared) << 32)))
+	score = d32.Add(score, neighborhood.roadBonus)
+	score = d32.Add(
+		score,
+		d32.Mul(max(d32.ZERO, d32.Sub(d32.FromInt(3), gapDistance)), d32.HALF),
+	)
 	if kind == .Farmland {
-		score -= f32(min(neighborhood.touching, 4))*0.4
+		score = d32.Sub(
+			score,
+			d32.Mul(d32.FromInt(i32(min(neighborhood.touching, 4))), d32.FromRatio(4, 10)),
+		)
 	} else {
 		// Spacing is preferred, not mandatory on small islands or in dense towns.
-		score -= f32(min(neighborhood.touching, 4))*(kind == .Home ? 6 : 3)
+		score = d32.Sub(
+			score,
+			d32.Mul(
+				d32.FromInt(i32(min(neighborhood.touching, 4))),
+				d32.FromInt(i32(kind == .Home ? 6 : 3)),
+			),
+		)
 		if kind == .Home {
-			score += f32(min(neighborhood.homes, 3))*0.45-f32(max(0, neighborhood.homes-5))*0.6
+			bonus := d32.Mul(
+				d32.FromInt(i32(min(neighborhood.homes, 3))),
+				d32.FromRatio(45, 100),
+			)
+			crowding := d32.Mul(
+				d32.FromInt(i32(max(0, neighborhood.homes-5))),
+				d32.FromRatio(6, 10),
+			)
+			score = d32.Add(score, d32.Sub(bonus, crowding))
 		}
 	}
-	fertility: f32 = 0
+	fertility := d32.ZERO
 	for tileX in x..<x+width {
 		for tileY in y..<y+height {
-			fertility += TILE_DEFS[WorldTileAt(w, tileX, tileY).type].food
+			fertility = d32.Add(
+				fertility,
+				TILE_DEFS[WorldTileAt(w, tileX, tileY).type].food,
+			)
 		}
 	}
-	fertility /= f32(max(width*height, 1))
+	fertility = d32.Div(fertility, d32.FromInt(i32(max(width*height, 1))))
 	if kind == .Farmland {
-		score += fertility*3
+		score = d32.Add(score, d32.Mul(fertility, d32.FromInt(3)))
 	} else {
-		score -= fertility*0.8
+		score = d32.Sub(score, d32.Mul(fertility, d32.FromRatio(8, 10)))
 	}
 	return score
 }
 
-BuildingFarmlandOutput :: proc(w: ^World, buildingSlot: int) -> f32 {
+BuildingFarmlandOutput :: proc(w: ^World, buildingSlot: int) -> d32.Value {
 	x := w.buildings.x[buildingSlot]
 	y := w.buildings.y[buildingSlot]
 	width, height := BuildingTileSize(w.buildings[buildingSlot].type)
-	fertility: f32 = 0
+	fertility := d32.ZERO
 	for tileX in x..<x+width {
 		for tileY in y..<y+height {
-			fertility += TILE_DEFS[WorldTileAt(w, tileX, tileY).type].food
+			fertility = d32.Add(
+				fertility,
+				TILE_DEFS[WorldTileAt(w, tileX, tileY).type].food,
+			)
 		}
 	}
-	fertility /= f32(max(width*height, 1))
-	return clamp(0.08+fertility*0.08, 0.08, 0.16)
+	fertility = d32.Div(fertility, d32.FromInt(i32(max(width*height, 1))))
+	minimum := d32.FromRatio(8, 100)
+	output := d32.Add(minimum, d32.Mul(fertility, d32.FromRatio(8, 100)))
+	// Cached once per terrain change.
+	return clamp(output, minimum, d32.FromRatio(16, 100))
 }

@@ -2,6 +2,7 @@ package main
 
 import rl "vendor:raylib"
 import "core:math"
+import "d32"
 
 // ---------------------------------------------------------------------------
 // Blood
@@ -675,15 +676,18 @@ BloodFrozenDeath :: proc(w: ^World, x, y: f32, type: UnitType) {
 	}
 }
 
+// Damage is Q16.16 health. Producers compose damage with d32 arithmetic and
+// pass it here directly; effects convert to f32 only for animation. Health
+// updates saturate (see d32.Add/Sub).
 UnitApplyDamage :: proc(
 	w: ^World,
 	victimSlot: int,
-	damage: f32,
+	damage: d32.Value,
 	sourceX, sourceY: f32,
 	kind: DamageKind,
 ) -> bool {
 	if victimSlot < 0 || victimSlot >= UNIT_CAPACITY || !w.unitUsed[victimSlot] do return false
-	if damage <= 0 do return false
+	if damage <= d32.ZERO do return false
 	if w.deferDespawn {
 		assert(pendingDamageQueue != nil, "deferred damage requires a unit-loop queue")
 		PendingDamageQueueAppend(pendingDamageQueue, PendingDamage {
@@ -703,20 +707,20 @@ UnitApplyDamage :: proc(
 UnitApplyDamageNow :: proc(
 	w: ^World,
 	victimSlot: int,
-	damage: f32,
+	damage: d32.Value,
 	sourceX, sourceY: f32,
 	kind: DamageKind,
 ) -> bool {
 	RecursiveLockGuard(&w.unitMutex)
-	if w.units.health[victimSlot] <= 0 do return false
+	if w.units.health[victimSlot] <= d32.ZERO do return false
 
-	x := w.units.x[victimSlot]
-	y := w.units.y[victimSlot]
+	x := UnitX(w, victimSlot)
+	y := UnitY(w, victimSlot)
 	type := w.units.type[victimSlot]
 	faction := w.units.kingdome[victimSlot]
 
-	w.units.health[victimSlot] -= damage
-	dead := w.units.health[victimSlot] <= 0
+	w.units.health[victimSlot] = d32.Sub(w.units.health[victimSlot], damage)
+	dead := w.units.health[victimSlot] <= d32.ZERO
 	// A hit unit may be LOD-dormant and must react immediately.
 	if !dead do UnitWake(w, victimSlot)
 
@@ -753,8 +757,10 @@ UnitApplyDamageNow :: proc(
 			})
 		}
 	case .Melee, .Projectile, .Area:
-		BloodHit(w, x, y, dirX, dirY, damage, type)
-		if dead do BloodDeath(w, x, y, dirX, dirY, damage, type, faction)
+		// Effects still animate in f32; health stays exact in Q16.16.
+		damageF := PositionToF32(damage)
+		BloodHit(w, x, y, dirX, dirY, damageF, type)
+		if dead do BloodDeath(w, x, y, dirX, dirY, damageF, type, faction)
 	case .Drowning:
 		if dead {
 			BloodDrownDeath(w, x, y, type)
@@ -838,15 +844,15 @@ BloodBleedTick :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	if tint == BLOOD_TINT_NONE do return
 
 	maxHealth := UnitMaxHealth(w, unitSlot)
-	if maxHealth <= 0 do return
-	ratio := w.units.health[unitSlot]/maxHealth
-	if ratio > 0.55 do return
+	if maxHealth <= d32.ZERO do return
+	ratio := d32.Div(w.units.health[unitSlot], maxHealth)
+	if ratio > d32.FromRatio(55, 100) do return
 
-	rate := 0.12+(0.55-ratio)*1.2
+	rate := 0.12+(0.55-PositionToF32(ratio))*1.2
 	if PRandom(w) >= rate*deltaTime do return
 
-	x := w.units.x[unitSlot]
-	y := w.units.y[unitSlot]
+	x := UnitX(w, unitSlot)
+	y := UnitY(w, unitSlot)
 	BloodDropSpawn(w, x, y, 0.22, PRandom(w)*6.2831853, PRandomRange(w, 0.1, 0.5), tint, PRandomRange(w, 0.12, 0.2))
 	BloodAddAt(w, x, y, 1.2, 0.16, tint)
 }

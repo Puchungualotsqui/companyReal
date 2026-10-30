@@ -3,21 +3,28 @@ package main
 import rl "vendor:raylib"
 import "base:intrinsics"
 import "core:math"
+import "d32"
 
 // Fire rules. A fire cell lives on a tile and burns whatever flammable entity
 // sits there, so it can exist on empty ground too. Spread is probabilistic and
 // can be disabled per fire.
+// Hash time scales below assume four simulation ticks per second.
+#assert(TOWN_SIMULATION_STEP == 0.25)
+
 FIRE_CAPACITY :: 8192
 FIRE_DURATION :: 30
 FIRE_SPREAD_RADIUS :: 2.5
 FIRE_SPREAD_CHUNK_RADIUS :: 1
 FIRE_SPREAD_CHANCE :: 0.08
-FIRE_DECORATION_DAMAGE :: 6
-FIRE_BUILDING_DAMAGE :: 5
-FIRE_UNIT_DAMAGE :: 8
+FIRE_DECORATION_DAMAGE :: d32.Value(6*d32.SCALE)
+FIRE_BUILDING_DAMAGE :: d32.Value(5*d32.SCALE)
+FIRE_UNIT_DAMAGE :: d32.Value(8*d32.SCALE)
 FIRE_UNIT_IGNITE_RADIUS :: 1.5
 FIRE_UNIT_IGNITE_CHANCE :: 0.12
 FIRE_UNIT_BURN_SECONDS :: 5
+// Wind is quantized on a coarser fixed grid so the i64 dot products stay well
+// inside range at FIRE_SPREAD_RADIUS.
+FIRE_WIND_SCALE :: d32.SCALE/32
 
 // Fire-seconds removed per second by a pacific unit fighting a fire.
 FIRE_EXTINGUISH_RADIUS :: 1.6
@@ -42,8 +49,8 @@ Fire :: struct {
 	x, y:      f32,
 	intensity: f32,
 	spread:    f32,
-	remaining: f32,
-	duration:  f32,
+	remaining: d32.Value,
+	duration:  d32.Value,
 }
 
 // Fire risk is a terrain property; zero-risk tiles cannot ignite or spread.
@@ -111,9 +118,9 @@ WorldFireIgnite :: proc(w: ^World, x, y, intensity: f32, spread: f32 = 1) -> (in
 		return 0, false
 	}
 	fireWeather := WorldWeatherEffects(w).fireIgnition
-	if fireWeather <= 0 do return 0, false
-	if fireWeather < 1 &&
-		WorldNoiseHash(tileX, tileY, u64(w.simulationTime*8)) > fireWeather {
+	if fireWeather <= d32.ZERO do return 0, false
+	if fireWeather < d32.ONE &&
+		WorldNoiseHash(tileX, tileY, WorldCurrentTick(w)*2) > PositionToF32(fireWeather) {
 		return 0, false
 	}
 	if WorldFireAt(w, tileX, tileY) do return 0, false
@@ -132,7 +139,7 @@ WorldFireIgnite :: proc(w: ^World, x, y, intensity: f32, spread: f32 = 1) -> (in
 	w.fires.y[slot] = f32(tileY)+0.5
 	w.fires.intensity[slot] = clamp(intensity, 0.2, 2)
 	w.fires.spread[slot] = clamp(spread, 0, 2)
-	duration := FIRE_DURATION*(0.8+WorldNoiseHash(tileX, tileY, 0xF12E)*0.4)
+	duration := PositionFromF32(FIRE_DURATION*(0.8+WorldNoiseHash(tileX, tileY, 0xF12E)*0.4))
 	w.fires.remaining[slot] = duration
 	w.fires.duration[slot] = duration
 	w.fireUsed[slot] = true
@@ -183,8 +190,9 @@ WorldFireUpdate :: proc(w: ^World, deltaTime: f32) {
 			WorldFireDespawn(w, slot)
 			continue
 		}
-		w.fires.remaining[slot] -= deltaTime*weatherEffects.fireExtinguish
-		if w.fires.remaining[slot] <= 0 {
+		step := d32.Mul(PositionFromF32(deltaTime), weatherEffects.fireExtinguish)
+		w.fires.remaining[slot] = max(d32.Sub(w.fires.remaining[slot], step), d32.ZERO)
+		if w.fires.remaining[slot] <= d32.ZERO {
 			WorldFireDespawn(w, slot)
 			continue
 		}
@@ -199,12 +207,13 @@ WorldFireUpdate :: proc(w: ^World, deltaTime: f32) {
 FireDamageTile :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 	tileX := int(w.fires.x[fireSlot])
 	tileY := int(w.fires.y[fireSlot])
-	intensity := w.fires.intensity[fireSlot]
+	intensityValue := PositionFromF32(w.fires.intensity[fireSlot])
+	step := PositionFromF32(deltaTime)
 	worldHeight := int(w.maxY)
 
 	// Once a blaze has taken hold it leaves a scar. Only the woody biomes turn
 	// to ash; grass fires recover without a lasting mark.
-	if w.fires.remaining[fireSlot] < w.fires.duration[fireSlot]*0.55 {
+	if w.fires.remaining[fireSlot] < d32.Mul(w.fires.duration[fireSlot], d32.FromRatio(55, 100)) {
 		switch w.ground[tileX][tileY].type {
 		case .Forest, .Taiga:
 			seconds := SCORCHED_MIN_SECONDS+
@@ -217,8 +226,9 @@ FireDamageTile :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 	buildingSlot := w.tileBuilding[tileX*worldHeight+tileY]
 	if buildingSlot >= 0 && buildingSlot < BUILDING_CAPACITY && w.buildingUsed[buildingSlot] {
 		if !BuildingImmuneToFire(BuildingKindOf(w.buildings[buildingSlot].type)) {
-			w.buildings[buildingSlot].health -= FIRE_BUILDING_DAMAGE*intensity*deltaTime
-			if w.buildings[buildingSlot].health <= 0 {
+			damage := d32.Mul(d32.Mul(FIRE_BUILDING_DAMAGE, intensityValue), step)
+			w.buildings[buildingSlot].health = d32.Sub(w.buildings[buildingSlot].health, damage)
+			if w.buildings[buildingSlot].health <= d32.ZERO {
 				BuildingSpawnDebris(w, buildingSlot, true)
 				BuildingDestroyedBurst(w, buildingSlot)
 				BuildingDespawn(w, buildingSlot, -1)
@@ -228,16 +238,36 @@ FireDamageTile :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 
 	chunk := SpatialChunkIndex(w, tileX, tileY)
 	if chunk < 0 do return
+	decorationDamage := d32.Mul(d32.Mul(FIRE_DECORATION_DAMAGE, intensityValue), step)
 	slot := w.spatial.decorationHead[chunk]
 	for slot >= 0 {
 		next := w.spatial.decorationNext[slot]
-		if int(w.decorations.x[slot]) == tileX && int(w.decorations.y[slot]) == tileY &&
+		if int(d32.ToInt(w.decorations.x[slot])) == tileX &&
+			int(d32.ToInt(w.decorations.y[slot])) == tileY &&
 			DecorationIsFlammable(w.decorations.kind[slot]) {
-			w.decorations.health[slot] -= FIRE_DECORATION_DAMAGE*intensity*deltaTime
-			if w.decorations.health[slot] <= 0 do DecorationFell(w, slot)
+			w.decorations.health[slot] = d32.Sub(w.decorations.health[slot], decorationDamage)
+			if w.decorations.health[slot] <= d32.ZERO do DecorationFell(w, slot)
 		}
 		slot = next
 	}
+}
+
+// True when the offset points against the wind by more than a 0.2 cosine.
+// Squaring the negative dot product avoids sqrt and keeps the test exact.
+@(private = "file")
+FireWindOpposes :: proc(deltaX, deltaY, distanceSquared, windX, windY, windSquared: i64) -> bool {
+	if distanceSquared*10000 <= d32.SCALE*d32.SCALE do return false
+	dot := deltaX*windX+deltaY*windY
+	if dot >= 0 do return false
+	return 25*dot*dot > distanceSquared*windSquared
+}
+
+// Quantizes one wind component to the coarse fixed grid, rounding once in
+// Q16.16. The arithmetic shift rounds halves toward positive infinity.
+@(private = "file")
+FireWindQuantize :: proc(wind: d32.Value) -> i64 {
+	raw := i64(d32.Raw(wind))*FIRE_WIND_SCALE
+	return (raw+d32.SCALE/2) >> d32.FRACTION_BITS
 }
 
 FireSpread :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
@@ -246,17 +276,23 @@ FireSpread :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 	spread := w.fires.spread[fireSlot]
 	if spread <= 0 do return
 	weatherEffects := WorldWeatherEffects(w)
-	if weatherEffects.fireSpread <= 0 do return
+	if weatherEffects.fireSpread <= d32.ZERO do return
 
 	x := w.fires.x[fireSlot]
 	y := w.fires.y[fireSlot]
 	chance := FIRE_SPREAD_CHANCE*w.fires.intensity[fireSlot]*spread*deltaTime*
-		weatherEffects.fireSpread
+		PositionToF32(weatherEffects.fireSpread)
 	if chance <= 0 do return
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
-	radiusSquared: f32 = FIRE_SPREAD_RADIUS*FIRE_SPREAD_RADIUS
-	windLength := math.sqrt(w.weather.windX*w.weather.windX+w.weather.windY*w.weather.windY)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	radiusRaw := UnitRawDistance(FIRE_SPREAD_RADIUS)
+	radiusSquared := radiusRaw*radiusRaw
+	fireX := PositionFromF32(x)
+	fireY := PositionFromF32(y)
+	windX := FireWindQuantize(w.weather.windX)
+	windY := FireWindQuantize(w.weather.windY)
+	windSquared := windX*windX+windY*windY
+	filterWind := windSquared*400 > FIRE_WIND_SCALE*FIRE_WIND_SCALE
 
 	radius := FIRE_SPREAD_CHUNK_RADIUS
 	firstChunkX := (int(x)-radius)/chunkSize
@@ -273,29 +309,23 @@ FireSpread :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 			for decorationSlot := w.spatial.decorationHead[chunk]; decorationSlot >= 0;
 				decorationSlot = w.spatial.decorationNext[decorationSlot] {
 				if !DecorationIsFlammable(w.decorations.kind[decorationSlot]) do continue
-				deltaX := WorldShortestWrappedDelta(
-					w.decorations.x[decorationSlot]-x,
-					worldWidth,
-				)
-				deltaY := WorldShortestWrappedDelta(
-					w.decorations.y[decorationSlot]-y,
-					worldHeight,
-				)
-				if deltaX*deltaX+deltaY*deltaY > radiusSquared do continue
-				if windLength > 0.05 {
-					distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-					if distance > 0.01 &&
-						(deltaX*w.weather.windX+deltaY*w.weather.windY)/
-							(distance*windLength) < -0.2 {
-						continue
-					}
+				decorationX := w.decorations.x[decorationSlot]
+				decorationY := w.decorations.y[decorationSlot]
+				deltaX, validX := d32.ShortestWrappedDelta(fireX, decorationX, worldWidthRaw)
+				deltaY, validY := d32.ShortestWrappedDelta(fireY, decorationY, worldHeightRaw)
+				if !validX || !validY do continue
+				distanceSquared := deltaX*deltaX+deltaY*deltaY
+				if distanceSquared > radiusSquared do continue
+				if filterWind &&
+					FireWindOpposes(deltaX, deltaY, distanceSquared, windX, windY, windSquared) {
+					continue
 				}
-				roll := WorldNoiseHash(decorationSlot, fireSlot, u64(w.simulationTime*64))
+				roll := WorldNoiseHash(decorationSlot, fireSlot, WorldCurrentTick(w)*16)
 				if roll > chance do continue
 				WorldFireIgnite(
 					w,
-					w.decorations.x[decorationSlot],
-					w.decorations.y[decorationSlot],
+					PositionToF32(w.decorations.x[decorationSlot]),
+					PositionToF32(w.decorations.y[decorationSlot]),
 					w.fires.intensity[fireSlot]*0.85,
 					spread*0.9,
 				)
@@ -309,18 +339,18 @@ FireSpread :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 				width, height := BuildingTileSize(w.buildings[buildingSlot].type)
 				centerX := f32(w.buildings.x[buildingSlot])+f32(width)*0.5
 				centerY := f32(w.buildings.y[buildingSlot])+f32(height)*0.5
-				deltaX := WorldShortestWrappedDelta(centerX-x, worldWidth)
-				deltaY := WorldShortestWrappedDelta(centerY-y, worldHeight)
-				if deltaX*deltaX+deltaY*deltaY > radiusSquared do continue
-				if windLength > 0.05 {
-					distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-					if distance > 0.01 &&
-						(deltaX*w.weather.windX+deltaY*w.weather.windY)/
-							(distance*windLength) < -0.2 {
-						continue
-					}
+				buildingX := PositionFromF32(centerX)
+				buildingY := PositionFromF32(centerY)
+				deltaX, validX := d32.ShortestWrappedDelta(fireX, buildingX, worldWidthRaw)
+				deltaY, validY := d32.ShortestWrappedDelta(fireY, buildingY, worldHeightRaw)
+				if !validX || !validY do continue
+				distanceSquared := deltaX*deltaX+deltaY*deltaY
+				if distanceSquared > radiusSquared do continue
+				if filterWind &&
+					FireWindOpposes(deltaX, deltaY, distanceSquared, windX, windY, windSquared) {
+					continue
 				}
-				roll := WorldNoiseHash(buildingSlot, fireSlot, u64(w.simulationTime*128)+7)
+				roll := WorldNoiseHash(buildingSlot, fireSlot, WorldCurrentTick(w)*32+7)
 				if roll > chance do continue
 				WorldFireIgnite(w, centerX, centerY, w.fires.intensity[fireSlot]*0.85, spread*0.9)
 			}
@@ -335,9 +365,12 @@ FireIgniteUnits :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 	y := w.fires.y[fireSlot]
 	chance := FIRE_UNIT_IGNITE_CHANCE*w.fires.intensity[fireSlot]*deltaTime
 	if chance <= 0 do return
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
-	radiusSquared: f32 = FIRE_UNIT_IGNITE_RADIUS*FIRE_UNIT_IGNITE_RADIUS
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	radiusRaw := UnitRawDistance(FIRE_UNIT_IGNITE_RADIUS)
+	radiusSquared := u64(radiusRaw*radiusRaw)
+	fireX := PositionFromF32(x)
+	fireY := PositionFromF32(y)
 
 	firstChunkX := (int(x)-1)/chunkSize
 	lastChunkX := (int(x)+1)/chunkSize
@@ -351,14 +384,21 @@ FireIgniteUnits :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 			for unitSlot := w.spatial.unitHead[chunk]; unitSlot >= 0;
 				unitSlot = w.spatial.unitNext[unitSlot] {
 				if !w.unitUsed[unitSlot] do continue
-				if w.units.burning[unitSlot] > 0 do continue
+				if w.units.burning[unitSlot] > d32.ZERO do continue
 				if UnitImmuneToFire(w.units[unitSlot].type) do continue
-				deltaX := WorldShortestWrappedDelta(w.units.x[unitSlot]-x, worldWidth)
-				deltaY := WorldShortestWrappedDelta(w.units.y[unitSlot]-y, worldHeight)
-				if deltaX*deltaX+deltaY*deltaY > radiusSquared do continue
-				roll := WorldNoiseHash(unitSlot, fireSlot, u64(w.simulationTime*64)+3)
+				distanceSquared, valid := d32.WrappedDistanceSquared(
+					fireX,
+					fireY,
+					w.units.x[unitSlot],
+					w.units.y[unitSlot],
+					worldWidthRaw,
+					worldHeightRaw,
+				)
+				if !valid do continue
+				if distanceSquared > radiusSquared do continue
+				roll := WorldNoiseHash(unitSlot, fireSlot, WorldCurrentTick(w)*16+3)
 				if roll > chance do continue
-				w.units.burning[unitSlot] = FIRE_UNIT_BURN_SECONDS
+				w.units.burning[unitSlot] = d32.FromInt(FIRE_UNIT_BURN_SECONDS)
 				intrinsics.atomic_add(&w.unitsBurning, 1)
 			}
 		}
@@ -367,35 +407,36 @@ FireIgniteUnits :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 
 FireDamageBurningUnits :: proc(w: ^World, deltaTime: f32) {
 	if w.unitsBurning == 0 do return
+	step := PositionFromF32(deltaTime)
 	for unitSlot in 0 ..< UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] do continue
-		if w.units.burning[unitSlot] <= 0 do continue
-		w.units.burning[unitSlot] -= deltaTime
+		if w.units.burning[unitSlot] <= d32.ZERO do continue
+		w.units.burning[unitSlot] = max(d32.Sub(w.units.burning[unitSlot], step), d32.ZERO)
 		if UnitApplyDamage(
 			w,
 			unitSlot,
-			FIRE_UNIT_DAMAGE*deltaTime,
-			w.units.x[unitSlot],
-			w.units.y[unitSlot],
+			d32.Mul(FIRE_UNIT_DAMAGE, step),
+			UnitX(w, unitSlot),
+			UnitY(w, unitSlot),
 			.Fire,
 		) {
 			continue
 		}
-		if w.units.burning[unitSlot] <= 0 do intrinsics.atomic_sub(&w.unitsBurning, 1)
+		if w.units.burning[unitSlot] <= d32.ZERO do intrinsics.atomic_sub(&w.unitsBurning, 1)
 	}
 }
 
 // --- poison clouds --------------------------------------------------------
 
 GAS_CLOUD_CAPACITY :: 256
-POISON_CLOUD_REFRESH :: 3.0
-POISON_DAMAGE_RATIO_PER_SECOND :: 0.025
+POISON_CLOUD_REFRESH :: 3
+POISON_DAMAGE_RATIO_PER_SECOND :: d32.Value(25*d32.SCALE/1000)
 
 GasCloud :: struct {
 	x, y:      f32,
 	radius:    f32,
-	remaining: f32,
-	duration:  f32,
+	remaining: d32.Value,
+	duration:  d32.Value,
 	seed:      u64,
 }
 
@@ -412,8 +453,9 @@ WorldGasCloudSpawn :: proc(w: ^World, x, y, radius, duration: f32) {
 	w.gasClouds.x[slot] = x
 	w.gasClouds.y[slot] = y
 	w.gasClouds.radius[slot] = radius
-	w.gasClouds.remaining[slot] = duration
-	w.gasClouds.duration[slot] = duration
+	lifetime := PositionFromF32(duration)
+	w.gasClouds.remaining[slot] = lifetime
+	w.gasClouds.duration[slot] = lifetime
 	w.gasClouds.seed[slot] = u64(slot)*0x9E3779B97F4A7C15
 	w.gasCloudUsed[slot] = true
 	w.gasCloudCursor = (slot+1)%GAS_CLOUD_CAPACITY
@@ -422,38 +464,56 @@ WorldGasCloudSpawn :: proc(w: ^World, x, y, radius, duration: f32) {
 WorldGasCloudUpdate :: proc(w: ^World, deltaTime: f32) {
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	step := PositionFromF32(deltaTime)
+	windX := PositionToF32(w.weather.windX)
+	windY := PositionToF32(w.weather.windY)
 
 	for cloud in 0..<GAS_CLOUD_CAPACITY {
 		if !w.gasCloudUsed[cloud] do continue
-		w.gasClouds.remaining[cloud] -= deltaTime
-		if w.gasClouds.remaining[cloud] <= 0 {
+		w.gasClouds.remaining[cloud] = max(
+			d32.Sub(w.gasClouds.remaining[cloud], step),
+			d32.ZERO,
+		)
+		if w.gasClouds.remaining[cloud] <= d32.ZERO {
 			w.gasCloudUsed[cloud] = false
 			continue
 		}
 		cloudX := w.gasClouds.x[cloud]
 		cloudY := w.gasClouds.y[cloud]
 		cloudX = WorldWrapPosition(
-			cloudX+w.weather.windX*deltaTime*GAS_CLOUD_WIND_DRIFT,
+			cloudX+windX*deltaTime*GAS_CLOUD_WIND_DRIFT,
 			worldWidth,
 		)
 		cloudY = WorldWrapPosition(
-			cloudY+w.weather.windY*deltaTime*GAS_CLOUD_WIND_DRIFT,
+			cloudY+windY*deltaTime*GAS_CLOUD_WIND_DRIFT,
 			worldHeight,
 		)
 		w.gasClouds.x[cloud] = cloudX
 		w.gasClouds.y[cloud] = cloudY
 		radius := w.gasClouds.radius[cloud]
-		radiusSquared := radius*radius
+		radiusRaw := UnitRawDistance(radius)
+		radiusSquared := u64(radiusRaw*radiusRaw)
+		cloudPositionX := PositionFromF32(cloudX)
+		cloudPositionY := PositionFromF32(cloudY)
 
 		for unitSlot in 0..<UNIT_CAPACITY {
 			if !w.unitUsed[unitSlot] || w.units.type[unitSlot] == nil do continue
 			if UnitHiddenInside(w, unitSlot) do continue
-			deltaX := WorldShortestWrappedDelta(w.units.x[unitSlot]-cloudX, worldWidth)
-			deltaY := WorldShortestWrappedDelta(w.units.y[unitSlot]-cloudY, worldHeight)
-			if deltaX*deltaX+deltaY*deltaY > radiusSquared do continue
+			distanceSquared, valid := d32.WrappedDistanceSquared(
+				cloudPositionX,
+				cloudPositionY,
+				w.units.x[unitSlot],
+				w.units.y[unitSlot],
+				worldWidthRaw,
+				worldHeightRaw,
+			)
+			if !valid do continue
+			if distanceSquared > radiusSquared do continue
 			w.units.poisonRemaining[unitSlot] = max(
 				w.units.poisonRemaining[unitSlot],
-				POISON_CLOUD_REFRESH,
+				d32.FromInt(POISON_CLOUD_REFRESH),
 			)
 		}
 
@@ -479,13 +539,16 @@ WorldGasCloudUpdate :: proc(w: ^World, deltaTime: f32) {
 
 	for unitSlot in 0..<UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] || w.units.type[unitSlot] == nil do continue
-		if w.units.poisonRemaining[unitSlot] <= 0 {
+		if w.units.poisonRemaining[unitSlot] <= d32.ZERO {
 			w.units.effects[unitSlot][.Poisoned] = false
 			continue
 		}
-		w.units.poisonRemaining[unitSlot] = max(w.units.poisonRemaining[unitSlot]-deltaTime, 0)
+		w.units.poisonRemaining[unitSlot] = max(
+			d32.Sub(w.units.poisonRemaining[unitSlot], PositionFromF32(deltaTime)),
+			d32.ZERO,
+		)
 		w.units.effects[unitSlot][.Poisoned] = true
-		damage := UnitMaxHealth(w, unitSlot)*POISON_DAMAGE_RATIO_PER_SECOND*deltaTime
-		UnitApplyDamage(w, unitSlot, damage, w.units.x[unitSlot], w.units.y[unitSlot], .Poison)
+		damage := d32.Mul(UnitMaxHealth(w, unitSlot), d32.Mul(POISON_DAMAGE_RATIO_PER_SECOND, step))
+		UnitApplyDamage(w, unitSlot, damage, UnitX(w, unitSlot), UnitY(w, unitSlot), .Poison)
 	}
 }

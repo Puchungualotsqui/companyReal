@@ -27,7 +27,7 @@ Alert :: struct {
 	townName:  Name,
 	otherName: Name,
 	x, y:       f32,
-	time:       f32,
+	tick:       u64,
 
 	amount:     int,
 }
@@ -67,7 +67,7 @@ WorldAlertAdd :: proc(w: ^World, kind: AlertKind, kingdom, town, other: int, x, 
 		for i in 0..<w.alerts.count {
 			alert := w.alerts.items[(w.alerts.next-1-i+ALERT_CAPACITY*2)%ALERT_CAPACITY]
 			if alert.kind == .UnderAttack && alert.kingdom == kingdom && alert.town == town &&
-				w.simulationTime-alert.time < ALERT_ATTACK_THROTTLE {
+				WorldCurrentTick(w)-alert.tick < u64(ALERT_ATTACK_THROTTLE/TOWN_SIMULATION_STEP) {
 				return
 			}
 		}
@@ -82,7 +82,7 @@ WorldAlertAdd :: proc(w: ^World, kind: AlertKind, kingdom, town, other: int, x, 
 			other = other,
 			x = x,
 			y = y,
-			time = w.simulationTime,
+			tick = WorldCurrentTick(w),
 		},
 	)
 }
@@ -96,7 +96,7 @@ WorldAlertAddInsight :: proc(w: ^World, kingdom, amount: int) {
 			kingdom = kingdom,
 			town = -1,
 			other = -1,
-			time = w.simulationTime,
+			tick = WorldCurrentTick(w),
 			amount = amount,
 		},
 	)
@@ -111,7 +111,7 @@ WorldAlertAddGrowth :: proc(w: ^World, kingdom, town, amount: int) {
 		if alert.kind != .TownGrowth || alert.kingdom != kingdom || alert.town != town do continue
 		alert.amount += amount
 
-		alert.time = w.simulationTime
+		alert.tick = WorldCurrentTick(w)
 		return
 	}
 
@@ -125,7 +125,7 @@ WorldAlertAddGrowth :: proc(w: ^World, kingdom, town, amount: int) {
 			other = -1,
 			x = f32(townRef.x),
 			y = f32(townRef.y),
-			time = w.simulationTime,
+			tick = WorldCurrentTick(w),
 			amount = amount,
 		},
 	)
@@ -142,9 +142,9 @@ WorldAlertAddEnvironment :: proc(w: ^World, event: ^EnvironmentEvent) {
 			town = event.town,
 			other = int(event.kind),
 			amount = int(event.severity),
-			x = event.centerX,
-			y = event.centerY,
-			time = w.simulationTime,
+			x = PositionToF32(event.centerX),
+			y = PositionToF32(event.centerY),
+			tick = WorldCurrentTick(w),
 		},
 	)
 }
@@ -167,7 +167,7 @@ WorldAlertPrune :: proc(w: ^World) {
 	for index in 0..<w.alerts.count {
 		alert, found := WorldAlertNewest(w, index)
 		if !found do continue
-		if w.simulationTime-alert.time >= ALERT_LIFETIME_SECONDS do continue
+		if WorldCurrentTick(w)-alert.tick >= u64(ALERT_LIFETIME_SECONDS/TOWN_SIMULATION_STEP) do continue
 		survivors[count] = alert
 		count += 1
 	}

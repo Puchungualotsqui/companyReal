@@ -1,8 +1,8 @@
 package main
 
 import "core:fmt"
-import "core:math"
 import rl "vendor:raylib"
+import "d32"
 
 // Debug stress world: every kingdom starts fully teched, with many towns, a
 // large mixed army and a dense spread of buildings. Launched with -crazy_world.
@@ -16,7 +16,9 @@ CRAZY_WORLD_TOWNS_PER_KINGDOM :: 20
 // Per-town multiplier tuned so the world spawns ~100k units.
 CRAZY_WORLD_UNIT_SCALE :: 6.3
 // Extra room around the town area so every planned unit finds a tile.
-CRAZY_WORLD_UNIT_SPREAD_SLACK :: 1.6
+CRAZY_WORLD_UNIT_SPREAD_SLACK :: d32.Value(104_858) // 1.6 in Q16.16
+// 1/pi in Q16.16, turning a planned unit count into a disc radius.
+CRAZY_WORLD_INV_PI :: d32.Value(20_860)
 CRAZY_WORLD_TOWN_MIN_RADIUS :: 24
 CRAZY_WORLD_TOWN_MAX_RADIUS :: 420
 CRAZY_WORLD_TOWN_SITE_ATTEMPTS :: 4096
@@ -126,7 +128,8 @@ WorldCrazyWorldPopulate :: proc(w: ^World) {
 	CrazyWorldLogPhase("units", &phaseStart)
 
 	w.dayNumber = CRAZY_WORLD_DAY_NUMBER
-	w.simulationTime = f32(w.dayNumber)*f32(WORLD_DAY_LENGTH_SECONDS)
+	w.simulationTick = u64(CRAZY_WORLD_DAY_NUMBER*WORLD_DAY_LENGTH_SECONDS/TOWN_SIMULATION_STEP)
+	w.simulationTime = f32(f64(w.simulationTick)*TOWN_SIMULATION_STEP)
 	WorldConstructionChanged(w)
 	FogUpdate(w)
 	CrazyWorldLogPhase("fog", &phaseStart)
@@ -158,7 +161,7 @@ CrazyWorldLogPhase :: proc(name: cstring, start: ^f64) {
 
 CrazyWorldAdvanceTown :: proc(w: ^World, kingdom, townSlot: int) {
 	town := &w.kingdoms[kingdom].towns[townSlot]
-	town.wood = CRAZY_WORLD_INITIAL_WOOD
+	town.wood = d32.FromInt(CRAZY_WORLD_INITIAL_WOOD)
 	town.milestonesEarned = TOWN_MILESTONE_TIER_COUNT
 	for town.milestonesChosen < TOWN_MILESTONE_TIER_COUNT {
 		option := (townSlot+town.milestonesChosen)%2
@@ -184,12 +187,29 @@ CrazyWorldFoundTowns :: proc(w: ^World, kingdom: int) {
 		if newSlot < 0 do break
 
 		for attempt in 0..<CRAZY_WORLD_TOWN_SITE_ATTEMPTS {
-			angle := WorldNoiseHash(attempt, kingdom*31+1, w.seed+0x70A1)*2*math.PI
-			distance := f32(CRAZY_WORLD_TOWN_MIN_RADIUS)+
-				WorldNoiseHash(attempt, kingdom*31+2, w.seed+0x70A2)*
-					f32(CRAZY_WORLD_TOWN_MAX_RADIUS-CRAZY_WORLD_TOWN_MIN_RADIUS)
-			x := WorldWrapCoordinate(anchorX+int(math.cos(angle)*distance), worldWidth)
-			y := WorldWrapCoordinate(anchorY+int(math.sin(angle)*distance), worldHeight)
+			turns := d32.FromRatio(
+				i32(WorldNoiseHashInt(attempt, kingdom*31+1, w.seed+0x70A1)),
+				1_000_000,
+			)
+			distance := d32.Add(
+				d32.FromInt(CRAZY_WORLD_TOWN_MIN_RADIUS),
+				d32.Mul(
+					d32.FromRatio(
+						i32(WorldNoiseHashInt(attempt, kingdom*31+2, w.seed+0x70A2)),
+						1_000_000,
+					),
+					d32.FromInt(CRAZY_WORLD_TOWN_MAX_RADIUS-CRAZY_WORLD_TOWN_MIN_RADIUS),
+				),
+			)
+			sine, cosine := d32.SinCos(turns)
+			x := WorldWrapCoordinate(
+				anchorX+int(d32.ToInt(d32.Mul(cosine, distance))),
+				worldWidth,
+			)
+			y := WorldWrapCoordinate(
+				anchorY+int(d32.ToInt(d32.Mul(sine, distance))),
+				worldHeight,
+			)
 			if !WorldBuildingValid(w, x, y, TownHall{}) do continue
 			if !CrazyWorldTownSiteFree(w, x, y) do continue
 			if !TownFound(w, kingdom, x, y, CRAZY_WORLD_FOUNDING_SETTLERS) do continue
@@ -200,16 +220,27 @@ CrazyWorldFoundTowns :: proc(w: ^World, kingdom: int) {
 }
 
 CrazyWorldTownSiteFree :: proc(w: ^World, x, y: int) -> bool {
-	minimum := f32(TOWN_FOUNDING_MIN_DISTANCE)
-	minimumSquared := minimum*minimum
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	minimumRaw := i64(TOWN_FOUNDING_MIN_DISTANCE)*d32.SCALE
+	minimumSquared := u64(minimumRaw*minimumRaw)
+	candidateX := d32.FromInt(i32(x))
+	candidateY := d32.FromInt(i32(y))
 	for kingdom in 0..<KINGDOM_SLOTS {
 		if !w.kingdomUsed[kingdom] do continue
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdom].townUsed[townSlot] do continue
 			other := &w.kingdoms[kingdom].towns[townSlot]
-			deltaX := WorldShortestWrappedDelta(f32(other.x+2-x), f32(w.maxX))
-			deltaY := WorldShortestWrappedDelta(f32(other.y+2-y), f32(w.maxY))
-			if deltaX*deltaX+deltaY*deltaY < minimumSquared do return false
+			distanceSquared, valid := d32.WrappedDistanceSquared(
+				d32.FromInt(i32(other.x+2)),
+				d32.FromInt(i32(other.y+2)),
+				candidateX,
+				candidateY,
+				worldWidthRaw,
+				worldHeightRaw,
+			)
+			if !valid do continue
+			if distanceSquared < minimumSquared do return false
 		}
 	}
 	return true
@@ -232,19 +263,31 @@ CrazyWorldPlaceBuilding :: proc(
 ) {
 	town := &w.kingdoms[kingdom].towns[townSlot]
 	buildingType := BuildingTypeFromKind(kind)
-	radius := f32(town.areaRadius)
+	radius := d32.FromInt(i32(town.areaRadius))
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 
 	for _ in 0..<CRAZY_WORLD_BUILDING_ATTEMPTS {
 		seq := sequence^
 		sequence^ += 1
-		angle := WorldNoiseHash(seq, kingdom*97+townSlot, w.seed+0xB011)*2*math.PI
-		distance := math.sqrt(
-			WorldNoiseHash(seq, kingdom*97+townSlot+1, w.seed+0xB012),
-		)*radius
-		x := WorldWrapCoordinate(town.x+2+int(math.cos(angle)*distance), worldWidth)
-		y := WorldWrapCoordinate(town.y+2+int(math.sin(angle)*distance), worldHeight)
+		turns := d32.FromRatio(
+			i32(WorldNoiseHashInt(seq, kingdom*97+townSlot, w.seed+0xB011)),
+			1_000_000,
+		)
+		radiusFraction := d32.FromRatio(
+			i32(WorldNoiseHashInt(seq, kingdom*97+townSlot+1, w.seed+0xB012)),
+			1_000_000,
+		)
+		sine, cosine := d32.SinCos(turns)
+		distance := d32.Mul(d32.Sqrt(radiusFraction), radius)
+		x := WorldWrapCoordinate(
+			town.x+2+int(d32.ToInt(d32.Mul(cosine, distance))),
+			worldWidth,
+		)
+		y := WorldWrapCoordinate(
+			town.y+2+int(d32.ToInt(d32.Mul(sine, distance))),
+			worldHeight,
+		)
 		if !TownBuildingInArea(w, kingdom, townSlot, x, y, buildingType) do continue
 		if !TownBuildingValid(w, kingdom, x, y, buildingType) do continue
 		if _, ok := BuildingSpawn(w, x, y, buildingType, kingdom, townSlot); ok {
@@ -277,10 +320,12 @@ CrazyWorldSpawnUnitKind :: proc(
 	worldHeight := int(w.maxY)
 	// The plan is dense: spread units over a disc that is large enough to hold
 	// them at one unit per tile instead of cramming the town area.
-	spread := max(
-		f32(town.areaRadius),
-		math.sqrt(f32(max(count, 1))/math.PI)*CRAZY_WORLD_UNIT_SPREAD_SLACK,
+	spread := d32.Mul(
+		d32.Sqrt(d32.Mul(d32.FromInt(i32(max(count, 1))), CRAZY_WORLD_INV_PI)),
+		CRAZY_WORLD_UNIT_SPREAD_SLACK,
 	)
+	radius := d32.FromInt(i32(town.areaRadius))
+	if spread < radius do spread = radius
 	seed := w.seed ~
 		u64(kingdom*TOWN_CAPACITY+townSlot+1)*0x9E3779B97F4A7C15 ~
 		(u64(kind)+1)*0xBF58476D1CE4E5B9
@@ -288,15 +333,28 @@ CrazyWorldSpawnUnitKind :: proc(
 	for index in 0..<count {
 		for attempt in 0..<CRAZY_WORLD_UNIT_ATTEMPTS {
 			seq := index*CRAZY_WORLD_UNIT_ATTEMPTS+attempt
-			angle := WorldNoiseHash(seq, kingdom*131+townSlot*7+1, seed+11)*2*math.PI
-			distance := math.sqrt(WorldNoiseHash(seq, kingdom*131+townSlot*7+2, seed+23))*
-				spread
-			x := WorldWrapCoordinate(town.x+2+int(math.cos(angle)*distance), worldWidth)
-			y := WorldWrapCoordinate(town.y+2+int(math.sin(angle)*distance), worldHeight)
+			turns := d32.FromRatio(
+				i32(WorldNoiseHashInt(seq, kingdom*131+townSlot*7+1, seed+11)),
+				1_000_000,
+			)
+			radiusFraction := d32.FromRatio(
+				i32(WorldNoiseHashInt(seq, kingdom*131+townSlot*7+2, seed+23)),
+				1_000_000,
+			)
+			sine, cosine := d32.SinCos(turns)
+			distance := d32.Mul(d32.Sqrt(radiusFraction), spread)
+			x := WorldWrapCoordinate(
+				town.x+2+int(d32.ToInt(d32.Mul(cosine, distance))),
+				worldWidth,
+			)
+			y := WorldWrapCoordinate(
+				town.y+2+int(d32.ToInt(d32.Mul(sine, distance))),
+				worldHeight,
+			)
 			if !UnitValidTileType(role, w.ground[x][y].type) do continue
 			if WorldTileOccupied(w, x, y) do continue
 			if WorldUnitAtTile(w, x, y) do continue
-			if _, ok := UnitSpawn(w, role, f32(x)+0.5, f32(y)+0.5, kingdom, townSlot); ok {
+			if _, ok := UnitSpawn(w, role, TileCenterPosition(x), TileCenterPosition(y), kingdom, townSlot); ok {
 				break
 			}
 		}

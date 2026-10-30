@@ -3,6 +3,7 @@ package main
 import rl "vendor:raylib"
 import "core:fmt"
 import "core:math"
+import "d32"
 
 UICanControlKingdom :: proc(w: ^World, kingdom: int) -> bool {
 	return WorldLocalKingdom(w) == kingdom
@@ -980,7 +981,7 @@ UIStatCount :: proc(w: ^World, selection: Selection) -> int {
 		if UISelectionTownHall(w, selection) {
 			building := w.buildings[selection.slot]
 			if WorldTownExists(w, building.kingdom, building.town) &&
-				w.kingdoms[building.kingdom].towns[building.town].blockadeUntil > w.simulationTime {
+				w.kingdoms[building.kingdom].towns[building.town].blockadeUntilTick > WorldCurrentTick(w) {
 				return 8
 			}
 			return 7
@@ -1972,7 +1973,7 @@ UIDrawAegisDome :: proc(w: ^World, camera: rl.Camera2D, kingdom, townSlot: int) 
 	maximum := TownAegisMax(w, kingdom, townSlot)
 	if maximum <= 0 do return
 
-	ratio := clamp(t.orderWard/maximum, 0, 1)
+	ratio := clamp(PositionToF32(t.orderWard)/maximum, 0, 1)
 	flash := clamp(t.aegisFlash/0.65, 0, 1)
 	if ratio <= 0 && flash <= 0 do return
 
@@ -2356,12 +2357,12 @@ UIDrawPortrait :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, box: r
 	rl.DrawTexturePro(texture, source, dest, rl.Vector2{0, 0}, 0, rl.WHITE)
 }
 
-UIResourceCoverage :: proc(potential, need: f32) -> (cstring, rl.Color) {
-	if need <= 0 do return "100%", UI_COLOR_GOOD
-	ratio := clamp(potential/need, 0, 1)
-	percent := int(math.floor(ratio*100+0.0001))
+UIResourceCoverage :: proc(potential, need: d32.Value) -> (cstring, rl.Color) {
+	if need <= d32.ZERO do return "100%", UI_COLOR_GOOD
+	ratio := clamp(d32.Div(potential, need), d32.ZERO, d32.ONE)
+	percent := int(d32.ToInt(d32.Mul(ratio, d32.FromInt(100))))
 	color := UI_COLOR_GOOD
-	if ratio < 0.999 do color = UI_COLOR_BAD
+	if ratio < d32.FromRatio(999, 1000) do color = UI_COLOR_BAD
 	return fmt.ctprintf("%d%%", percent), color
 }
 
@@ -2369,14 +2370,14 @@ UIFillStats :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, stats: ^[
 	switch ui.selection.kind {
 	case .Unit:
 		unit := w.units[ui.selection.slot]
-		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(unit.health), int(UnitMaxHealth(w, ui.selection.slot))), UI_COLOR_TEXT, {}}
+		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(d32.ToInt(unit.health)), int(d32.ToInt(UnitMaxHealth(w, ui.selection.slot)))), UI_COLOR_TEXT, {}}
 		stats[1] = {"Task", UIUnitStateName(unit.state), UI_COLOR_TEXT, {}}
 		return 2
 
 	case .Building:
 		building := w.buildings[ui.selection.slot]
 		kind := BuildingKindOf(building.type)
-		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(building.health), int(BuildingMaxHealth(w, ui.selection.slot))), UI_COLOR_TEXT, {}}
+		stats[0] = {"Health", fmt.ctprintf("%d / %d", int(d32.ToInt(building.health)), int(d32.ToInt(BuildingMaxHealth(w, ui.selection.slot)))), UI_COLOR_TEXT, {}}
 		if kind == .TownHall {
 			t := &w.kingdoms[building.kingdom].towns[building.town]
 			stats[1] = {"Citizens", fmt.ctprintf("%d", t.citizens), UI_COLOR_TEXT, {}}
@@ -2386,7 +2387,7 @@ UIFillStats :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, stats: ^[
 				stats[3] = {"Growth", "None", UI_COLOR_DIM, {}}
 				return 4
 			}
-			stats[2] = {"Wood", fmt.ctprintf("%d", int(t.wood)), UI_COLOR_TEXT, renderer.sprites.woodIcon}
+			stats[2] = {"Wood", fmt.ctprintf("%d", int(d32.ToInt(t.wood))), UI_COLOR_TEXT, renderer.sprites.woodIcon}
 			if t.milestonesEarned < TOWN_MILESTONE_TIER_COUNT {
 				stats[3] = {
 					"Next era",
@@ -2397,15 +2398,19 @@ UIFillStats :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, stats: ^[
 			} else {
 				stats[3] = {"Era", "5 - complete", UI_COLOR_TEXT, {}}
 			}
-			foodText, foodColor := UIResourceCoverage(t.foodPotential, f32(t.citizens)*0.025)
-			waterText, waterColor := UIResourceCoverage(t.waterPotential, f32(t.citizens)*0.025)
+			foodNeed := d32.FromRatio(i32(t.citizens)*GROWTH_FOOD_PER_CITIZEN_MILLE, 1000)
+			foodText, foodColor := UIResourceCoverage(t.foodPotential, foodNeed)
+			waterText, waterColor := UIResourceCoverage(t.waterPotential, foodNeed)
 			stats[4] = {"Food", foodText, foodColor, {}}
 			stats[5] = {"Water", waterText, waterColor, {}}
 			stats[6] = {"Housing", fmt.ctprintf("%d", t.homes), UI_COLOR_TEXT, {}}
-			if t.blockadeUntil > w.simulationTime {
+			if t.blockadeUntilTick > WorldCurrentTick(w) {
+				#assert(TOWN_SIMULATION_STEP == 0.25)
+				remainingTicks := t.blockadeUntilTick-WorldCurrentTick(w)
+				remainingSeconds := remainingTicks/4 + (remainingTicks%4 != 0 ? 1 : 0)
 				stats[7] = {
 					"Blockade",
-					fmt.ctprintf("%ds", int(math.ceil(t.blockadeUntil-w.simulationTime))),
+					fmt.ctprintf("%ds", remainingSeconds),
 					UI_COLOR_ATTACK,
 					{},
 				}
@@ -2415,8 +2420,8 @@ UIFillStats :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, stats: ^[
 		}
 		if kind == .Harbor {
 			order, isOrder := building.type.(BuildingOrder)
-			if isOrder && order.orderCooldown > 0 {
-				stats[1] = {"Blockade", fmt.ctprintf("Cooldown  %ds", int(math.ceil(order.orderCooldown))), UI_COLOR_DIM, {}}
+			if isOrder && order.orderCooldown > d32.ZERO {
+				stats[1] = {"Blockade", fmt.ctprintf("Cooldown  %ds", int(math.ceil(PositionToF32(order.orderCooldown)))), UI_COLOR_DIM, {}}
 			} else if KingdomHasTech(w, building.kingdom, .Blockade) {
 				stats[1] = {"Blockade", "Ready", UI_COLOR_GOOD, {}}
 			} else {
@@ -2434,14 +2439,14 @@ UIFillStats :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, stats: ^[
 			if isOrder && order.orderPending {
 				stats[1] = {
 					"Order",
-					fmt.ctprintf("Strike  %.1fs", order.orderTelegraph),
+					fmt.ctprintf("Strike  %.1fs", PositionToF32(order.orderTelegraph)),
 					UIOrderColor(order.orderKind),
 					{},
 				}
-			} else if isOrder && order.orderActive > 0 {
-				stats[1] = {"Order", fmt.ctprintf("Firing  %ds", int(math.ceil(order.orderActive))), UI_COLOR_ATTACK, {}}
-			} else if isOrder && order.orderCooldown > 0 {
-				stats[1] = {"Order", fmt.ctprintf("Cooldown  %ds", int(math.ceil(order.orderCooldown))), UI_COLOR_DIM, {}}
+			} else if isOrder && order.orderActive > d32.ZERO {
+				stats[1] = {"Order", fmt.ctprintf("Firing  %ds", int(math.ceil(PositionToF32(order.orderActive)))), UI_COLOR_ATTACK, {}}
+			} else if isOrder && order.orderCooldown > d32.ZERO {
+				stats[1] = {"Order", fmt.ctprintf("Cooldown  %ds", int(math.ceil(PositionToF32(order.orderCooldown)))), UI_COLOR_DIM, {}}
 			} else {
 				stats[1] = {"Order", "Ready", UI_COLOR_GOOD, {}}
 			}
@@ -2592,7 +2597,7 @@ UIDrawAegisBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 
 	y := panel.y+UI_STAT_Y+4*UI_STAT_H+4
 	labelColor := UI_COLOR_DEFEND
-	if t.orderWardRegenDelay > 0 && t.orderWard < maximum do labelColor = UI_COLOR_DIM
+	if t.orderWardRegenDelay > d32.ZERO && PositionToF32(t.orderWard) < maximum do labelColor = UI_COLOR_DIM
 	UIText("AEGIS", panel.x+UI_PAD, y, labelColor)
 	bar := rl.Rectangle{
 		panel.x+UI_PAD+62,
@@ -2600,7 +2605,7 @@ UIDrawAegisBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 		panel.width-2*UI_PAD-62-52,
 		9,
 	}
-	ratio := clamp(t.orderWard/maximum, 0, 1)
+	ratio := clamp(PositionToF32(t.orderWard)/maximum, 0, 1)
 	rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
 	if ratio > 0 {
 		rl.DrawRectangleRec(
@@ -2630,10 +2635,13 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	t := &w.kingdoms[kingdom].towns[town]
 
 	y := panel.y+UI_GROWTH_Y
-	eta := max(t.growthCooldown, 0)/max(t.growthSpeed, 0.01)
-	label := fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(eta)))
+	eta := d32.Div(
+		max(t.growthCooldown, d32.ZERO),
+		max(t.growthSpeed, d32.FromRatio(1, 100)),
+	)
+	label := fmt.ctprintf("Next %d in %ds", t.growthBatch, int(math.ceil(PositionToF32(eta))))
 	if WorldIsNight(w) do label = "Night"
-	if w.weather.kind == .Blizzard && w.weather.value > 0.5 do label = "Halted"
+	if w.weather.kind == .Blizzard && w.weather.value > d32.HALF do label = "Halted"
 	UIText(
 		label,
 		panel.x+UI_PAD,
@@ -2648,7 +2656,9 @@ UIDrawGrowthBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 		9,
 	}
 	progress: f32 = 0
-	if t.growthInterval > 0 do progress = clamp(1-t.growthCooldown/t.growthInterval, 0, 1)
+	if t.growthInterval > d32.ZERO {
+		progress = clamp(1-PositionToF32(d32.Div(t.growthCooldown, t.growthInterval)), 0, 1)
+	}
 
 	rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
 	if progress > 0 {
@@ -2678,9 +2688,9 @@ UIDrawConversions :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, pan
 			unitCount[kind] += 1
 			state, converting := w.units.state[unitSlot].(StateConverting)
 			if !converting || !state.inside do continue
-			seconds := UnitDefaultTrainingTime(kind)
+			seconds := PositionToF32(UnitDefaultTrainingTime(kind))
 			value: f32 = 0
-			if seconds > 0 do value = 1-clamp(state.timer/seconds, 0, 1)
+			if seconds > 0 do value = 1-clamp(PositionToF32(state.timer)/seconds, 0, 1)
 			training[kind] += 1
 			progress[kind] += value
 		}
@@ -2851,11 +2861,11 @@ UIDrawConstructionsTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Re
 		decoration := TownConstructionPendingDecoration(w, site)
 		if decoration >= 0 {
 			seconds := DecorationClearSeconds(w.decorations.kind[decoration])
-			if seconds > 0 do progress = clamp(site.clearWork/seconds, 0, 1)
+			if seconds > d32.ZERO do progress = clamp(PositionToF32(site.clearWork)/PositionToF32(seconds), 0, 1)
 			status = fmt.ctprintf("Clearing ground  %d%%", int(progress*100))
 		} else {
 			seconds := BuildingBuildSeconds(site.kind)
-			if seconds > 0 do progress = clamp(site.buildWork/seconds, 0, 1)
+			if seconds > d32.ZERO do progress = clamp(PositionToF32(site.buildWork)/PositionToF32(seconds), 0, 1)
 			status = fmt.ctprintf("Building  %d%%", int(progress*100))
 		}
 		rl.DrawTextEx(UIFont(), status, rl.Vector2{labelX, rowY+14}, 12, 1, UI_COLOR_DIM)
@@ -3114,7 +3124,7 @@ UIDrawCommandBar :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 UIFoundRequirements :: proc(w: ^World, kingdom, town: int) -> ([3]UIFoundRequirement, int) {
 	townState := &w.kingdoms[kingdom].towns[town]
 	requirements := [3]UIFoundRequirement{
-		{.Wood, int(townState.wood), int(TownFoundingWoodCost(w, kingdom))},
+		{.Wood, int(d32.ToInt(townState.wood)), int(d32.ToInt(TownFoundingWoodCost(w, kingdom)))},
 		{.Settlers, TownUnitCount(w, kingdom, town, .Villager), TownFoundingSettlers(w, kingdom)},
 		{.Builders, TownUnitCount(w, kingdom, town, .Builder), 1},
 	}
@@ -3198,7 +3208,7 @@ UIDrawFuseHint :: proc(w: ^World, rect: rl.Rectangle, kingdom, town: int) {
 	cost := TownFusionCost(w, kingdom, town)
 	text := fmt.ctprintf(
 		"Fuse era 5 towns  -  costs %d wood  -  shared frontier required",
-		int(cost),
+		int(d32.ToInt(cost)),
 	)
 	width := rl.MeasureTextEx(UIFont(), text, UI_TEXT_SIZE, 1).x+2*UI_PAD
 	height := UI_TEXT_SIZE+2*UI_PAD
@@ -3707,13 +3717,13 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 		label = "Click a building of a non-enemy town  -  Esc to cancel"
 	case .Found:
 		kingdom, town := UISelectionTown(w, ui.selection)
-		cost: f32 = 0
+		cost := d32.ZERO
 		if WorldTownExists(w, kingdom, town) {
 			cost = TownFoundingWoodCost(w, kingdom)
 		}
 		label = fmt.ctprintf(
 			"Click land to found a town  -  %d wood  -  Esc to cancel",
-			int(cost),
+			int(d32.ToInt(cost)),
 		)
 		if tileX, tileY, ok := UITileAtMouse(w, camera, mouse); ok {
 			failure := TownFoundingFailure(w, kingdom, town, tileX, tileY)
@@ -3721,13 +3731,13 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 		}
 	case .Fuse:
 		kingdom, town := UISelectionTown(w, ui.selection)
-		cost: f32 = 0
+		cost := d32.ZERO
 		if WorldTownExists(w, kingdom, town) {
 			cost = TownFusionCost(w, kingdom, town)
 		}
 		label = fmt.ctprintf(
 			"Click an adjacent era 5 town  -  %d wood  -  Esc to cancel",
-			int(cost),
+			int(d32.ToInt(cost)),
 		)
 		targetKingdom, targetTown, _, found := UIFindTownAt(w, camera, mouse)
 		if found {
@@ -3740,7 +3750,13 @@ UIDrawCommandHint :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 		label = fmt.ctprintf("%s  -  click a target  -  Esc to cancel", OrderName(ui.orderKind))
 		kingdom := WorldLocalKingdom(w)
 		if tileX, tileY, ok := UITileAtMouse(w, camera, mouse); ok {
-			if !OrderTargetValid(w, kingdom, ui.orderKind, f32(tileX)+0.5, f32(tileY)+0.5) {
+			if !OrderTargetValid(
+				w,
+				kingdom,
+				ui.orderKind,
+				PositionFromF32(f32(tileX)+0.5),
+				PositionFromF32(f32(tileY)+0.5),
+			) {
 				label = "Target must be explored"
 			} else if OrderSourceReadyCount(w, kingdom, ui.orderKind) <= 0 {
 				label = fmt.ctprintf("%s reloading  -  wait for a ready source", OrderName(ui.orderKind))
@@ -3885,8 +3901,8 @@ UIOrderTargetingUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mou
 
 	tileX, tileY, ok := UITileAtMouse(w, camera, mouse)
 	if !ok do return
-	targetX := f32(tileX)+0.5
-	targetY := f32(tileY)+0.5
+	targetX := PositionFromF32(f32(tileX)+0.5)
+	targetY := PositionFromF32(f32(tileY)+0.5)
 	if !OrderTargetValid(w, local, ui.orderKind, targetX, targetY) do return
 	if !rl.IsMouseButtonPressed(.LEFT) do return
 	if OrderSourceReadyCount(w, local, ui.orderKind) <= 0 do return
@@ -4057,14 +4073,14 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 	detail: cstring
 	if kind == .Blockade {
 		detail = "Blockades for 90s, then a 180s cooldown."
-	} else if OrderDuration(kind) > 0 {
+	} else if OrderDuration(kind) > d32.ZERO {
 		detail = fmt.ctprintf(
 			"Active for %ds, then %ds cooldown.",
-			int(OrderDuration(kind)),
-			int(OrderCooldownSeconds(kind)),
+			int(PositionToF32(OrderDuration(kind))),
+			int(PositionToF32(OrderCooldownSeconds(kind))),
 		)
 	} else {
-		detail = fmt.ctprintf("Cooldown %ds.", int(OrderCooldownSeconds(kind)))
+		detail = fmt.ctprintf("Cooldown %ds.", int(PositionToF32(OrderCooldownSeconds(kind))))
 	}
 
 	desc := UIFitWrappedText(
@@ -4116,9 +4132,11 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 	if local < 0 do return
 	tileX, tileY, ok := UITileAtMouse(w, camera, rl.GetMousePosition())
 	if !ok do return
-	centerX := f32(tileX)+0.5
-	centerY := f32(tileY)+0.5
-	valid := OrderTargetValid(w, local, ui.orderKind, centerX, centerY)
+	centerPositionX := PositionFromF32(f32(tileX)+0.5)
+	centerPositionY := PositionFromF32(f32(tileY)+0.5)
+	centerX := PositionToF32(centerPositionX)
+	centerY := PositionToF32(centerPositionY)
+	valid := OrderTargetValid(w, local, ui.orderKind, centerPositionX, centerPositionY)
 	anyReady := OrderSourceReadyCount(w, local, ui.orderKind) > 0
 	color := rl.Color{110, 218, 128, 220}
 	if !valid {
@@ -4127,16 +4145,16 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 		color = rl.Color{224, 176, 70, 220}
 	}
 
-	if targetKingdom, targetTown, found := TownAtPoint(w, centerX, centerY); found {
+	if targetKingdom, targetTown, found := TownAtPoint(w, centerPositionX, centerPositionY); found {
 		if ui.orderKind == .Blockade {
 			UIDrawTownAreaFor(w, camera, targetKingdom, targetTown, false)
 		}
 		UIDrawAegisDome(w, camera, targetKingdom, targetTown)
 	}
 
-	radius := OrderRadius(ui.orderKind)
+	radius := PositionToF32(OrderRadius(ui.orderKind))
 	if radius <= 0 do radius = 2.5
-	source := OrderSourceNearestReady(w, local, ui.orderKind, centerX, centerY)
+	source := OrderSourceNearestReady(w, local, ui.orderKind, centerPositionX, centerPositionY)
 
 	worldWidth := f32(w.maxX)
 	worldHeight := f32(w.maxY)
@@ -4176,16 +4194,16 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 		ringRadius := max(f32(width), f32(height))*0.5+0.9
 		ringColor := rl.Color{224, 176, 70, 130}
 		fillColor := rl.Color{224, 176, 70, 24}
-		if order.orderTelegraph > 0 {
+		if order.orderTelegraph > d32.ZERO {
 			color := UIOrderColor(ui.orderKind)
 			pulse := 0.55+0.45*math.sin(w.simulationTime*9)
 			ringColor = rl.Color{color.r, color.g, color.b, u8(110+80*pulse)}
 			fillColor = rl.Color{color.r, color.g, color.b, 26}
-		} else if order.orderActive > 0 {
+		} else if order.orderActive > d32.ZERO {
 			pulse := 0.55+0.45*math.sin(w.simulationTime*5)
 			ringColor = rl.Color{226, 96, 76, u8(90+80*pulse)}
 			fillColor = rl.Color{226, 96, 76, 20}
-		} else if order.orderCooldown > 0 {
+		} else if order.orderCooldown > d32.ZERO {
 			ringColor = rl.Color{150, 120, 110, 70}
 			fillColor = rl.Color{150, 120, 110, 12}
 		}
@@ -4218,7 +4236,7 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 		if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != local do continue
 		if !BuildingOrderSupports(BuildingKindOf(w.buildings[slot].type), ui.orderKind) do continue
 		order, hasOrder := BuildingOrderState(w, slot)
-		if !hasOrder || order.orderActive > 0 || order.orderCooldown <= 0 do continue
+		if !hasOrder || order.orderActive > d32.ZERO || order.orderCooldown <= d32.ZERO do continue
 
 		sourceX, sourceY := OrderBuildingCenter(w, slot)
 		if abs(WorldShortestWrappedDelta(sourceX-camera.target.x, worldWidth)) > halfWidth+4 ||
@@ -4230,7 +4248,7 @@ UIDrawOrderPreview :: proc(w: ^World, camera: rl.Camera2D, ui: ^UIState) {
 			rl.Vector2{sourceX, sourceY-f32(height)*0.5-0.9},
 			camera,
 		)
-		label := fmt.ctprintf("%ds", int(math.ceil(order.orderCooldown)))
+		label := fmt.ctprintf("%ds", int(math.ceil(PositionToF32(order.orderCooldown))))
 		labelWidth := rl.MeasureTextEx(UIFont(), label, 12, 1).x
 		rl.DrawRectangleRec(
 			rl.Rectangle{anchor.x-labelWidth*0.5-4, anchor.y-2, labelWidth+8, 16},
@@ -4252,23 +4270,29 @@ UIDrawOrderActiveAreas :: proc(w: ^World, camera: rl.Camera2D) {
 		if !w.buildingUsed[slot] do continue
 		order, isOrder := BuildingOrderState(w, slot)
 		if !isOrder do continue
-		pending := order.orderPending && order.orderTelegraph > 0
-		if !pending && order.orderActive <= 0 do continue
-		if !FogTileExplored(w, int(order.orderTargetX), int(order.orderTargetY)) do continue
+		pending := order.orderPending && order.orderTelegraph > d32.ZERO
+		if !pending && order.orderActive <= d32.ZERO do continue
+		if !FogTileExplored(
+			w,
+			PositionTile(order.orderTargetX, int(w.maxX)),
+			PositionTile(order.orderTargetY, int(w.maxY)),
+		) {
+			continue
+		}
 
 		sourceX, sourceY := OrderBuildingCenter(w, slot)
-		centerX := order.orderTargetX
-		centerY := order.orderTargetY
+		centerX := PositionToF32(order.orderTargetX)
+		centerY := PositionToF32(order.orderTargetY)
 		deltaX := WorldShortestWrappedDelta(centerX-sourceX, f32(w.maxX))
 		deltaY := WorldShortestWrappedDelta(centerY-sourceY, f32(w.maxY))
-		radius := OrderRadius(order.orderKind)
+		radius := PositionToF32(OrderRadius(order.orderKind))
 		if radius <= 0 do radius = 2.5
 		color := UIOrderColor(order.orderKind)
 
 		rl.BeginMode2D(camera)
 		if pending {
-			telegraph := max(OrderTelegraph(order.orderKind), 0.01)
-			progress := 1-clamp(order.orderTelegraph/telegraph, 0, 1)
+			telegraph := max(PositionToF32(OrderTelegraph(order.orderKind)), 0.01)
+			progress := 1-clamp(PositionToF32(order.orderTelegraph)/telegraph, 0, 1)
 			pulse := 0.5+0.5*math.sin(w.simulationTime*11)
 			color.a = 255
 			rl.DrawCircleV(
@@ -4338,7 +4362,7 @@ UIDrawOrderActiveAreas :: proc(w: ^World, camera: rl.Camera2D) {
 				rl.Vector2{centerX, centerY-radius-0.65},
 				camera,
 			)
-			label := fmt.ctprintf("%.1fs", order.orderTelegraph)
+			label := fmt.ctprintf("%.1fs", PositionToF32(order.orderTelegraph))
 			labelWidth := rl.MeasureTextEx(UIFont(), label, 14, 1).x
 			box := rl.Rectangle{anchor.x-labelWidth*0.5-6, anchor.y-4, labelWidth+12, 20}
 			rl.DrawRectangleRec(box, rl.Color{20, 18, 22, 210})
@@ -4359,7 +4383,7 @@ UIDrawOrderActiveAreas :: proc(w: ^World, camera: rl.Camera2D) {
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			if town.blockadeUntil <= w.simulationTime do continue
+			if town.blockadeUntilTick <= WorldCurrentTick(w) do continue
 			if !FogTownVisible(w, kingdomSlot, townSlot) do continue
 			hall := TownHallSlot(w, kingdomSlot, townSlot)
 			if hall < 0 do continue
@@ -5259,11 +5283,12 @@ UIDrawEnvironmentBanner :: proc(w: ^World) {
 	if WorldTownExists(w, e.kingdom, e.town) {
 		target = NameTownCString(w, e.kingdom, e.town)
 	}
+	remaining := PositionToF32(e.remaining)
 	subtitle: cstring
 	if e.phase == .Telegraph {
-		subtitle = fmt.ctprintf("%s  -  impact in %.1fs", target, e.remaining)
+		subtitle = fmt.ctprintf("%s  -  impact in %.1fs", target, remaining)
 	} else {
-		subtitle = fmt.ctprintf("%s  -  active %.0fs", target, e.remaining)
+		subtitle = fmt.ctprintf("%s  -  active %.0fs", target, remaining)
 	}
 	UIText(subtitle, rect.x+52, rect.y+26, UI_COLOR_DIM)
 
@@ -5271,9 +5296,9 @@ UIDrawEnvironmentBanner :: proc(w: ^World) {
 	rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
 	progress: f32 = 0
 	if e.phase == .Telegraph {
-		progress = clamp(1-e.remaining/max(e.telegraph, 0.01), 0, 1)
+		progress = clamp(1-remaining/max(PositionToF32(e.telegraph), 0.01), 0, 1)
 	} else {
-		progress = clamp(e.remaining/max(e.duration, 0.01), 0, 1)
+		progress = clamp(remaining/max(PositionToF32(e.duration), 0.01), 0, 1)
 	}
 	rl.DrawRectangleRec(
 		rl.Rectangle{bar.x, bar.y, bar.width*progress, bar.height},
@@ -5340,20 +5365,20 @@ UIDrawTileInfo :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 		label := fmt.ctprintf(
 			"%s  -  %ds",
 			TerrainScarName(tile.scar),
-			int(math.ceil(tile.scarTimer)),
+			int(math.ceil(PositionToF32(tile.scarTimer))),
 		)
 		UIText(label, box.x+padding, bodyY, scarColor)
 		UIDrawWrappedText(TerrainScarDescription(tile.scar), scarDesc, box.x+padding, bodyY+bodyStep, UI_COLOR_DIM)
 	} else {
 		def := TILE_DEFS[tile.type]
 		UIText(
-			fmt.ctprintf("Move x%.2f   Wood %.1f", def.moveCost, def.wood),
+			fmt.ctprintf("Move x%.2f   Wood %.1f", PositionToF32(def.moveCost), def.wood),
 			box.x+padding,
 			bodyY,
 			UI_COLOR_DIM,
 		)
 		UIText(
-			fmt.ctprintf("Food %.1f   Water %.1f", def.food, def.water),
+			fmt.ctprintf("Food %.1f   Water %.1f", PositionToF32(def.food), def.water),
 			box.x+padding,
 			bodyY+bodyStep,
 			UI_COLOR_DIM,

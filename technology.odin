@@ -1,5 +1,7 @@
 package main
 
+import "d32"
+
 CROWN_INSIGHT_PER_MILESTONE :: 1
 CROWN_INSIGHT_PER_TOWN :: 1
 CROWN_INSIGHT_PER_FUSION :: 1
@@ -186,21 +188,23 @@ KingdomUnlockTech :: proc(w: ^World, kingdom: int, tech: CrownTech) -> bool {
 	case .Armory:
 		for slot in 0..<UNIT_CAPACITY {
 			if !w.unitUsed[slot] || w.units.kingdome[slot] != kingdom do continue
-			if UnitIsWarrior(w.units.type[slot]) do w.units.health[slot] *= 1.15
+			if UnitIsWarrior(w.units.type[slot]) {
+				w.units.health[slot] = d32.Mul(w.units.health[slot], d32.FromRatio(115, 100))
+			}
 		}
 	case .Fortification:
 		for slot in 0..<BUILDING_CAPACITY {
 			if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdom do continue
 			kind := BuildingKindOf(w.buildings.type[slot])
 			if kind == .Wall || kind == .Watchtower || kind == .Cannon {
-				w.buildings.health[slot] *= 1.25
+				w.buildings.health[slot] = d32.Mul(w.buildings.health[slot], d32.FromRatio(125, 100))
 			}
 		}
 	case .Bridgeworks:
 		for slot in 0..<BUILDING_CAPACITY {
 			if !w.buildingUsed[slot] || w.buildings.kingdom[slot] != kingdom do continue
 			if BuildingKindOf(w.buildings.type[slot]) == .Bridge {
-				w.buildings.health[slot] *= 1.50
+				w.buildings.health[slot] = d32.Mul(w.buildings.health[slot], d32.FromRatio(150, 100))
 			}
 		}
 	case .CoastalBoats, .FishingFlotillas, .SeaPower, .Blockade,
@@ -221,63 +225,78 @@ KingdomCanUnlockTech :: proc(w: ^World, kingdom: int, tech: CrownTech) -> bool {
 	return w.kingdoms[kingdom].insight >= CrownTechCost(tech)
 }
 
-KingdomTechFoodMultiplier :: proc(w: ^World, kingdom, townSlot: int) -> f32 {
-	multiplier: f32 = 1
-	if KingdomHasTech(w, kingdom, .CropRotation) do multiplier *= 1.20
-	if KingdomHasTech(w, kingdom, .FishingFlotillas) && TownIsCoastal(w, kingdom, townSlot) {
-		multiplier *= 1.20
+KingdomTechFoodMultiplier :: proc(w: ^World, kingdom, townSlot: int) -> d32.Value {
+	multiplier := d32.ONE
+	if KingdomHasTech(w, kingdom, .CropRotation) {
+		multiplier = d32.Mul(multiplier, d32.FromRatio(120, 100))
 	}
-	if TownFindBuilding(w, kingdom, townSlot, .Granary) >= 0 do multiplier *= 1.10
-	return multiplier
-}
-
-KingdomTechWaterMultiplier :: proc(w: ^World, kingdom, townSlot: int) -> f32 {
-	multiplier: f32 = 1
-	if KingdomHasTech(w, kingdom, .Irrigation) do multiplier *= 1.20
 	if KingdomHasTech(w, kingdom, .FishingFlotillas) && TownIsCoastal(w, kingdom, townSlot) {
-		multiplier *= 1.15
+		multiplier = d32.Mul(multiplier, d32.FromRatio(120, 100))
+	}
+	if TownFindBuilding(w, kingdom, townSlot, .Granary) >= 0 {
+		multiplier = d32.Mul(multiplier, d32.FromRatio(110, 100))
 	}
 	return multiplier
 }
 
-KingdomTechGrowthMultiplier :: proc(w: ^World, kingdom, townSlot: int) -> f32 {
-	multiplier: f32 = 1
-	if TownFindBuilding(w, kingdom, townSlot, .Granary) >= 0 do multiplier *= 1.10
-	if KingdomHasTech(w, kingdom, .Metropolis) do multiplier *= 1.10
+KingdomTechWaterMultiplier :: proc(w: ^World, kingdom, townSlot: int) -> d32.Value {
+	multiplier := d32.ONE
+	if KingdomHasTech(w, kingdom, .Irrigation) {
+		multiplier = d32.Mul(multiplier, d32.FromRatio(120, 100))
+	}
+	if KingdomHasTech(w, kingdom, .FishingFlotillas) && TownIsCoastal(w, kingdom, townSlot) {
+		multiplier = d32.Mul(multiplier, d32.FromRatio(115, 100))
+	}
 	return multiplier
 }
 
-KingdomTechWoodMultiplier :: proc(w: ^World, kingdom: int) -> f32 {
-	if KingdomHasTech(w, kingdom, .Carpentry) do return 1.20
-	return 1
+KingdomTechGrowthRatio :: proc(w: ^World, kingdom, townSlot: int) -> (i64, i64) {
+	numerator: i64 = 1
+	denominator: i64 = 1
+	if TownFindBuilding(w, kingdom, townSlot, .Granary) >= 0 {
+		numerator *= 11
+		denominator *= 10
+	}
+	if KingdomHasTech(w, kingdom, .Metropolis) {
+		numerator *= 11
+		denominator *= 10
+	}
+	return numerator, denominator
 }
 
-KingdomTechBuildingCostMultiplier :: proc(w: ^World, kingdom: int) -> f32 {
-	if KingdomHasTech(w, kingdom, .Masonry) do return 0.85
-	return 1
+KingdomTechWoodMultiplier :: proc(w: ^World, kingdom: int) -> d32.Value {
+	if KingdomHasTech(w, kingdom, .Carpentry) do return d32.FromRatio(120, 100)
+	return d32.ONE
 }
 
-KingdomTechBuildSpeedMultiplier :: proc(w: ^World, kingdom: int) -> f32 {
-	if KingdomHasTech(w, kingdom, .Masonry) do return 1.20
-	return 1
+KingdomTechBuildingCostMultiplier :: proc(w: ^World, kingdom: int) -> d32.Value {
+	if KingdomHasTech(w, kingdom, .Masonry) do return d32.FromRatio(85, 100)
+	return d32.ONE
 }
 
-KingdomTechPathSpeedMultiplier :: proc(w: ^World, kingdom: int) -> f32 {
-	multiplier: f32 = 1
-	if KingdomHasTech(w, kingdom, .Roadworks) do multiplier *= 1.10
-	if KingdomHasTech(w, kingdom, .BridgeProject) do multiplier *= 1.10
+KingdomTechBuildSpeedMultiplier :: proc(w: ^World, kingdom: int) -> d32.Value {
+	if KingdomHasTech(w, kingdom, .Masonry) do return d32.FromRatio(120, 100)
+	return d32.ONE
+}
+
+KingdomTechPathSpeedMultiplier :: proc(w: ^World, kingdom: int) -> d32.Value {
+	multiplier := d32.ONE
+	if KingdomHasTech(w, kingdom, .Roadworks) do multiplier = d32.Mul(multiplier, d32.FromRatio(110, 100))
+	if KingdomHasTech(w, kingdom, .BridgeProject) do multiplier = d32.Mul(multiplier, d32.FromRatio(110, 100))
 	return multiplier
 }
 
-KingdomTechBridgeBuildMultiplier :: proc(w: ^World, kingdom: int) -> f32 {
-	multiplier: f32 = 1
-	if KingdomHasTech(w, kingdom, .Bridgeworks) do multiplier *= 1.50
+KingdomTechBridgeBuildMultiplier :: proc(w: ^World, kingdom: int) -> d32.Value {
+	multiplier := d32.ONE
+	if KingdomHasTech(w, kingdom, .Bridgeworks) {
+		multiplier = d32.Mul(multiplier, d32.FromRatio(150, 100))
+	}
 	return multiplier
 }
 
-KingdomTechFoundingCostMultiplier :: proc(w: ^World, kingdom: int) -> f32 {
-	if KingdomHasTech(w, kingdom, .Charters) do return 0.80
-	return 1
+KingdomTechFoundingCostMultiplier :: proc(w: ^World, kingdom: int) -> d32.Value {
+	if KingdomHasTech(w, kingdom, .Charters) do return d32.FromRatio(80, 100)
+	return d32.ONE
 }
 
 KingdomTechFoundingSettlerReduction :: proc(w: ^World, kingdom: int) -> int {
@@ -293,39 +312,38 @@ KingdomTechConversionSpeedMultiplier :: proc(w: ^World, kingdom: int, kind: Unit
 	return multiplier
 }
 
-KingdomTechWarriorHealthMultiplier :: proc(w: ^World, kingdom: int) -> f32 {
-	if KingdomHasTech(w, kingdom, .Armory) do return 1.15
-	return 1
+KingdomTechWarriorDamageMultiplier :: proc(w: ^World, kingdom: int, kind: UnitKind) -> d32.Value {
+	if KingdomHasTech(w, kingdom, .Armory) && UnitIsWarrior(UnitTypeFromKind(kind)) {
+		return d32.FromRatio(110, 100)
+	}
+	return d32.ONE
 }
 
-KingdomTechWarriorDamageMultiplier :: proc(w: ^World, kingdom: int, kind: UnitKind) -> f32 {
-	if KingdomHasTech(w, kingdom, .Armory) && UnitIsWarrior(UnitTypeFromKind(kind)) do return 1.10
-	return 1
-}
-
-KingdomTechSiegeDamageMultiplier :: proc(w: ^World, kingdom: int, kind: UnitKind) -> f32 {
+KingdomTechSiegeDamageMultiplier :: proc(w: ^World, kingdom: int, kind: UnitKind) -> d32.Value {
 	if KingdomHasTech(w, kingdom, .Siegecraft) &&
 		(kind == .Catapult || kind == .Giant || kind == .Mage) {
-		return 1.25
+		return d32.FromRatio(125, 100)
 	}
-	return 1
+	return d32.ONE
 }
 
-KingdomTechBuildingHealthMultiplier :: proc(w: ^World, kingdom: int, kind: BuildingKind) -> f32 {
-	multiplier: f32 = 1
+KingdomTechBuildingHealthMultiplier :: proc(w: ^World, kingdom: int, kind: BuildingKind) -> d32.Value {
+	multiplier := d32.ONE
 	if KingdomHasTech(w, kingdom, .Fortification) &&
 		(kind == .Wall || kind == .Watchtower || kind == .Cannon) {
-		multiplier *= 1.25
+		multiplier = d32.Mul(multiplier, d32.FromRatio(125, 100))
 	}
-	if KingdomHasTech(w, kingdom, .Bridgeworks) && kind == .Bridge do multiplier *= 1.50
+	if KingdomHasTech(w, kingdom, .Bridgeworks) && kind == .Bridge {
+		multiplier = d32.Mul(multiplier, d32.FromRatio(150, 100))
+	}
 	return multiplier
 }
 
-KingdomTechBuildingKindCostMultiplier :: proc(w: ^World, kingdom: int, kind: BuildingKind) -> f32 {
+KingdomTechBuildingKindCostMultiplier :: proc(w: ^World, kingdom: int, kind: BuildingKind) -> d32.Value {
 	multiplier := KingdomTechBuildingCostMultiplier(w, kingdom)
 	if KingdomHasTech(w, kingdom, .Fortification) &&
 		(kind == .Wall || kind == .Watchtower || kind == .Cannon) {
-		multiplier *= 0.80
+		multiplier = d32.Mul(multiplier, d32.FromRatio(80, 100))
 	}
 	return multiplier
 }
@@ -335,25 +353,27 @@ KingdomTechGarrisonRatio :: proc(w: ^World, kingdom: int) -> f32 {
 	return TOWN_GARRISON_RATIO
 }
 
-UnitMaxHealthFor :: proc(w: ^World, kingdom: int, type: UnitType) -> f32 {
+UnitMaxHealthFor :: proc(w: ^World, kingdom: int, type: UnitType) -> d32.Value {
 	base := UnitDefaultHealth(type)
-	if UnitIsWarrior(type) do base *= KingdomTechWarriorHealthMultiplier(w, kingdom)
+	if UnitIsWarrior(type) && KingdomHasTech(w, kingdom, .Armory) {
+		base = d32.Mul(base, d32.FromRatio(115, 100))
+	}
 	return base
 }
 
-UnitMaxHealth :: proc(w: ^World, slot: int) -> f32 {
+UnitMaxHealth :: proc(w: ^World, slot: int) -> d32.Value {
 	if slot < 0 || slot >= UNIT_CAPACITY || !w.unitUsed[slot] || w.units.type[slot] == nil {
-		return 0
+		return d32.ZERO
 	}
 	return UnitMaxHealthFor(w, w.units.kingdome[slot], w.units.type[slot])
 }
 
-BuildingMaxHealthFor :: proc(w: ^World, kingdom: int, type: BuildingType) -> f32 {
-	return BuildingDefaultHealth(type)*KingdomTechBuildingHealthMultiplier(w, kingdom, BuildingKindOf(type))
+BuildingMaxHealthFor :: proc(w: ^World, kingdom: int, type: BuildingType) -> d32.Value {
+	return d32.Mul(BuildingDefaultHealth(type), KingdomTechBuildingHealthMultiplier(w, kingdom, BuildingKindOf(type)))
 }
 
-BuildingMaxHealth :: proc(w: ^World, slot: int) -> f32 {
-	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] do return 0
+BuildingMaxHealth :: proc(w: ^World, slot: int) -> d32.Value {
+	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] do return d32.ZERO
 	return BuildingMaxHealthFor(w, w.buildings.kingdom[slot], w.buildings.type[slot])
 }
 
@@ -372,8 +392,8 @@ UnitCanCrossWater :: proc(w: ^World, unitType: UnitType, kingdom: int) -> bool {
 
 UnitOnWaterTile :: proc(w: ^World, unitSlot: int) -> bool {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return false
-	tileX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
-	tileY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+	tileX := UnitTileX(w, unitSlot)
+	tileY := UnitTileY(w, unitSlot)
 	index := tileX*int(w.maxY)+tileY
 	if slot := w.tileBuilding[index]; slot >= 0 && w.buildingUsed[slot] {
 		if BuildingKindOf(w.buildings.type[slot]) == .Bridge do return false
@@ -391,12 +411,12 @@ UnitOnWaterTile :: proc(w: ^World, unitSlot: int) -> bool {
 	return TileIsDeepWater(tile)
 }
 
-UnitSeaSpeedMultiplier :: proc(w: ^World, unitSlot: int) -> f32 {
+UnitSeaSpeedMultiplier :: proc(w: ^World, unitSlot: int) -> d32.Value {
 	unit := &w.units[unitSlot]
-	if !UnitOnWaterTile(w, unitSlot) do return 1
-	if UnitKindOf(unit.type) == .Turtle do return 1
-	if !UnitCanCrossWater(w, unit.type, unit.kingdome) do return 1
-	return 0.60
+	if !UnitOnWaterTile(w, unitSlot) do return d32.ONE
+	if UnitKindOf(unit.type) == .Turtle do return d32.ONE
+	if !UnitCanCrossWater(w, unit.type, unit.kingdome) do return d32.ONE
+	return d32.FromRatio(60, 100)
 }
 
 TownIsCoastal :: proc(w: ^World, kingdom, townSlot: int) -> bool {
@@ -461,8 +481,8 @@ KingdomCoastalWoodRate :: proc(w: ^World, kingdom: int) -> f32 {
 	return rate
 }
 
-KingdomTechBlockadeDamage :: proc(w: ^World, kingdom, townSlot: int) -> f32 {
+KingdomTechBlockadeDamage :: proc(w: ^World, kingdom, townSlot: int) -> d32.Value {
 	town := &w.kingdoms[kingdom].towns[townSlot]
-	if town.blockadeUntil <= w.simulationTime do return 0
-	return 0.5
+	if town.blockadeUntilTick <= WorldCurrentTick(w) do return d32.ZERO
+	return d32.HALF
 }

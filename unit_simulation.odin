@@ -1,6 +1,7 @@
 package main
 
 import "base:intrinsics"
+import "d32"
 
 
 // Pacific units drop their work to fight a fire burning inside their town.
@@ -14,18 +15,26 @@ UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 	if !WorldTownExists(w, unit.kingdome, unit.town) do return false
 
 	fireSlot := -1
-	bestDistanceSquared: f32 = 0
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
+	bestDistanceSquared: u64 = 0
+	extinguishRadiusRaw := UnitRawDistance(FIRE_EXTINGUISH_RADIUS)
+	extinguishRadiusSquaredRaw := u64(extinguishRadiusRaw)*u64(extinguishRadiusRaw)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	RecursiveLockAcquire(&w.fireMutex)
 	for activeIndex in 0..<w.fireCount {
 		slot := w.fireActive[activeIndex]
 		if !TownPointInArea(w, unit.kingdome, unit.town, int(w.fires.x[slot]), int(w.fires.y[slot])) {
 			continue
 		}
-		deltaX := WorldShortestWrappedDelta(w.fires.x[slot]-unit.x, worldWidth)
-		deltaY := WorldShortestWrappedDelta(w.fires.y[slot]-unit.y, worldHeight)
-		distanceSquared := deltaX*deltaX+deltaY*deltaY
+		distanceSquared, validDistance := d32.WrappedDistanceSquared(
+			unit.x,
+			unit.y,
+			PositionFromF32(w.fires.x[slot]),
+			PositionFromF32(w.fires.y[slot]),
+			worldWidthRaw,
+			worldHeightRaw,
+		)
+		if !validDistance do continue
 		if fireSlot >= 0 && distanceSquared >= bestDistanceSquared do continue
 		fireSlot = slot
 		bestDistanceSquared = distanceSquared
@@ -41,9 +50,12 @@ UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 		unit.pathReady = false
 	}
 
-	if bestDistanceSquared <= FIRE_EXTINGUISH_RADIUS*FIRE_EXTINGUISH_RADIUS {
-		w.fires.remaining[fireSlot] -= rate*deltaTime
-		if w.fires.remaining[fireSlot] <= 0 do WorldFireDespawn(w, fireSlot)
+	if bestDistanceSquared <= extinguishRadiusSquaredRaw {
+		w.fires.remaining[fireSlot] = max(
+			d32.Sub(w.fires.remaining[fireSlot], PositionFromF32(rate*deltaTime)),
+			d32.ZERO,
+		)
+		if w.fires.remaining[fireSlot] <= d32.ZERO do WorldFireDespawn(w, fireSlot)
 		unit.pathReady = false
 		RecursiveLockRelease(&w.fireMutex)
 		return true
@@ -107,8 +119,8 @@ UnitUpdateExplorer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 
 	switch state^ {
 	case .Working:
-		explorer.restTimer -= deltaTime
-		if explorer.restTimer <= 0 {
+		explorer.restTimer = d32.Sub(explorer.restTimer, PositionFromF32(deltaTime))
+		if explorer.restTimer <= d32.ZERO {
 			explorer.tripsLeft = EXPLORER_TRIPS_BEFORE_REST
 			state^ = .Roaming
 			unit.pathReady = false
@@ -116,8 +128,13 @@ UnitUpdateExplorer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	case .Returning:
 		reached := UnitMoveToTarget(w, unitSlot, deltaTime, EXPLORER_PATH_EXPANSIONS)
 		if reached || !unit.pathFound {
-			explorer.restTimer = EXPLORER_REST_MIN+
-				WorldNoiseHash(unitSlot, explorer.journey, 0xE8A1)*(EXPLORER_REST_MAX-EXPLORER_REST_MIN)
+			explorer.restTimer = d32.Add(
+				d32.FromInt(i32(EXPLORER_REST_MIN)),
+				d32.Mul(
+					PositionFromF32(WorldNoiseHash(unitSlot, explorer.journey, 0xE8A1)),
+					d32.FromInt(i32(EXPLORER_REST_MAX-EXPLORER_REST_MIN)),
+				),
+			)
 			state^ = .Working
 			unit.pathReady = false
 		}
@@ -129,7 +146,7 @@ UnitUpdateExplorer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 				unit.pathReady = false
 				state^ = .Returning
 			} else {
-				explorer.restTimer = EXPLORER_REST_MIN
+				explorer.restTimer = d32.FromInt(i32(EXPLORER_REST_MIN))
 				state^ = .Working
 			}
 			return
@@ -151,7 +168,7 @@ UnitUpdateExplorer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			state^ = .Roaming
 		} else if !unit.pathFound {
 			// Do not retry a capped search every tick.
-			explorer.restTimer = EXPLORER_REST_MIN
+			explorer.restTimer = d32.FromInt(i32(EXPLORER_REST_MIN))
 			state^ = .Working
 			unit.pathReady = false
 		}
@@ -168,8 +185,8 @@ UnitFindExplorationTarget :: proc(w: ^World, unitSlot, journey: int) -> (int, in
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return 0, 0, false
 
-	unitX := int(WorldWrapPosition(w.units.x[unitSlot], f32(worldWidth)))
-	unitY := int(WorldWrapPosition(w.units.y[unitSlot], f32(worldHeight)))
+	unitX := UnitTileX(w, unitSlot)
+	unitY := UnitTileY(w, unitSlot)
 	unitType := w.units[unitSlot].type
 	isPlayer := w.observerKingdom >= 0 && w.units[unitSlot].kingdome == w.observerKingdom
 	minDistanceSquared := EXPLORER_SEARCH_MIN_DISTANCE*EXPLORER_SEARCH_MIN_DISTANCE
@@ -205,7 +222,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	// Builders gathering wood are still available to switch to a construction
 	// site, so the town plans with the whole awake builder workforce.
 	intrinsics.atomic_add(&town.buildersBySlice[UnitUpdateSlice(w)], 1)
-	if state^ == .Roaming && builder.carriedResource > 0 {
+	if state^ == .Roaming && builder.carriedResource > d32.ZERO {
 		if x, y, found := UnitFindTownReturnPoint(w, kingdomSlot, townSlot); found {
 			w.units[unitSlot].pathTargetX = x
 			w.units[unitSlot].pathTargetY = y
@@ -230,7 +247,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	}
 	if state^ == .Roaming && w.units[unitSlot].decisionReady &&
 		town.wood < TownWoodGatherTarget(w, kingdomSlot, townSlot) &&
-		w.simulationTime >= town.woodSearchFailUntil {
+		WorldCurrentTick(w) >= town.woodSearchFailUntilTick {
 		if x, y, decoration, found := UnitFindResourceTarget(w, unitSlot, builder.taskSequence); found {
 			builder.targetDecoration = decoration
 			w.units[unitSlot].pathTargetX = x
@@ -238,11 +255,12 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			w.units[unitSlot].pathReady = false
 			state^ = .Traveling
 		} else {
-			town.woodSearchFailUntil = w.simulationTime+WOOD_SEARCH_RETRY_SECONDS
+			town.woodSearchFailUntilTick = WorldCurrentTick(w)+WOOD_SEARCH_RETRY_TICKS
 		}
 	}
 
 	speed := UnitMoveSpeed(w, unitSlot, UnitDefaultSpeed(w.units[unitSlot].type))
+	step := PositionFromF32(deltaTime)
 	switch state^ {
 	case .Roaming:
 		UnitUpdateRoaming(w, unitSlot, deltaTime)
@@ -250,9 +268,9 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		reached, blocked, _ := UnitStepTowards(
 			w,
 			unitSlot,
-			f32(w.units[unitSlot].pathTargetX)+0.5,
-			f32(w.units[unitSlot].pathTargetY)+0.5,
-			speed*deltaTime,
+			TileCenterRaw(w.units[unitSlot].pathTargetX),
+			TileCenterRaw(w.units[unitSlot].pathTargetY),
+			d32.Mul(speed, step),
 		)
 		if reached {
 			if builder.targetDecoration >= 0 && builder.targetDecoration < DECORATION_CAPACITY &&
@@ -284,12 +302,15 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			break
 		}
 
-		w.units[unitSlot].cooldown -= deltaTime
-		if w.units[unitSlot].cooldown <= 0 {
+		w.units[unitSlot].cooldown = max(
+			d32.Sub(w.units[unitSlot].cooldown, step),
+			d32.ZERO,
+		)
+		if w.units[unitSlot].cooldown <= d32.ZERO {
 			carried := DecorationWoodYield(w.decorations.kind[builder.targetDecoration])
 			DecorationFell(w, builder.targetDecoration)
 			builder.targetDecoration = -1
-			if carried > 0 {
+			if carried > d32.ZERO {
 				builder.carriedResource = carried
 				if x, y, found := UnitFindTownReturnPoint(w, kingdomSlot, townSlot); found {
 					w.units[unitSlot].pathTargetX = x
@@ -297,7 +318,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 					w.units[unitSlot].pathReady = false
 					state^ = .Returning
 				} else {
-					builder.carriedResource = 0
+					builder.carriedResource = d32.ZERO
 					state^ = .Roaming
 				}
 			} else {
@@ -309,22 +330,23 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		reached, blocked, _ := UnitStepTowards(
 			w,
 			unitSlot,
-			f32(w.units[unitSlot].pathTargetX)+0.5,
-			f32(w.units[unitSlot].pathTargetY)+0.5,
-			speed*deltaTime,
+			TileCenterRaw(w.units[unitSlot].pathTargetX),
+			TileCenterRaw(w.units[unitSlot].pathTargetY),
+			d32.Mul(speed, step),
 		)
 		if reached {
 			ParallelQueueConstruction(
 				unitSlot, kingdomSlot, townSlot, -1,
-				builder.carriedResource*KingdomTechWoodMultiplier(w, kingdomSlot), .Wood,
+				0, .Wood,
+				d32.Mul(builder.carriedResource, KingdomTechWoodMultiplier(w, kingdomSlot)),
 			)
-			builder.carriedResource = 0
+			builder.carriedResource = d32.ZERO
 			builder.targetDecoration = -1
 			builder.taskSequence += 1
 			state^ = .Roaming
 			w.units[unitSlot].pathReady = false
 		} else if blocked {
-			builder.carriedResource = 0
+			builder.carriedResource = d32.ZERO
 			builder.targetDecoration = -1
 			builder.taskSequence += 1
 			state^ = .Roaming
@@ -342,9 +364,9 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		reached, blocked, _ := UnitStepTowards(
 			w,
 			unitSlot,
-			f32(w.units[unitSlot].pathTargetX)+0.5,
-			f32(w.units[unitSlot].pathTargetY)+0.5,
-			speed*deltaTime,
+			TileCenterRaw(w.units[unitSlot].pathTargetX),
+			TileCenterRaw(w.units[unitSlot].pathTargetY),
+			d32.Mul(speed, PositionFromF32(deltaTime)),
 		)
 		if reached {
 			builder.failedConstruction = -1
@@ -374,7 +396,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		}
 		// Work is applied after the unit loop; a finished site is noticed on the
 		// builder's next update.
-		ParallelQueueConstruction(unitSlot, kingdomSlot, townSlot, builder.constructionSite, deltaTime, .Work)
+		ParallelQueueConstruction(unitSlot, kingdomSlot, townSlot, builder.constructionSite, step, .Work)
 	case .GoingHome, .Sleeping, .Hiding, .Fleeing:
 		}
 }
@@ -396,8 +418,11 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 
 	if state^ == .Roaming {
 		if collector.carriedResource > 0 {
-			if w.units[unitSlot].cooldown > 0 {
-				w.units[unitSlot].cooldown = max(0, w.units[unitSlot].cooldown-deltaTime)
+			if w.units[unitSlot].cooldown > d32.ZERO {
+				w.units[unitSlot].cooldown = max(
+					d32.Sub(w.units[unitSlot].cooldown, PositionFromF32(deltaTime)),
+					d32.ZERO,
+				)
 				return
 			}
 			if x, y, found := TownCollectorReturnPoint(w, kingdomSlot, townSlot); found {
@@ -407,12 +432,15 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 				state^ = .Returning
 			} else {
 				// Keep the load, but do not search or start roaming paths every tick.
-				w.units[unitSlot].cooldown = 5
+				w.units[unitSlot].cooldown = d32.FromInt(5)
 				w.units[unitSlot].pathReady = false
 				return
 			}
-		} else if w.units[unitSlot].cooldown > 0 {
-			w.units[unitSlot].cooldown -= deltaTime
+		} else if w.units[unitSlot].cooldown > d32.ZERO {
+			w.units[unitSlot].cooldown = max(
+				d32.Sub(w.units[unitSlot].cooldown, PositionFromF32(deltaTime)),
+				d32.ZERO,
+			)
 		} else if w.units[unitSlot].decisionReady {
 			if x, y, found := TownCollectorWaterPoint(
 				w,
@@ -426,7 +454,7 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 				w.units[unitSlot].pathReady = false
 				state^ = .Traveling
 			} else {
-				w.units[unitSlot].cooldown = 5
+				w.units[unitSlot].cooldown = d32.FromInt(5)
 			}
 		}
 	}
@@ -445,15 +473,18 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		) {
 			state^ = .Working
 			unit.pathReady = false
-			w.units[unitSlot].cooldown = f32(WORLD_DAY_LENGTH_SECONDS)/48
+			w.units[unitSlot].cooldown = d32.FromRatio(i32(WORLD_DAY_LENGTH_SECONDS), 48)
 		} else if !w.units[unitSlot].pathFound {
 			state^ = .Roaming
 			w.units[unitSlot].pathReady = false
 			collector.taskSequence += 1
 		}
 	case .Working:
-		w.units[unitSlot].cooldown -= deltaTime
-		if w.units[unitSlot].cooldown <= 0 {
+		w.units[unitSlot].cooldown = max(
+			d32.Sub(w.units[unitSlot].cooldown, PositionFromF32(deltaTime)),
+			d32.ZERO,
+		)
+		if w.units[unitSlot].cooldown <= d32.ZERO {
 			collector.carriedResource = 1
 			if x, y, found := TownCollectorReturnPoint(w, kingdomSlot, townSlot); found {
 				w.units[unitSlot].pathTargetX = x
@@ -478,7 +509,7 @@ UnitUpdateWaterCollector :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			collector.carriedResource = 0
 			collector.taskSequence += 1
 			state^ = .Roaming
-			w.units[unitSlot].cooldown = 0
+			w.units[unitSlot].cooldown = d32.ZERO
 			w.units[unitSlot].pathReady = false
 		}
 	case .GoingHome, .Sleeping, .ToConstruction, .Building, .Hiding, .Fleeing:
@@ -504,8 +535,11 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 
 	state := &w.units[unitSlot].state.(StatePacific)
 	if state^ == .Roaming && !farmer.workedToday {
-		if w.units[unitSlot].cooldown > 0 {
-			w.units[unitSlot].cooldown -= deltaTime
+		if w.units[unitSlot].cooldown > d32.ZERO {
+			w.units[unitSlot].cooldown = max(
+				d32.Sub(w.units[unitSlot].cooldown, PositionFromF32(deltaTime)),
+				d32.ZERO,
+			)
 		} else if w.units[unitSlot].decisionReady {
 			if x, y, found := UnitFindFarmlandTarget(w, unitSlot, farmer.workDay); found {
 				w.units[unitSlot].pathTargetX = x
@@ -513,7 +547,7 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 				w.units[unitSlot].pathReady = false
 				state^ = .Traveling
 			} else {
-				w.units[unitSlot].cooldown = 5
+				w.units[unitSlot].cooldown = d32.FromInt(5)
 			}
 		}
 	}
@@ -526,21 +560,24 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		reached, blocked, _ := UnitStepTowards(
 			w,
 			unitSlot,
-			f32(w.units[unitSlot].pathTargetX)+0.5,
-			f32(w.units[unitSlot].pathTargetY)+0.5,
-			speed*deltaTime,
+			TileCenterRaw(w.units[unitSlot].pathTargetX),
+			TileCenterRaw(w.units[unitSlot].pathTargetY),
+			d32.Mul(speed, PositionFromF32(deltaTime)),
 		)
 		if reached {
 			state^ = .Working
-			w.units[unitSlot].cooldown = f32(WORLD_DAY_LENGTH_SECONDS)/24
+			w.units[unitSlot].cooldown = d32.FromRatio(i32(WORLD_DAY_LENGTH_SECONDS), 24)
 		} else if blocked {
 			state^ = .Roaming
 			w.units[unitSlot].pathReady = false
-			w.units[unitSlot].cooldown = 5
+			w.units[unitSlot].cooldown = d32.FromInt(5)
 		}
 	case .Working:
-		w.units[unitSlot].cooldown -= deltaTime
-		if w.units[unitSlot].cooldown <= 0 {
+		w.units[unitSlot].cooldown = max(
+			d32.Sub(w.units[unitSlot].cooldown, PositionFromF32(deltaTime)),
+			d32.ZERO,
+		)
+		if w.units[unitSlot].cooldown <= d32.ZERO {
 			farmer.workedToday = true
 			state^ = .Roaming
 			w.units[unitSlot].pathReady = false
@@ -570,8 +607,8 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 
 	if state.inside {
 		SpatialUnitRemove(w, unitSlot)
-		state.timer -= deltaTime
-		if state.timer <= 0 do UnitConvert(w, unitSlot)
+		state.timer = d32.Sub(state.timer, PositionFromF32(deltaTime))
+		if state.timer <= d32.ZERO do UnitConvert(w, unitSlot)
 		return
 	}
 
@@ -585,19 +622,19 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			height,
 			unit.type,
 			unit.kingdome,
-			int(WorldWrapPosition(unit.x, f32(w.maxX))),
-			int(WorldWrapPosition(unit.y, f32(w.maxY))),
+			UnitTileX(w, unitSlot),
+			UnitTileY(w, unitSlot),
 		)
 		if !found {
 			UnitConversionCancel(w, unitSlot)
 			return
 		}
 		state.accessX, state.accessY = x, y
-		state.retryTimer = 0
+		state.retryTimer = d32.ZERO
 		unit.pathReady = false
 	}
-	if state.retryTimer > 0 {
-		state.retryTimer -= deltaTime
+	if state.retryTimer > d32.ZERO {
+		state.retryTimer = d32.Sub(state.retryTimer, PositionFromF32(deltaTime))
 		return
 	}
 
@@ -609,11 +646,14 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	if UnitMoveToTarget(w, unitSlot, deltaTime, CIVILIAN_PATH_EXPANSIONS) {
 		state.inside = true
 		SpatialUnitRemove(w, unitSlot)
-		state.timer = UnitDefaultTrainingTime(state.to) / KingdomTechConversionSpeedMultiplier(w, unit.kingdome, state.to)
+		state.timer = d32.Div(
+			UnitDefaultTrainingTime(state.to),
+			PositionFromF32(KingdomTechConversionSpeedMultiplier(w, unit.kingdome, state.to)),
+		)
 		unit.pathReady = false
 	} else if !unit.pathFound {
 		unit.pathReady = false
-		state.retryTimer = 1
+		state.retryTimer = d32.FromInt(1)
 	}
 }
 
@@ -694,7 +734,7 @@ UnitHome :: proc(w: ^World, unitSlot: int) -> int {
 	home := unit.homeSlot
 	if home < 0 || home >= BUILDING_CAPACITY || !w.buildingUsed[home] do return -1
 	building := &w.buildings[home]
-	if BuildingKindOf(building.type) != .Home || building.health <= 0 ||
+	if BuildingKindOf(building.type) != .Home || building.health <= d32.ZERO ||
 		building.homeResident != unitSlot+1 || building.kingdom != unit.kingdome ||
 		building.town != unit.town || !WorldTownExists(w, unit.kingdome, unit.town) {
 		return -1
@@ -712,8 +752,8 @@ UnitInsideHome :: proc(w: ^World, unitSlot: int) -> int {
 		UnitIsWarrior(unit.type) || UnitKindOf(unit.type) == .CombatBuilder {
 		return -1
 	}
-	x := int(WorldWrapPosition(unit.x, f32(w.maxX)))
-	y := int(WorldWrapPosition(unit.y, f32(w.maxY)))
+	x := UnitTileX(w, unitSlot)
+	y := UnitTileY(w, unitSlot)
 	width, height := BuildingTileSize(w.buildings[home].type)
 	if BuildingAccessDistance(w, w.buildings.x[home], w.buildings.y[home], width, height, x, y) != 1 ||
 		!WorldTileWalkable(w, x, y, unit.type, unit.kingdome) {
@@ -741,7 +781,7 @@ UnitHiddenInside :: proc(w: ^World, unitSlot: int) -> bool {
 UnitWake :: proc(w: ^World, unitSlot: int) {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] do return
 	w.units.updateStride[unitSlot] = 1
-	w.units.decisionTimer[unitSlot] = 0
+	w.units.decisionTimer[unitSlot] = d32.ZERO
 }
 
 // Idle villagers in peaceful towns are the only units allowed to sleep through
@@ -818,10 +858,17 @@ UnitUpdatePacificSafety :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> boo
 	// rest of an alarmed town keeps working instead of scanning every update.
 	threatened := false
 	if alarm {
-		deltaX := WorldShortestWrappedDelta(unit.x-(f32(threatX)+0.5), f32(w.maxX))
-		deltaY := WorldShortestWrappedDelta(unit.y-(f32(threatY)+0.5), f32(w.maxY))
-		radius := f32(FLEE_THREAT_RADIUS*2)
-		threatened = deltaX*deltaX+deltaY*deltaY <= radius*radius
+		threatRadiusRaw := UnitRawDistance(f32(FLEE_THREAT_RADIUS*2))
+		threatRadiusSquaredRaw := u64(threatRadiusRaw)*u64(threatRadiusRaw)
+		distanceSquared, validDistance := d32.WrappedDistanceSquared(
+			unit.x,
+			unit.y,
+			TileCenterPosition(threatX),
+			TileCenterPosition(threatY),
+			i64(w.maxX)*d32.SCALE,
+			i64(w.maxY)*d32.SCALE,
+		)
+		threatened = validDistance && distanceSquared <= threatRadiusSquaredRaw
 	}
 	fleeing := false
 	if pacificState, pacific := unit.state.(StatePacific); pacific {
@@ -976,8 +1023,8 @@ TOWN_ROAM_AREA_FACTOR :: 1.25
 
 UnitUpdateRoaming :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	unit := &w.units[unitSlot]
-	atTarget := int(WorldWrapPosition(unit.x, f32(w.maxX))) == unit.pathTargetX &&
-		int(WorldWrapPosition(unit.y, f32(w.maxY))) == unit.pathTargetY
+	atTarget := UnitTileX(w, unitSlot) == unit.pathTargetX &&
+		UnitTileY(w, unitSlot) == unit.pathTargetY
 	if !unit.pathReady || atTarget {
 		if x, y, found := UnitFindRoamingTarget(w, unitSlot, unit.roamSequence); found {
 			unit.pathTargetX = x
@@ -995,9 +1042,9 @@ UnitUpdateRoaming :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	reached, blocked, _ := UnitStepTowards(
 		w,
 		unitSlot,
-		f32(unit.pathTargetX)+0.5,
-		f32(unit.pathTargetY)+0.5,
-		speed*deltaTime,
+		TileCenterRaw(unit.pathTargetX),
+		TileCenterRaw(unit.pathTargetY),
+		d32.Mul(speed, PositionFromF32(deltaTime)),
 	)
 	if reached || blocked {
 		unit.pathReady = false
@@ -1016,13 +1063,17 @@ UnitApplyTownEffects :: proc(w: ^World, unitSlot: int, housed: bool, shortageEpo
 	seed := u64(kingdomSlot*TOWN_CAPACITY+townSlot)
 	foodRoll := WorldNoiseHash(unitSlot, shortageEpoch, seed+301)
 	waterRoll := WorldNoiseHash(unitSlot, shortageEpoch, seed+607)
-	w.units[unitSlot].effects[.NoFood] = foodRoll < town.foodShortage
-	w.units[unitSlot].effects[.NoWater] = waterRoll < town.waterShortage
+	// Rolls stay f32; quantize each once at the shortage boundary.
+	w.units[unitSlot].effects[.NoFood] = PositionFromF32(foodRoll) < town.foodShortage
+	w.units[unitSlot].effects[.NoWater] = PositionFromF32(waterRoll) < town.waterShortage
 
 	regen: f32 = 0.25
 	if !w.units[unitSlot].effects[.NoHome] do regen = 1
 	if w.units[unitSlot].poisonRemaining > 0 do regen = 0
-	w.units[unitSlot].health = min(UnitMaxHealth(w, unitSlot), w.units[unitSlot].health+regen*deltaTime)
+	maximum := UnitMaxHealth(w, unitSlot)
+	health := d32.Add(w.units[unitSlot].health, PositionFromF32(regen*deltaTime))
+	if health > maximum do health = maximum
+	w.units[unitSlot].health = health
 }
 
 // Applies town shortage effects and passive regeneration for one unit. Runs
@@ -1097,11 +1148,15 @@ UnitFindResourceTarget :: proc(w: ^World, unitSlot, taskSequence: int) -> (int, 
 	chunkSize := w.spatial.chunkSize
 	if worldWidth <= 0 || worldHeight <= 0 || chunkSize <= 0 do return 0, 0, -1, false
 
-	unitX := int(WorldWrapPosition(w.units.x[unitSlot], f32(worldWidth)))
-	unitY := int(WorldWrapPosition(w.units.y[unitSlot], f32(worldHeight)))
+	unitX := UnitTileX(w, unitSlot)
+	unitY := UnitTileY(w, unitSlot)
+	unitPositionX := w.units.x[unitSlot]
+	unitPositionY := w.units.y[unitSlot]
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	seed := u64(unitSlot+taskSequence*1009)
 	bestSlot := -1
-	bestDistanceSquared: f32 = 0
+	bestDistanceSquared: u64 = 0
 	bestScore: f32 = -1
 
 	centerChunkX := unitX/chunkSize
@@ -1119,16 +1174,22 @@ UnitFindResourceTarget :: proc(w: ^World, unitSlot, taskSequence: int) -> (int, 
 				for slot := w.spatial.decorationHead[chunk]; slot >= 0;
 					slot = w.spatial.decorationNext[slot] {
 					if !DecorationChoppable(w.decorations.kind[slot]) do continue
-					sourceX := int(w.decorations.x[slot])
-					sourceY := int(w.decorations.y[slot])
+					sourceX := int(d32.ToInt(w.decorations.x[slot]))
+					sourceY := int(d32.ToInt(w.decorations.y[slot]))
 					if WorldTileOccupied(w, sourceX, sourceY) do continue
 					if !WorldTileWalkable(w, sourceX, sourceY, w.units[unitSlot].type, w.units[unitSlot].kingdome) {
 						continue
 					}
 
-					deltaX := WorldShortestWrappedDelta(f32(sourceX)-f32(unitX), f32(worldWidth))
-					deltaY := WorldShortestWrappedDelta(f32(sourceY)-f32(unitY), f32(worldHeight))
-					distanceSquared := deltaX*deltaX+deltaY*deltaY
+					distanceSquared, validDistance := d32.WrappedDistanceSquared(
+						unitPositionX,
+						unitPositionY,
+						w.decorations.x[slot],
+						w.decorations.y[slot],
+						worldWidthRaw,
+						worldHeightRaw,
+					)
+					if !validDistance do continue
 					score := WorldNoiseHash(sourceX, sourceY, seed)
 					if bestSlot >= 0 && (distanceSquared > bestDistanceSquared ||
 						(distanceSquared == bestDistanceSquared && (score < bestScore ||
@@ -1145,7 +1206,10 @@ UnitFindResourceTarget :: proc(w: ^World, unitSlot, taskSequence: int) -> (int, 
 	}
 
 	if bestSlot < 0 do return 0, 0, -1, false
-	return int(w.decorations.x[bestSlot]), int(w.decorations.y[bestSlot]), bestSlot, true
+	return int(d32.ToInt(w.decorations.x[bestSlot])),
+		int(d32.ToInt(w.decorations.y[bestSlot])),
+		bestSlot,
+		true
 }
 
 // Stops at the nearest reachable water tile or hall entrance. If the entrance
@@ -1161,13 +1225,15 @@ COLLECTOR_SEARCH_MAX_EXPANSIONS :: 4096
 CIVILIAN_PATH_EXPANSIONS :: 4096
 // Civilians share one staggered decision clock for threat scans, construction
 // assignment and work targeting. Movement still runs every update.
-CIVILIAN_DECISION_INTERVAL :: 1.0
+CIVILIAN_DECISION_INTERVAL :: d32.ONE
 // Idle villagers in peaceful towns update every second instead of every half
 // second. Alarms, damage, sleep and conversions wake them immediately.
 UNIT_LOD_DORMANT_STRIDE :: 2
 // A town with no choppable tree around it shares one retry timer instead of
 // every builder rescanning the neighbourhood every decision.
 WOOD_SEARCH_RETRY_SECONDS :: 5
+WOOD_SEARCH_RETRY_TICKS :: u64(WOOD_SEARCH_RETRY_SECONDS/TOWN_SIMULATION_STEP)
+#assert(f64(WOOD_SEARCH_RETRY_TICKS) == WOOD_SEARCH_RETRY_SECONDS/TOWN_SIMULATION_STEP)
 
 UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomSlot := -1, townSlot := -1) -> (int, int, bool) {
 	worldWidth := int(w.maxX)
@@ -1199,8 +1265,8 @@ UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomS
 
 	scratch := NavBfsReset()
 	queue := scratch.queue[:]
-	startX := int(WorldWrapPosition(unit.x, f32(worldWidth)))
-	startY := int(WorldWrapPosition(unit.y, f32(worldHeight)))
+	startX := UnitTileX(w, unitSlot)
+	startY := UnitTileY(w, unitSlot)
 	start := startX*worldHeight+startY
 	NavBfsVisit(scratch, start)
 	queue[0] = start
@@ -1263,6 +1329,8 @@ UnitFindCollectorTarget :: proc(w: ^World, unitSlot, taskSequence: int, kingdomS
 }
 
 WATER_SEARCH_RETRY_SECONDS :: 5
+WATER_SEARCH_RETRY_TICKS :: u64(WATER_SEARCH_RETRY_SECONDS/TOWN_SIMULATION_STEP)
+#assert(f64(WATER_SEARCH_RETRY_TICKS) == WATER_SEARCH_RETRY_SECONDS/TOWN_SIMULATION_STEP)
 
 // Every collector in a town walks to the same shore until the terrain changes,
 // so the expensive breadth-first search runs once per town instead of once per
@@ -1276,14 +1344,14 @@ TownCollectorWaterPoint :: proc(
 	if town.waterSourceReady && town.waterSourceRevision == w.terrainRevision {
 		return town.waterSourceX, town.waterSourceY, true
 	}
-	if w.simulationTime < town.waterSearchFailUntil do return 0, 0, false
+	if WorldCurrentTick(w) < town.waterSearchFailUntilTick do return 0, 0, false
 	if x, y, found := UnitFindCollectorTarget(w, unitSlot, taskSequence); found {
 		town.waterSourceX, town.waterSourceY = x, y
 		town.waterSourceReady = true
 		town.waterSourceRevision = w.terrainRevision
 		return x, y, true
 	}
-	town.waterSearchFailUntil = w.simulationTime+WATER_SEARCH_RETRY_SECONDS
+	town.waterSearchFailUntilTick = WorldCurrentTick(w)+WATER_SEARCH_RETRY_TICKS
 	return 0, 0, false
 }
 
@@ -1337,10 +1405,12 @@ UnitFindFarmlandTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int,
 	townSlot := w.units[unitSlot].town
 	if !WorldTownExists(w, kingdomSlot, townSlot) do return 0, 0, false
 	unit := &w.units[unitSlot]
-	unitX := WorldWrapPosition(unit.x, f32(worldWidth))
-	unitY := WorldWrapPosition(unit.y, f32(worldHeight))
+	unitPositionX := unit.x
+	unitPositionY := unit.y
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	bestX, bestY := 0, 0
-	bestDistanceSquared: f32 = 0
+	bestDistanceSquared: u64 = 0
 	bestScore: f32 = -1
 	foundTarget := false
 	seed := u64(unitSlot+sequence*1031)
@@ -1377,9 +1447,15 @@ UnitFindFarmlandTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int,
 						x := WorldWrapCoordinate(farmX+offsetX, worldWidth)
 						y := WorldWrapCoordinate(farmY+offsetY, worldHeight)
 						if !UnitValidTileType(unit.type, WorldTileAt(w, x, y).type) do continue
-						deltaX := WorldShortestWrappedDelta(f32(x)-unitX, f32(worldWidth))
-						deltaY := WorldShortestWrappedDelta(f32(y)-unitY, f32(worldHeight))
-						distanceSquared := deltaX*deltaX+deltaY*deltaY
+						distanceSquared, validDistance := d32.WrappedDistanceSquared(
+							unitPositionX,
+							unitPositionY,
+							d32.FromInt(i32(x)),
+							d32.FromInt(i32(y)),
+							worldWidthRaw,
+							worldHeightRaw,
+						)
+						if !validDistance do continue
 						score := WorldNoiseHash(x, y, seed)
 						if foundTarget && (distanceSquared > bestDistanceSquared ||
 							(distanceSquared == bestDistanceSquared && score <= bestScore)) {
@@ -1405,14 +1481,16 @@ UnitFindHomeTarget :: proc(w: ^World, unitSlot: int) -> (int, int, bool) {
 	if home < 0 do return 0, 0, false
 	unit := &w.units[unitSlot]
 	worldWidth, worldHeight := int(w.maxX), int(w.maxY)
-	unitX := WorldWrapPosition(unit.x, f32(worldWidth))
-	unitY := WorldWrapPosition(unit.y, f32(worldHeight))
+	unitPositionX := unit.x
+	unitPositionY := unit.y
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	tried: [3][3]bool
 	// Prefer the nearest ring tile, but try the other entrances if it belongs
 	// to a disconnected pocket. Never hide a citizen after a failed path.
 	for _ in 0..<8 {
 		bestX, bestY, bestOx, bestOy := 0, 0, 0, 0
-		bestDistance: f32 = 0
+		bestDistance: u64 = 0
 		found := false
 		for ox in -1..=1 {
 			for oy in -1..=1 {
@@ -1420,9 +1498,15 @@ UnitFindHomeTarget :: proc(w: ^World, unitSlot: int) -> (int, int, bool) {
 				x := WorldWrapCoordinate(w.buildings.x[home]+ox, worldWidth)
 				y := WorldWrapCoordinate(w.buildings.y[home]+oy, worldHeight)
 				if WorldTileOccupied(w, x, y) || !WorldTileWalkable(w, x, y, unit.type, unit.kingdome) do continue
-				dx := WorldShortestWrappedDelta(f32(x)+0.5-unitX, f32(worldWidth))
-				dy := WorldShortestWrappedDelta(f32(y)+0.5-unitY, f32(worldHeight))
-				distance := dx*dx+dy*dy
+				distance, validDistance := d32.WrappedDistanceSquared(
+					unitPositionX,
+					unitPositionY,
+					TileCenterPosition(x),
+					TileCenterPosition(y),
+					worldWidthRaw,
+					worldHeightRaw,
+				)
+				if !validDistance do continue
 				if !found || distance < bestDistance {
 					bestX, bestY, bestOx, bestOy = x, y, ox, oy
 					bestDistance, found = distance, true
@@ -1435,8 +1519,8 @@ UnitFindHomeTarget :: proc(w: ^World, unitSlot: int) -> (int, int, bool) {
 			w,
 			unit.type,
 			unit.kingdome,
-			int(unitX),
-			int(unitY),
+			UnitTileX(w, unitSlot),
+			UnitTileY(w, unitSlot),
 			bestX,
 			bestY,
 			&unit.path,
@@ -1488,8 +1572,8 @@ UnitFindTownReturnPoint :: proc(w: ^World, kingdomSlot, townSlot: int, unitSlot 
 }
 
 UnitMoveToTarget :: proc(w: ^World, unitSlot: int, deltaTime: f32, maxExpansions := 0) -> bool {
-	if int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX))) == w.units[unitSlot].pathTargetX &&
-		int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY))) == w.units[unitSlot].pathTargetY {
+	if UnitTileX(w, unitSlot) == w.units[unitSlot].pathTargetX &&
+		UnitTileY(w, unitSlot) == w.units[unitSlot].pathTargetY {
 		return true
 	}
 	reached := UnitMove(

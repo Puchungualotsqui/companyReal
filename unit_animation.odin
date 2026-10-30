@@ -125,9 +125,8 @@ UnitAnimationPoseFor :: proc(w: ^World, unitSlot: int, kind: UnitKind, now: f32)
 }
 
 UnitAnimationMoving :: proc(w: ^World, unitSlot: int) -> bool {
-	unit := &w.units[unitSlot]
-	deltaX := WorldShortestWrappedDelta(unit.x-unit.previousX, f32(w.maxX))
-	deltaY := WorldShortestWrappedDelta(unit.y-unit.previousY, f32(w.maxY))
+	deltaX := WorldShortestWrappedDelta(UnitX(w, unitSlot)-UnitPrevX(w, unitSlot), f32(w.maxX))
+	deltaY := WorldShortestWrappedDelta(UnitY(w, unitSlot)-UnitPrevY(w, unitSlot), f32(w.maxY))
 	return deltaX*deltaX+deltaY*deltaY > 0.0004
 }
 
@@ -180,8 +179,8 @@ WorldUnitAnimationUpdate :: proc(
 		case StateWarrior:
 		}
 		if hidden {
-			unit.animX = unit.x
-			unit.animY = unit.y
+			unit.animX = UnitX(w, unitSlot)
+			unit.animY = UnitY(w, unitSlot)
 			continue
 		}
 
@@ -364,8 +363,8 @@ UnitAttackBurst :: proc(w: ^World, unitSlot: int, impactX, impactY: f32) {
 	if unit.type == nil do return
 
 	kind := UnitKindOf(unit.type)
-	deltaX := WorldShortestWrappedDelta(impactX-unit.x, f32(w.maxX))
-	deltaY := WorldShortestWrappedDelta(impactY-unit.y, f32(w.maxY))
+	deltaX := WorldShortestWrappedDelta(impactX-UnitX(w, unitSlot), f32(w.maxX))
+	deltaY := WorldShortestWrappedDelta(impactY-UnitY(w, unitSlot), f32(w.maxY))
 	distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
 	dirX: f32
 	dirY: f32
@@ -380,11 +379,11 @@ UnitAttackBurst :: proc(w: ^World, unitSlot: int, impactX, impactY: f32) {
 
 	switch kind {
 	case .Archer:
-		UnitProjectile(w, unit.x, unit.y, dirX, dirY, distance, 20, 1.2, 0.35, 0.55, 0.3, 0, .Arrow)
+		UnitProjectile(w, UnitX(w, unitSlot), UnitY(w, unitSlot), dirX, dirY, distance, 20, 1.2, 0.35, 0.55, 0.3, 0, .Arrow)
 	case .Mage:
-		UnitProjectile(w, unit.x, unit.y, dirX, dirY, distance, 11, 0, 0.28, 0.60, 0.1, 0, .MagicMote)
+		UnitProjectile(w, UnitX(w, unitSlot), UnitY(w, unitSlot), dirX, dirY, distance, 11, 0, 0.28, 0.60, 0.1, 0, .MagicMote)
 	case .Catapult:
-		UnitProjectile(w, unit.x, unit.y, dirX, dirY, distance, 9, 0, 0.45, 0.70, 0, 4, .Boulder)
+		UnitProjectile(w, UnitX(w, unitSlot), UnitY(w, unitSlot), dirX, dirY, distance, 9, 0, 0.45, 0.70, 0, 4, .Boulder)
 	case .Knight, .Rogue, .CombatBuilder:
 		UnitClashBurst(w, unitSlot, impactX, impactY)
 	case .Giant, .Turtle:

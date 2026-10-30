@@ -1,84 +1,115 @@
 package main
 
-import "core:math"
+import "d32"
 
 // The AI is intentionally built from the same orders a human uses. It never
 // touches unit state directly, so swapping in an RL policy or a network
 // controller later only means producing the same KingdomCommands.
 
-AI_DECISION_MIN :: 2.8
-AI_DECISION_MAX :: 5.4
-AI_ORDER_MIN :: 12
-AI_ORDER_MAX :: 22
-AI_DIPLOMACY_MIN :: 22
-AI_DIPLOMACY_MAX :: 46
-AI_EXPAND_MIN :: 9
-AI_EXPAND_MAX :: 20
+// AI timer ranges in Q16.16 seconds.
+AI_DECISION_MIN :: d32.Value(28*d32.SCALE/10) // 2.8
+AI_DECISION_MAX :: d32.Value(54*d32.SCALE/10) // 5.4
+AI_ORDER_MIN :: d32.Value(12*d32.SCALE)
+AI_ORDER_MAX :: d32.Value(22*d32.SCALE)
+AI_DIPLOMACY_MIN :: d32.Value(22*d32.SCALE)
+AI_DIPLOMACY_MAX :: d32.Value(46*d32.SCALE)
+AI_EXPAND_MIN :: d32.Value(9*d32.SCALE)
+AI_EXPAND_MAX :: d32.Value(20*d32.SCALE)
 AI_ATTACK_GRACE_SECONDS :: 45
 AI_WAR_COMMIT_SECONDS :: 75
 AI_TRUCE_SECONDS :: 90
 
 AIBrain :: struct {
-	decisionTimer:     f32,
-	orderTimer:        f32,
-	diplomacyTimer:    f32,
-	expandTimer:       f32,
-	aggression:        f32,
-	expansion:         f32,
-	warCommitUntil:    f32,
-	truceUntil:        f32,
-	truceKingdom:      int,
+	decisionTimer:      d32.Value,
+	orderTimer:         d32.Value,
+	diplomacyTimer:     d32.Value,
+	expandTimer:        d32.Value,
+	aggression:         u32,
+	expansion:          u32,
+	warCommitUntilTick: u64,
+	truceUntilTick:     u64,
+	truceKingdom:       int,
 }
 
 AIStateInit :: proc(w: ^World, kingdom: int) {
 	seed := w.seed+u64(kingdom+1)*0x9E3779B97F4A7C15
 	brain := &w.controllers[kingdom].ai
-	brain.aggression = WorldNoiseHash(kingdom, 3, seed)
-	brain.expansion = WorldNoiseHash(kingdom, 11, seed)
-	brain.decisionTimer = 0.8+WorldNoiseHash(kingdom, 17, seed)*2
-	brain.orderTimer = 6+WorldNoiseHash(kingdom, 29, seed)*8
-	brain.diplomacyTimer = 8+WorldNoiseHash(kingdom, 19, seed)*18
-	brain.expandTimer = 5+WorldNoiseHash(kingdom, 23, seed)*10
-	brain.warCommitUntil = 0
-	brain.truceUntil = 0
+	brain.aggression = WorldNoiseHashInt(kingdom, 3, seed)
+	brain.expansion = WorldNoiseHashInt(kingdom, 11, seed)
+	brain.decisionTimer = d32.Add(
+		d32.FromRatio(8, 10),
+		d32.Mul(PositionFromF32(WorldNoiseHash(kingdom, 17, seed)), d32.FromInt(2)),
+	)
+	brain.orderTimer = d32.Add(
+		d32.FromInt(6),
+		d32.Mul(PositionFromF32(WorldNoiseHash(kingdom, 29, seed)), d32.FromInt(8)),
+	)
+	brain.diplomacyTimer = d32.Add(
+		d32.FromInt(8),
+		d32.Mul(PositionFromF32(WorldNoiseHash(kingdom, 19, seed)), d32.FromInt(18)),
+	)
+	brain.expandTimer = d32.Add(
+		d32.FromInt(5),
+		d32.Mul(PositionFromF32(WorldNoiseHash(kingdom, 23, seed)), d32.FromInt(10)),
+	)
+	brain.warCommitUntilTick = 0
+	brain.truceUntilTick = 0
 	brain.truceKingdom = -1
 }
 
-AIRandom :: proc(w: ^World, kingdom, salt: int) -> f32 {
+// Random values use a Q scale of one million, matching the original float rolls.
+AI_RANDOM_Q :: 1_000_000
+
+AIRandomQ :: proc(w: ^World, kingdom, salt: int) -> u64 {
+	#assert(TOWN_SIMULATION_STEP*4 == 1)
 	value := u64(kingdom)*0x9E3779B97F4A7C15 ~
-		u64(salt+int(w.simulationTime*4))*0xBF58476D1CE4E5B9 ~
+		(u64(salt)+WorldCurrentTick(w))*0xBF58476D1CE4E5B9 ~
 		(w.seed+0xA1C0DE)
 	value = (value ~ (value >> 30))*0xBF58476D1CE4E5B9
 	value = (value ~ (value >> 27))*0x94D049BB133111EB
 	value = value ~ (value >> 31)
-	return f32(value % 1_000_000)/1_000_000.0
+	return value % AI_RANDOM_Q
+}
+
+AIRandom :: proc(w: ^World, kingdom, salt: int) -> d32.Value {
+	return d32.FromRatio(i32(AIRandomQ(w, kingdom, salt)), i32(AI_RANDOM_Q))
 }
 
 AIControllerUpdate :: proc(w: ^World, kingdom: int, deltaTime: f32) {
 	brain := &w.controllers[kingdom].ai
 
-	brain.decisionTimer -= deltaTime
-	brain.orderTimer -= deltaTime
-	brain.diplomacyTimer -= deltaTime
-	brain.expandTimer -= deltaTime
+	step := PositionFromF32(deltaTime)
+	brain.decisionTimer = max(d32.Sub(brain.decisionTimer, step), d32.ZERO)
+	brain.orderTimer = max(d32.Sub(brain.orderTimer, step), d32.ZERO)
+	brain.diplomacyTimer = max(d32.Sub(brain.diplomacyTimer, step), d32.ZERO)
+	brain.expandTimer = max(d32.Sub(brain.expandTimer, step), d32.ZERO)
 
-	if brain.decisionTimer <= 0 {
-		brain.decisionTimer = AI_DECISION_MIN+
-			AIRandom(w, kingdom, 31)*(AI_DECISION_MAX-AI_DECISION_MIN)
+	if brain.decisionTimer <= d32.ZERO {
+		brain.decisionTimer = d32.Add(
+			AI_DECISION_MIN,
+			d32.Mul(AIRandom(w, kingdom, 31), d32.Sub(AI_DECISION_MAX, AI_DECISION_MIN)),
+		)
 		AIDecide(w, kingdom)
 	}
-	if brain.orderTimer <= 0 {
-		brain.orderTimer = AI_ORDER_MIN+AIRandom(w, kingdom, 43)*(AI_ORDER_MAX-AI_ORDER_MIN)
+	if brain.orderTimer <= d32.ZERO {
+		brain.orderTimer = d32.Add(
+			AI_ORDER_MIN,
+			d32.Mul(AIRandom(w, kingdom, 43), d32.Sub(AI_ORDER_MAX, AI_ORDER_MIN)),
+		)
 		AIUseOrders(w, kingdom)
 	}
-	if brain.diplomacyTimer <= 0 {
-		brain.diplomacyTimer = AI_DIPLOMACY_MIN+
-			AIRandom(w, kingdom, 37)*(AI_DIPLOMACY_MAX-AI_DIPLOMACY_MIN)
+	if brain.diplomacyTimer <= d32.ZERO {
+		brain.diplomacyTimer = d32.Add(
+			AI_DIPLOMACY_MIN,
+			d32.Mul(AIRandom(w, kingdom, 37), d32.Sub(AI_DIPLOMACY_MAX, AI_DIPLOMACY_MIN)),
+		)
 		AIDiplomacy(w, kingdom)
 	}
-	if brain.expandTimer <= 0 {
-		brain.expandTimer = AI_EXPAND_MIN+
-			AIRandom(w, kingdom, 41)*(AI_EXPAND_MAX-AI_EXPAND_MIN)
+	if brain.expandTimer <= d32.ZERO {
+		brain.expandTimer = d32.Add(
+			AI_EXPAND_MIN,
+			d32.Mul(AIRandom(w, kingdom, 41), d32.Sub(AI_EXPAND_MAX, AI_EXPAND_MIN)),
+		)
 		AIExpand(w, kingdom)
 	}
 }
@@ -161,14 +192,14 @@ AIUseOrders :: proc(w: ^World, kingdom: int) {
 		}
 		hazard := kind == .GlacierShell || kind == .WaterBomber ||
 			kind == .MiasmaBarrage || kind == .NapalmBarrage
-		if kind == .NapalmBarrage && WorldWeatherEffects(w).fireSpread < 0.5 do continue
+		if kind == .NapalmBarrage && WorldWeatherEffects(w).fireSpread < d32.HALF do continue
 		for other in 0 ..< KINGDOMS_CAPACITY {
 			if !KingdomAtWar(w, kingdom, other) do continue
 			targetTown := AINearestTownOf(w, other, kingdom)
 			if targetTown < 0 do continue
 			town := &w.kingdoms[other].towns[targetTown]
-			x := f32(town.x)+2
-			y := f32(town.y)+2
+			x := d32.FromInt(i32(town.x+2))
+			y := d32.FromInt(i32(town.y+2))
 			if hazard && !AIOrderHazardClear(w, kingdom, x, y, OrderRadius(kind)) do continue
 			if KingdomIssueCommand(
 				w,
@@ -183,17 +214,25 @@ AIUseOrders :: proc(w: ^World, kingdom: int) {
 
 // Flood, gas, fire and ice ignore kingdoms. Do not drop one on the assault.
 // Mortars, tremors and starfall are exempt: those only damage enemies.
-AIOrderHazardClear :: proc(w: ^World, kingdom: int, x, y, radius: f32) -> bool {
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
-	radiusSquared := radius*radius
+AIOrderHazardClear :: proc(w: ^World, kingdom: int, x, y: d32.Value, radius: d32.Value) -> bool {
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	radiusRaw := i64(d32.Raw(radius))
+	radiusSquared := u64(radiusRaw)*u64(radiusRaw)
 	for unitSlot in 0 ..< UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil do continue
 		if w.units[unitSlot].kingdome != kingdom do continue
 		if UnitHiddenInside(w, unitSlot) do continue
-		deltaX := WorldShortestWrappedDelta(w.units[unitSlot].x-x, worldWidth)
-		deltaY := WorldShortestWrappedDelta(w.units[unitSlot].y-y, worldHeight)
-		if deltaX*deltaX+deltaY*deltaY <= radiusSquared do return false
+		distanceSquared, valid := d32.WrappedDistanceSquared(
+			w.units[unitSlot].x,
+			w.units[unitSlot].y,
+			x,
+			y,
+			worldWidthRaw,
+			worldHeightRaw,
+		)
+		if !valid do continue
+		if distanceSquared <= radiusSquared do return false
 	}
 	return true
 }
@@ -205,11 +244,11 @@ AIUseBlockade :: proc(w: ^World, kingdom: int) -> bool {
 		targetTown := AINearestTownOf(w, other, kingdom, coastalOnly = true)
 		if targetTown < 0 do continue
 		town := &w.kingdoms[other].towns[targetTown]
-		if town.blockadeUntil > w.simulationTime do continue
+		if town.blockadeUntilTick > WorldCurrentTick(w) do continue
 		if KingdomIssueCommand(
 			w,
 			kingdom,
-			CommandUseOrder{kind = .Blockade, x = f32(town.x)+2, y = f32(town.y)+2},
+			CommandUseOrder{kind = .Blockade, x = d32.FromInt(i32(town.x+2)), y = d32.FromInt(i32(town.y+2))},
 		) {
 			return true
 		}
@@ -256,17 +295,22 @@ AIQueueConversion :: proc(w: ^World, kingdom, townSlot: int, kind: UnitKind) -> 
 
 AIWaterCollectorTarget :: proc(w: ^World, kingdom, townSlot: int) -> int {
 	town := &w.kingdoms[kingdom].towns[townSlot]
-	collectorOutput := TownWaterCollectorOutput(TownWaterAccess(w, kingdom, townSlot))
-	if collectorOutput <= 0.001 do return 0
-	need := f32(town.citizens)*0.025
-	target := int(math.ceil(need/collectorOutput))
+	output := TownWaterCollectorOutput(TownWaterAccess(w, kingdom, townSlot))
+	// The output is already Q16.16, so the workload stays an exact rational.
+	outputRaw := i64(d32.Raw(output))
+	if outputRaw <= 0 do return 0
+	// ceil(citizens*0.025/output) becomes ceil(citizens/(40*output)), scaled by SCALE.
+	numerator := i64(town.citizens)*d32.SCALE
+	denominator := 40*outputRaw
+	target := int((numerator+denominator-1)/denominator)
 	return clamp(target, 1, max(1, town.citizens/4))
 }
 
 AIFarmerTarget :: proc(w: ^World, kingdom, townSlot: int) -> int {
 	town := &w.kingdoms[kingdom].towns[townSlot]
-	target := int(math.ceil(f32(town.citizens)*0.25))
-	if town.foodShortage > 0.5 do target += 1
+	target := town.citizens/4
+	if town.citizens%4 > 0 do target += 1
+	if town.foodShortage > d32.HALF do target += 1
 	// The old ten-farmer ceiling cannot feed the late growth eras. Let the
 	// target scale with population while keeping the early-game floor.
 	return clamp(target, 1, max(10, town.citizens/4))
@@ -278,7 +322,7 @@ AIMilitaryTarget :: proc(w: ^World, kingdom, townSlot: int, brain: ^AIBrain) -> 
 		AIFarmerTarget(w, kingdom, townSlot)+
 		AIWaterCollectorTarget(w, kingdom, townSlot)
 	target := max(3, town.citizens-economy)
-	if brain.aggression > 0.65 do target += max(1, town.citizens/8)
+	if brain.aggression > 650_000 do target += max(1, town.citizens/8)
 	if KingdomHasWar(w, kingdom) do target += 3
 	target = min(target, max(3, town.citizens*2/5))
 	return clamp(target, 3, 24)
@@ -294,8 +338,8 @@ AIChooseWarriorKind :: proc(w: ^World, kingdom, townSlot: int) -> (UnitKind, boo
 		count += 1
 	}
 	if count == 0 do return .Villager, false
-	roll := AIRandom(w, kingdom, 100+townSlot*7)
-	return candidates[int(roll*f32(count))%count], true
+	roll := AIRandomQ(w, kingdom, 100+townSlot*7)
+	return candidates[int(roll*u64(count)/AI_RANDOM_Q)], true
 }
 
 AITownEconomy :: proc(
@@ -351,7 +395,7 @@ AITownEconomy :: proc(
 	}
 
 	earlyMilitary := 2
-	if brain.aggression > 0.65 do earlyMilitary = 3
+	if brain.aggression > 650_000 do earlyMilitary = 3
 	if militaryAllowed && military+AIPendingMilitary(w, kingdom, townSlot) < earlyMilitary {
 		if kind, ok := AIChooseWarriorKind(w, kingdom, townSlot); ok {
 			if AIQueueConversion(w, kingdom, townSlot, kind) do return
@@ -441,12 +485,12 @@ AIChooseMilestoneOption :: proc(
 	weightB := MilestoneOptionWarriorWeight(optionB)
 
 	prefer := 0
-	if brain.aggression > 0.55 {
+	if brain.aggression > 550_000 {
 		if weightB > weightA do prefer = 1
 	} else {
 		if weightA > weightB do prefer = 1
 	}
-	if AIRandom(w, kingdom, 211+townSlot*13) < 0.18 do prefer = 1-prefer
+	if AIRandomQ(w, kingdom, 211+townSlot*13) < 180_000 do prefer = 1-prefer
 	return prefer
 }
 
@@ -485,13 +529,12 @@ AITryCombatBuilding :: proc(
 	town := &w.kingdoms[kingdom].towns[townSlot]
 
 	width, height := BuildingTileSize(BuildingTypeFromKind(kind))
-	centerX := f32(town.x)+2
-	centerY := f32(town.y)+2
 	for attempt in 0 ..< 12 {
-		angle := WorldNoiseHash(kingdom*17+townSlot, attempt, w.seed+0xC0B1)*6.2831853
-		distance := 6+WorldNoiseHash(attempt, kingdom, w.seed+0xC0B2)*7
-		x := WorldWrapCoordinate(int(centerX+math.cos(angle)*distance)-width/2, int(w.maxX))
-		y := WorldWrapCoordinate(int(centerY+math.sin(angle)*distance)-height/2, int(w.maxY))
+		angle := d32.FromRatio(i32(WorldNoiseHashInt(kingdom*17+townSlot, attempt, w.seed+0xC0B1)), AI_RANDOM_Q)
+		distance := d32.Add(d32.FromInt(6), d32.FromRatio(i32(WorldNoiseHashInt(attempt, kingdom, w.seed+0xC0B2))*7, AI_RANDOM_Q))
+		sine, cosine := d32.SinCos(angle)
+		x := WorldWrapCoordinate(int((i64(town.x+2)*d32.SCALE+i64(d32.Raw(d32.Mul(cosine, distance))))/d32.SCALE)-width/2, int(w.maxX))
+		y := WorldWrapCoordinate(int((i64(town.y+2)*d32.SCALE+i64(d32.Raw(d32.Mul(sine, distance))))/d32.SCALE)-height/2, int(w.maxY))
 		if TownCombatConstructionFailure(w, kingdom, townSlot, kind, x, y) != .None do continue
 		if KingdomIssueCommand(
 			w,
@@ -542,17 +585,21 @@ AINearestTownOf :: proc(w: ^World, kingdom, fromKingdom: int, coastalOnly := fal
 	}
 	if centerTown < 0 do return -1
 	center := &w.kingdoms[fromKingdom].towns[centerTown]
-	centerX := f32(center.x)+2
-	centerY := f32(center.y)+2
+	width := i64(w.maxX)*d32.SCALE
+	height := i64(w.maxY)*d32.SCALE
+	// Both town centers have the same offset, which cancels in the distance.
+	centerX := d32.FromInt(i32(WorldWrapCoordinate(center.x, int(w.maxX))))
+	centerY := d32.FromInt(i32(WorldWrapCoordinate(center.y, int(w.maxY))))
 	best := -1
-	bestDistance: f32 = 0
+	bestDistance: u64 = 0
 	for townSlot in 0 ..< TOWN_CAPACITY {
 		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
 		if coastalOnly && !TownIsCoastal(w, kingdom, townSlot) do continue
 		town := &w.kingdoms[kingdom].towns[townSlot]
-		deltaX := WorldShortestWrappedDelta(f32(town.x)+2-centerX, f32(w.maxX))
-		deltaY := WorldShortestWrappedDelta(f32(town.y)+2-centerY, f32(w.maxY))
-		distance := deltaX*deltaX+deltaY*deltaY
+		townX := d32.FromInt(i32(WorldWrapCoordinate(town.x, int(w.maxX))))
+		townY := d32.FromInt(i32(WorldWrapCoordinate(town.y, int(w.maxY))))
+		distance, valid := d32.WrappedDistanceSquared(centerX, centerY, townX, townY, width, height)
+		assert(valid)
 		if best < 0 || distance < bestDistance {
 			best = townSlot
 			bestDistance = distance
@@ -561,27 +608,43 @@ AINearestTownOf :: proc(w: ^World, kingdom, fromKingdom: int, coastalOnly := fal
 	return best
 }
 
+AIIntegerSqrt :: proc(value: u64) -> u64 {
+	if value == 0 do return 0
+	root := value
+	next := (root+1)/2
+	for next < root {
+		root = next
+		next = (root+value/root)/2
+	}
+	return root
+}
+
 AIPickWarTarget :: proc(
 	w: ^World,
 	kingdom, ownMilitary: int,
-	ownCapitalX, ownCapitalY: f32,
+	ownCapitalX, ownCapitalY: int,
 	brain: ^AIBrain,
 ) -> int {
 	best := -1
-	bestScore: f32 = -1e9
+	bestScore: i64 = 0
+	capitalX := d32.FromInt(i32(WorldWrapCoordinate(ownCapitalX, int(w.maxX))))
+	capitalY := d32.FromInt(i32(WorldWrapCoordinate(ownCapitalY, int(w.maxY))))
 	for other in 0 ..< KINGDOMS_CAPACITY {
 		if !KingdomCanDeclareWar(w, kingdom, other) do continue
-		if other == brain.truceKingdom && w.simulationTime < brain.truceUntil do continue
+		if other == brain.truceKingdom && WorldCurrentTick(w) < brain.truceUntilTick do continue
 		targetTown := AINearestTownOf(w, other, kingdom)
 		if targetTown < 0 do continue
 
 		town := &w.kingdoms[other].towns[targetTown]
-		deltaX := WorldShortestWrappedDelta(f32(town.x)+2-ownCapitalX, f32(w.maxX))
-		deltaY := WorldShortestWrappedDelta(f32(town.y)+2-ownCapitalY, f32(w.maxY))
-		distance := math.sqrt(deltaX*deltaX+deltaY*deltaY)
-		score := f32(ownMilitary)-f32(AIMilitaryCount(w, other))*1.1-
-			f32(AITownCount(w, other))*4-distance*0.18+WorldNoiseHash(kingdom, other, w.seed+0xA17)*4
-		if score > bestScore {
+		townX := d32.FromInt(i32(WorldWrapCoordinate(town.x, int(w.maxX))))
+		townY := d32.FromInt(i32(WorldWrapCoordinate(town.y, int(w.maxY))))
+		distanceSquared, valid := d32.WrappedDistanceSquared(capitalX, capitalY, townX, townY, i64(w.maxX)*d32.SCALE, i64(w.maxY)*d32.SCALE)
+		assert(valid)
+		distance := AIIntegerSqrt(distanceSquared)
+		score := i64(ownMilitary)*AI_RANDOM_Q-i64(AIMilitaryCount(w, other))*1_100_000-
+			i64(AITownCount(w, other))*4*AI_RANDOM_Q-i64(distance)*180_000/d32.SCALE+
+			i64(WorldNoiseHashInt(kingdom, other, w.seed+0xA17))*4
+		if best < 0 || score > bestScore {
 			bestScore = score
 			best = other
 		}
@@ -590,7 +653,11 @@ AIPickWarTarget :: proc(
 }
 
 AIDiplomacy :: proc(w: ^World, kingdom: int) {
-	if w.simulationTime < AI_ATTACK_GRACE_SECONDS do return
+	// Require whole-tick durations rather than silently truncating a deadline.
+	#assert(f64(u64(AI_TRUCE_SECONDS/TOWN_SIMULATION_STEP)) == AI_TRUCE_SECONDS/TOWN_SIMULATION_STEP)
+	#assert(f64(u64(AI_WAR_COMMIT_SECONDS/TOWN_SIMULATION_STEP)) == AI_WAR_COMMIT_SECONDS/TOWN_SIMULATION_STEP)
+	#assert(f64(u64(AI_ATTACK_GRACE_SECONDS/TOWN_SIMULATION_STEP)) == AI_ATTACK_GRACE_SECONDS/TOWN_SIMULATION_STEP)
+	if WorldCurrentTick(w) < u64(AI_ATTACK_GRACE_SECONDS/TOWN_SIMULATION_STEP) do return
 
 	brain := &w.controllers[kingdom].ai
 	ownMilitary := AIMilitaryCount(w, kingdom)
@@ -628,32 +695,32 @@ AIDiplomacy :: proc(w: ^World, kingdom: int) {
 	}
 
 	// A losing or cautious kingdom sues for peace.
-	if warCount > 0 && bestWarEnemy >= 0 && w.simulationTime > brain.warCommitUntil &&
-		(brain.aggression < 0.55 || ownMilitary*2 < AIMilitaryCount(w, bestWarEnemy)) {
-		roll := AIRandom(w, kingdom, 307)
-		if roll < 0.35 {
+	if warCount > 0 && bestWarEnemy >= 0 && WorldCurrentTick(w) > brain.warCommitUntilTick &&
+		(brain.aggression < 550_000 || ownMilitary*2 < AIMilitaryCount(w, bestWarEnemy)) {
+		roll := AIRandomQ(w, kingdom, 307)
+		if roll < 350_000 {
 			KingdomIssueCommand(w, kingdom, CommandMakePeace{other = bestWarEnemy})
 			brain.truceKingdom = bestWarEnemy
-			brain.truceUntil = w.simulationTime+AI_TRUCE_SECONDS
+			brain.truceUntilTick = WorldCurrentTick(w)+u64(AI_TRUCE_SECONDS/TOWN_SIMULATION_STEP)
 			return
 		}
 	}
 
 	maxWars := 1
-	if brain.aggression > 0.65 do maxWars = 2
+	if brain.aggression > 650_000 do maxWars = 2
 	if warCount >= maxWars do return
-	if w.simulationTime < brain.truceUntil do return
+	if WorldCurrentTick(w) < brain.truceUntilTick do return
 
 	capitalTown := w.kingdoms[kingdom].capitalSlot
 	if capitalTown < 0 || !w.kingdoms[kingdom].townUsed[capitalTown] do return
 	capital := &w.kingdoms[kingdom].towns[capitalTown]
-	target := AIPickWarTarget(w, kingdom, ownMilitary, f32(capital.x)+2, f32(capital.y)+2, brain)
+	target := AIPickWarTarget(w, kingdom, ownMilitary, capital.x, capital.y, brain)
 	if target < 0 do return
 	minAttack := 3+ownTowns
-	if brain.aggression > 0.65 do minAttack = 2+ownTowns
+	if brain.aggression > 650_000 do minAttack = 2+ownTowns
 	if ownMilitary < minAttack do return
-	roll := AIRandom(w, kingdom, 311)
-	if roll > 0.30+brain.aggression*0.55 do return
+	roll := AIRandomQ(w, kingdom, 311)
+	if roll*100 > 30*AI_RANDOM_Q+u64(brain.aggression)*55 do return
 
 	targetTown := AINearestTownOf(w, target, kingdom)
 	if targetTown < 0 do return
@@ -669,12 +736,12 @@ AIDiplomacy :: proc(w: ^World, kingdom: int) {
 			attacked = true
 		}
 	}
-	if attacked do brain.warCommitUntil = w.simulationTime+AI_WAR_COMMIT_SECONDS
+	if attacked do brain.warCommitUntilTick = WorldCurrentTick(w)+u64(AI_WAR_COMMIT_SECONDS/TOWN_SIMULATION_STEP)
 }
 
 AIExpand :: proc(w: ^World, kingdom: int) {
 	brain := &w.controllers[kingdom].ai
-	maxTowns := 6+int(brain.expansion*6)
+	maxTowns := 6+int(u64(brain.expansion)*6/AI_RANDOM_Q)
 	if AITownCount(w, kingdom) >= maxTowns do return
 
 	for townSlot in 0 ..< TOWN_CAPACITY {
@@ -693,13 +760,11 @@ AIExpand :: proc(w: ^World, kingdom: int) {
 AIFoundTownAt :: proc(w: ^World, kingdom, townSlot: int) -> bool {
 	town := &w.kingdoms[kingdom].towns[townSlot]
 	for attempt in 0 ..< 32 {
-		angle := WorldNoiseHash(kingdom*31+townSlot, attempt, w.seed+0xF0D)*6.2831853
-		distance := f32(TOWN_FOUNDING_MIN_DISTANCE)+2+
-			WorldNoiseHash(attempt, kingdom, w.seed+0xF0E)*28
-		centerX := f32(town.x)+2+math.cos(angle)*distance
-		centerY := f32(town.y)+2+math.sin(angle)*distance
-		x := WorldWrapCoordinate(int(centerX)-2, int(w.maxX))
-		y := WorldWrapCoordinate(int(centerY)-2, int(w.maxY))
+		angle := d32.FromRatio(i32(WorldNoiseHashInt(kingdom*31+townSlot, attempt, w.seed+0xF0D)), AI_RANDOM_Q)
+		distance := d32.Add(d32.FromInt(TOWN_FOUNDING_MIN_DISTANCE+2), d32.FromRatio(i32(WorldNoiseHashInt(attempt, kingdom, w.seed+0xF0E))*28, AI_RANDOM_Q))
+		sine, cosine := d32.SinCos(angle)
+		x := WorldWrapCoordinate(int((i64(town.x+2)*d32.SCALE+i64(d32.Raw(d32.Mul(cosine, distance))))/d32.SCALE)-2, int(w.maxX))
+		y := WorldWrapCoordinate(int((i64(town.y+2)*d32.SCALE+i64(d32.Raw(d32.Mul(sine, distance))))/d32.SCALE)-2, int(w.maxY))
 		if TownFoundingFailure(w, kingdom, townSlot, x, y) != .None do continue
 		width, height := BuildingTileSize(TownHall{})
 		if WorldScarInRect(w, x, y, width, height, {.Scorched, .Volcanic, .Cleft}) do continue

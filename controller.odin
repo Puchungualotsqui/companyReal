@@ -1,5 +1,7 @@
 package main
 
+import "d32"
+
 // A kingdom is driven by a controller, never by the simulation directly.
 // Today there are two kinds: the local human (input arrives through the UI)
 // and an AI brain. Trained-RL or network controllers can be added as another
@@ -103,7 +105,7 @@ CommandMakePeace :: struct {
 
 CommandUseOrder :: struct {
 	kind: OrderKind,
-	x, y: f32,
+	x, y: d32.Value,
 }
 
 KingdomIssueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) -> bool {

@@ -1,5 +1,7 @@
 package main
 
+import "d32"
+
 // Units live in 16x16 tile buckets so proximity queries only visit the
 // neighbourhood instead of every unit in the world.
 SPATIAL_CHUNK_SIZE :: 16
@@ -101,8 +103,8 @@ SpatialChunkIndex :: proc(w: ^World, x, y: int) -> int {
 }
 
 SpatialUnitChunk :: proc(w: ^World, unitSlot: int) -> int {
-	x := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
-	y := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+	x := UnitTileX(w, unitSlot)
+	y := UnitTileY(w, unitSlot)
 	return SpatialChunkIndex(w, x, y)
 }
 
@@ -190,7 +192,7 @@ SpatialChunkPresent :: proc(w: ^World, chunk: int) -> u8 {
 	}
 	mask: u8
 	for slot := w.spatial.unitHead[chunk]; slot >= 0; slot = w.spatial.unitNext[slot] {
-		if !w.unitUsed[slot] || w.units.health[slot] <= 0 do continue
+		if !w.unitUsed[slot] || w.units.health[slot] <= d32.ZERO do continue
 		if UnitHiddenInside(w, slot) do continue
 		kingdom := w.units.kingdome[slot]
 		if kingdom >= 0 && kingdom < KINGDOMS_CAPACITY do mask |= u8(1)<<u8(kingdom)
@@ -278,8 +280,8 @@ SpatialChunkBuildingPresent :: proc(w: ^World, chunk: int) -> u8 {
 SpatialDecorationInsert :: proc(w: ^World, decorationSlot: int) {
 	chunk := SpatialChunkIndex(
 		w,
-		int(w.decorations.x[decorationSlot]),
-		int(w.decorations.y[decorationSlot]),
+		int(d32.ToInt(w.decorations.x[decorationSlot])),
+		int(d32.ToInt(w.decorations.y[decorationSlot])),
 	)
 	if chunk < 0 do return
 	head := w.spatial.decorationHead[chunk]
@@ -338,8 +340,8 @@ WorldUnitAtTile :: proc(w: ^World, x, y: int) -> bool {
 	if chunk < 0 do return false
 	for unitSlot := w.spatial.unitHead[chunk]; unitSlot >= 0;
 		unitSlot = w.spatial.unitNext[unitSlot] {
-		unitX := int(WorldWrapPosition(w.units.x[unitSlot], f32(w.maxX)))
-		unitY := int(WorldWrapPosition(w.units.y[unitSlot], f32(w.maxY)))
+		unitX := UnitTileX(w, unitSlot)
+		unitY := UnitTileY(w, unitSlot)
 		if unitX == x && unitY == y do return true
 	}
 	return false

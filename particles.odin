@@ -118,8 +118,8 @@ UnitWaterWake :: proc(w: ^World, unitSlot: int) {
 	if !UnitCanCrossWater(w, w.units.type[unitSlot], w.units.kingdome[unitSlot]) do return
 	if PRandom(w) > 0.18 do return
 	ParticleSpawn(w, Particle{
-		x = w.units.previousX[unitSlot]+(PRandom(w)-0.5)*0.35,
-		y = w.units.previousY[unitSlot]+(PRandom(w)-0.5)*0.35,
+		x = UnitPrevX(w, unitSlot)+(PRandom(w)-0.5)*0.35,
+		y = UnitPrevY(w, unitSlot)+(PRandom(w)-0.5)*0.35,
 		z = 0.05,
 		vx = (PRandom(w)-0.5)*0.9,
 		vy = (PRandom(w)-0.5)*0.9,
@@ -352,12 +352,12 @@ ParticleDraw :: proc(
 		drawHeight := size*f32(texture.height)/longSide
 
 		fade: f32 = 1
-		#partial switch kind {
+		switch kind {
 		case .Smoke, .Dust:
 			fade = clamp(w.particles.life[i]/w.particles.maxLife[i], 0, 1)
 		case .Ember, .Spark, .MagicMote, .Splash, .Arrow, .Boulder:
 			fade = clamp(w.particles.life[i]/0.3, 0, 1)
-		case:
+		case .Blood, .Gib, .Bone, .Gore, .WoodChip, .StoneChip, .Leaf, .Ash:
 			fade = clamp(w.particles.life[i]/1.5, 0, 1)
 		}
 
