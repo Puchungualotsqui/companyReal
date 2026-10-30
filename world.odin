@@ -66,6 +66,7 @@ World :: struct {
 	navigationRevision: u64,
 	pathRevision: u64,
 	simulationTime: f32,
+	simulationTick: u64,
 	simulationAccumulator: f32,
 	dayTime: f32,
 	dayNumber: int,

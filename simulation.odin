@@ -1,12 +1,14 @@
 package main
 
 import "base:intrinsics"
+import "core:fmt"
 import "core:math"
 import rl "vendor:raylib"
 
 TOWN_SIMULATION_STEP :: 0.25
 // A long render/load frame must not trigger a burst of catch-up ticks.
 WORLD_MAX_FRAME_DELTA :: 0.25
+WORLD_HASH_INTERVAL :: 16
 // Units update in alternating slices. Each slice receives dt*UNIT_UPDATE_SLICES
 // so speeds and cooldowns stay the same while per-tick CPU drops by the same
 // factor. Rendering interpolates across the full slice window.
@@ -1159,73 +1161,87 @@ WorldUpdate :: proc(w: ^World, deltaTime: f32) {
 
 	w.simulationAccumulator += stepTime
 	for w.simulationAccumulator >= TOWN_SIMULATION_STEP {
-		tickStamp := ProfilerBegin("Sim:Tick")
-		w.simulationTime += TOWN_SIMULATION_STEP
-		w.dayTime += TOWN_SIMULATION_STEP
-		if w.dayTime >= f32(WORLD_DAY_LENGTH_SECONDS) {
-			w.dayTime -= f32(WORLD_DAY_LENGTH_SECONDS)
-			w.dayNumber += 1
-		}
-		stamp = ProfilerBegin("Sim:Weather")
-		WorldWeatherUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Environment")
-		WorldEnvironmentUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:FlowFields")
-		WorldFlowFieldUpdate(w)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Units")
-		WorldUnitUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Buildings")
-		WorldBuildingUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Aegis")
-		WorldAegisUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Fire")
-		WorldFireUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:TerrainAftermath")
-		WorldTerrainAftermathUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Lava")
-		// Lava damage is a slow environmental effect; a quarter of the rate keeps
-		// the same total damage without scanning every unit each tick.
-		if int(w.simulationTime/TOWN_SIMULATION_STEP)%4 == 0 {
-			WorldTerrainLavaUpdate(w, TOWN_SIMULATION_STEP*4)
-		}
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Decorations")
-		WorldDecorationUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Blood")
-		BloodUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Controllers")
-		WorldControllersUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Kingdom")
-		WorldKingdomUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Hazards")
-		WorldHazardUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Gas")
-		WorldGasCloudUpdate(w, TOWN_SIMULATION_STEP)
-		ProfilerEnd(stamp)
-		stamp = ProfilerBegin("Sim:Fog")
-		if int(w.simulationTime/TOWN_SIMULATION_STEP)%FOG_UPDATE_INTERVAL == 0 {
-			FogUpdate(w)
-		}
-		ProfilerEnd(stamp)
+		WorldTick(w)
 		w.simulationAccumulator -= TOWN_SIMULATION_STEP
-		ProfilerEnd(tickStamp)
 	}
 	stamp = ProfilerBegin("Sim:GameEnd")
 	WorldCheckGameEnd(w)
 	ProfilerEnd(stamp)
+}
+
+// Call once after applying each lockstep command frame.
+WorldTick :: proc(w: ^World) {
+	tickStamp := ProfilerBegin("Sim:Tick")
+	w.simulationTime += TOWN_SIMULATION_STEP
+	w.dayTime += TOWN_SIMULATION_STEP
+	if w.dayTime >= f32(WORLD_DAY_LENGTH_SECONDS) {
+		w.dayTime -= f32(WORLD_DAY_LENGTH_SECONDS)
+		w.dayNumber += 1
+	}
+	stamp := ProfilerBegin("Sim:Weather")
+	WorldWeatherUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Environment")
+	WorldEnvironmentUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:FlowFields")
+	WorldFlowFieldUpdate(w)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Units")
+	WorldUnitUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Buildings")
+	WorldBuildingUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Aegis")
+	WorldAegisUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Fire")
+	WorldFireUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:TerrainAftermath")
+	WorldTerrainAftermathUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Lava")
+	// Lava damage is a slow environmental effect; a quarter of the rate keeps
+	// the same total damage without scanning every unit each tick.
+	if int(w.simulationTime/TOWN_SIMULATION_STEP)%4 == 0 {
+		WorldTerrainLavaUpdate(w, TOWN_SIMULATION_STEP*4)
+	}
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Decorations")
+	WorldDecorationUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Blood")
+	BloodUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Controllers")
+	WorldControllersUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Kingdom")
+	WorldKingdomUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Hazards")
+	WorldHazardUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Gas")
+	WorldGasCloudUpdate(w, TOWN_SIMULATION_STEP)
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:Fog")
+	if int(w.simulationTime/TOWN_SIMULATION_STEP)%FOG_UPDATE_INTERVAL == 0 {
+		FogUpdate(w)
+	}
+	ProfilerEnd(stamp)
+	stamp = ProfilerBegin("Sim:GameEnd")
+	WorldCheckGameEnd(w)
+	ProfilerEnd(stamp)
+	w.simulationTick += 1
+	if w.simulationTick%WORLD_HASH_INTERVAL == 0 && profiler.file != nil {
+		buffer: [128]u8
+		line := fmt.bprintf(buffer[:], "WORLD HASH tick=%d hash=%016x\n", w.simulationTick, WorldStateHash(w))
+		ProfilerWrite(line)
+	}
+	ProfilerEnd(tickStamp)
 }
 
 WorldTimeOfDay :: proc(w: ^World) -> f32 {
