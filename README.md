@@ -108,7 +108,19 @@ Behavior changes: fixed-point quantization and integer comparisons can select di
 
 Remaining before cross-platform lockstep:
 
-- Compare initial-state and per-tick hashes across Windows and Linux builds, then macOS and ARM, with and without the worker pool. The numeric migration is complete but this evidence does not exist yet.
+- Repeat the cross-platform hash comparison for macOS and ARM once those targets are supported.
+
+### Verifying determinism
+
+The game binary has a headless trace mode:
+
+```sh
+companiaReal -hash_trace -hash_seed:1 -hash_size:128 -hash_ticks:64
+```
+
+Optional flags: `-hash_kingdoms:N` and `-hash_parallel` (initializes the worker pool). It prints `HASH_TRACE` lines with the state version, initial hash and one hash per tick.
+
+Windows x64 and Linux x64 (WSL, Odin `dev-2026-07`) produced identical traces for seeds 1-3, sizes 128 and 512, with and without the worker pool. Windows used 11 helper threads while WSL used 1, so the match also covers differing worker counts. This is same-build evidence for those scenarios, not proof for every possible state or for macOS/ARM.
 
 Done when: authoritative gameplay and initialization follow the contract and matching inputs produce matching hashes on every supported target.
 
