@@ -99,16 +99,16 @@ Numeric contract:
 - `CommandUseOrder` and `BuildingOrder` targets are `d32`. UI mouse positions are quantized once at command creation; AI emits fixed-point town centers.
 - Gameplay placement, target selection, AI scoring, hazard areas, fire spread, order impacts and generation choices no longer use `math.sqrt`, `math.atan2`, `math.sin` or `math.cos`; presentation-only effects still may.
 - Randomness uses integer hashes (`WorldNoiseHashInt`) and fixed-point conversion. Long-lived scheduling uses integer ticks; presentation interpolation still uses `simulationTime`.
+- `WORLD_STATE_VERSION` is mixed into every state hash. Bump it whenever numeric, generation, command or hash rules change so incompatible builds cannot silently compare hashes.
 - Worlds are limited to 32,768 tiles per dimension and 2^28 total tiles so Q16.16 coordinates and path costs stay in range.
-- Remaining binary32 use is limited to `deltaTime` and effect/presentation APIs: authored ranges, body radii, vision, tile water/fire risk and hazard/effect coordinates are converted once where they enter fixed-point thresholds. This section assumes IEEE-754 basic operations without contraction and has not been verified on another OS, architecture or compiler build.
+- Authoritative units, buildings, decorations, towns, fires, gas, hazards, weather, commands and AI state are fixed point. Effect coordinates and radii are `d32`; particle, animation and render code converts once with `PositionToF32`.
+- The only remaining binary32 boundary in gameplay is the frame delta passed to `WorldUpdate`. Simulation ticks always advance by the constant `TOWN_SIMULATION_STEP` (0.25 s), which converts exactly to Q16.16, so authoritative state does not depend on frame-time values.
 
 Behavior changes: fixed-point quantization and integer comparisons can select different targets, impacts, growth batches, AI decisions and generation layouts than earlier float builds, including for existing seeds.
 
-Remaining work before cross-platform lockstep:
+Remaining before cross-platform lockstep:
 
-- Verify the binary32 boundary contract across every supported build (the remaining conversions are quantization boundaries, not gameplay decisions).
-- Version the numeric, generation, command and hash schemas.
-- Compare initial-state and per-tick hashes across Windows and Linux builds, then macOS and ARM, with and without the worker pool.
+- Compare initial-state and per-tick hashes across Windows and Linux builds, then macOS and ARM, with and without the worker pool. The numeric migration is complete but this evidence does not exist yet.
 
 Done when: authoritative gameplay and initialization follow the contract and matching inputs produce matching hashes on every supported target.
 

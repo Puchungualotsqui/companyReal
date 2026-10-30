@@ -156,13 +156,11 @@ BuildingUpdateCannon :: proc(w: ^World, buildingSlot: int, deltaTime: f32) {
 
 	nearestSlot := BuildingFindNearestHostileUnit(w, buildingSlot, CANNON_RANGE)
 	if nearestSlot < 0 do return
-	width, height := BuildingTileSize(w.buildings[buildingSlot].type)
-	centerX := f32(w.buildings.x[buildingSlot])+f32(width)*0.5
-	centerY := f32(w.buildings.y[buildingSlot])+f32(height)*0.5
+	centerX, centerY := OrderBuildingCenterRaw(w, buildingSlot)
 	WorldProjectileBurst(
 		w,
-		centerX,
-		centerY,
+		PositionToF32(centerX),
+		PositionToF32(centerY),
 		UnitX(w, nearestSlot),
 		UnitY(w, nearestSlot),
 		18,
@@ -195,13 +193,11 @@ BuildingUpdateWatchtower :: proc(w: ^World, buildingSlot: int, deltaTime: f32) {
 
 	nearestSlot := BuildingFindNearestHostileUnit(w, buildingSlot, WATCHTOWER_RANGE)
 	if nearestSlot < 0 do return
-	width, height := BuildingTileSize(w.buildings[buildingSlot].type)
-	centerX := f32(w.buildings.x[buildingSlot])+f32(width)*0.5
-	centerY := f32(w.buildings.y[buildingSlot])+f32(height)*0.5
+	centerX, centerY := OrderBuildingCenterRaw(w, buildingSlot)
 	WorldProjectileBurst(
 		w,
-		centerX,
-		centerY,
+		PositionToF32(centerX),
+		PositionToF32(centerY),
 		UnitX(w, nearestSlot),
 		UnitY(w, nearestSlot),
 		22,

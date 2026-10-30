@@ -1245,8 +1245,8 @@ WorldRenderSprites :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 				if w.fireCount > 0 {
 					for activeIndex in 0..<w.fireCount {
 						fireSlot := w.fireActive[activeIndex]
-						fireX := w.fires.x[fireSlot]
-						fireY := w.fires.y[fireSlot]
+						fireX := PositionToF32(w.fires.x[fireSlot])
+						fireY := PositionToF32(w.fires.y[fireSlot])
 						if fireX+1 < minX || fireX-1 > maxX ||
 							fireY+1 < minY || fireY-1 > maxY {
 							continue
@@ -1479,9 +1479,9 @@ WorldRenderHazards :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camer
 
 	for cloud in 0..<GAS_CLOUD_CAPACITY {
 		if !w.gasCloudUsed[cloud] do continue
-		x := w.gasClouds.x[cloud]
-		y := w.gasClouds.y[cloud]
-		radius := w.gasClouds.radius[cloud]
+		x := PositionToF32(w.gasClouds.x[cloud])
+		y := PositionToF32(w.gasClouds.y[cloud])
+		radius := PositionToF32(w.gasClouds.radius[cloud])
 		if abs(WorldShortestWrappedDelta(x-camera.target.x, worldWidth)) > halfWidth+radius ||
 			abs(WorldShortestWrappedDelta(y-camera.target.y, worldHeight)) > halfHeight+radius {
 			continue

@@ -321,38 +321,38 @@ BuildingDamageStage :: proc(w: ^World, buildingSlot: int) -> int {
 }
 
 // Buildings also uncover and keep watch over the surrounding area.
-BuildingVision :: proc(kind: BuildingKind) -> f32 {
+BuildingVision :: proc(kind: BuildingKind) -> d32.Value {
 	switch kind {
 	case .TownHall:
-		return 14
+		return d32.FromInt(14)
 	case .Watchtower:
-		return 20
+		return d32.FromInt(20)
 	case .Cannon:
-		return 9
+		return d32.FromInt(9)
 	case .ArcheryRange, .MagicSchool, .GiantPen, .SiegeWorkshop, .TurtlePen, .ThievesGuild:
-		return 8
+		return d32.FromInt(8)
 	case .Home:
-		return 5
+		return d32.FromInt(5)
 	case .Farmland:
-		return 3
+		return d32.FromInt(3)
 	case .Wall:
-		return 2
+		return d32.FromInt(2)
 	case .Bridge:
-		return 3
+		return d32.FromInt(3)
 	case .Path:
-		return 2
+		return d32.FromInt(2)
 	case .DistrictHall:
-		return 10
+		return d32.FromInt(10)
 	case .GiantMortar:
-		return 10
+		return d32.FromInt(10)
 	case .Harbor:
-		return 8
+		return d32.FromInt(8)
 	case .Granary:
-		return 4
+		return d32.FromInt(4)
 	case .AlchemistWorkshop, .FireworksGuild:
-		return 8
+		return d32.FromInt(8)
 	case .StarfallSpire:
-		return 16
+		return d32.FromInt(16)
 	}
 	unreachable()
 }
@@ -775,15 +775,19 @@ UnitIsMelee :: proc(type: UnitType) -> bool {
 
 // Centre-to-centre space a unit needs so its sprite does not merge with
 // another unit's sprite. Based on the rendered sprite width.
-UNIT_BODY_RADIUS_FACTOR :: 0.45
-UNIT_BODY_GAP :: 0.06
+UNIT_BODY_RADIUS_FACTOR :: d32.Value(45*d32.SCALE/100)
+UNIT_BODY_GAP :: d32.Value(6*d32.SCALE/100)
 
-UnitBodyRadius :: proc(type: UnitType) -> f32 {
-	return UnitSpriteScale(UnitKindOf(type))*UNIT_BODY_RADIUS_FACTOR
+UnitBodyRadius :: proc(type: UnitType) -> d32.Value {
+	// Sprite scale stays f32 for rendering; only this gameplay radius is fixed point.
+	return d32.Mul(PositionFromF32(UnitSpriteScale(UnitKindOf(type))), UNIT_BODY_RADIUS_FACTOR)
 }
 
-UnitMeleeStandoff :: proc(attacker, target: UnitType) -> f32 {
-	return UnitBodyRadius(attacker)+UnitBodyRadius(target)+UNIT_BODY_GAP
+UnitMeleeStandoff :: proc(attacker, target: UnitType) -> d32.Value {
+	return d32.Add(
+		d32.Add(UnitBodyRadius(attacker), UnitBodyRadius(target)),
+		UNIT_BODY_GAP,
+	)
 }
 
 UnitTrainingBuildingKind :: proc(kind: UnitKind) -> BuildingKind {
@@ -898,90 +902,90 @@ UnitDefaultCooldown :: proc(type: UnitType) -> d32.Value {
 	unreachable()
 }
 
-UnitDefaultRange :: proc(type: UnitType) -> f32 {
+UnitDefaultRange :: proc(type: UnitType) -> d32.Value {
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
-		return 0
+		return d32.ZERO
 	case CombatBuilder:
-		return 1.2
+		return d32.FromRatio(12, 10)
 	case Knight:
-		return 0.75
+		return d32.FromRatio(3, 4)
 	case Archer:
-		return 8
+		return d32.FromInt(8)
 	case Mage:
-		return 7
+		return d32.FromInt(7)
 	case Giant:
-		return 0.8
+		return d32.FromRatio(4, 5)
 	case Turtle:
-		return 0.9
+		return d32.FromRatio(9, 10)
 	case Catapult:
-		return 12
+		return d32.FromInt(12)
 	case Rogue:
-		return 0.75
+		return d32.FromRatio(3, 4)
 	case Explorer:
-		return 0
+		return d32.ZERO
 	}
 	unreachable()
 }
 
 // Vision lost once the world is fully dark. Enough to matter at night, but
 // units still react to anything close by.
-UNIT_NIGHT_VISION_FACTOR :: 0.75
+UNIT_NIGHT_VISION_FACTOR :: d32.Value(3*d32.SCALE/4)
 
-UnitDefaultVision :: proc(type: UnitType, isNight: bool) -> f32 {
-	vision: f32 = 0
+UnitDefaultVision :: proc(type: UnitType, isNight: bool) -> d32.Value {
+	vision: d32.Value = d32.ZERO
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
-		vision = 30
+		vision = d32.FromInt(30)
 	case CombatBuilder:
-		vision = 24
+		vision = d32.FromInt(24)
 	case Knight:
-		vision = 25
+		vision = d32.FromInt(25)
 	case Archer:
-		vision = 30
+		vision = d32.FromInt(30)
 	case Mage:
-		vision = 30
+		vision = d32.FromInt(30)
 	case Giant:
-		vision = 40
+		vision = d32.FromInt(40)
 	case Turtle:
-		vision = 30
+		vision = d32.FromInt(30)
 	case Catapult:
-		vision = 35
+		vision = d32.FromInt(35)
 	case Rogue:
-		vision = 30
+		vision = d32.FromInt(30)
 	case Explorer:
-		vision = 34
+		vision = d32.FromInt(34)
 	}
 	// Night trims vision without blacking it out: a noticeable loss that still
 	// leaves units aware of things close by.
-	if isNight do vision *= UNIT_NIGHT_VISION_FACTOR
+	if isNight do vision = d32.Mul(vision, UNIT_NIGHT_VISION_FACTOR)
 	return vision
 }
 
 // Enemy-detection radius used by combat AI. A unit may react before it can
 // actually reveal the area to the player, which keeps guards proactive.
-UnitDistraction :: proc(type: UnitType) -> f32 {
+UnitDistraction :: proc(type: UnitType) -> d32.Value {
 	switch _ in type {
 	case Villager, Builder, WaterCollector, Farmer:
-		return 34
+		return d32.FromInt(34)
 	case CombatBuilder:
-		return 30
+		return d32.FromInt(30)
 	case Knight:
-		return 40
+		return d32.FromInt(40)
 	case Archer:
-		return 40
+		return d32.FromInt(40)
 	case Mage:
-		return 38
+		return d32.FromInt(38)
 	case Giant:
-		return 55
+		return d32.FromInt(55)
 	case Turtle:
-		return 45
+		return d32.FromInt(45)
 	case Catapult:
-		return 50
+		return d32.FromInt(50)
 	case Rogue:
-		return 45
+		return d32.FromInt(45)
 	case Explorer:
-		return 36
+		return d32.FromInt(36)
 	}
 	unreachable()
 }

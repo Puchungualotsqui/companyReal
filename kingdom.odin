@@ -13,7 +13,7 @@ TOWN_WOOD_TARGET :: 60
 // every absorbed town. All circles expand together with town milestones.
 MAX_TOWN_DISTRICTS :: 16
 TOWN_DISTRICT_GROWTH_DENOMINATOR :: 10
-TOWN_DISTRICT_GROWTH_BONUS :: 1.0/TOWN_DISTRICT_GROWTH_DENOMINATOR
+TOWN_DISTRICT_GROWTH_BONUS :: d32.Value(d32.SCALE/TOWN_DISTRICT_GROWTH_DENOMINATOR)
 
 // Fusion is a late-game consolidation sink. Both towns must be in this era.
 TOWN_FUSION_ERA :: 5
@@ -76,7 +76,7 @@ TOWN_MILESTONE_TIER_COUNT :: 5
 // Share of a town's warriors that stays home as a garrison while the town has
 // orders. This is not a defend order against the town itself; the rest is split
 // between its attack and defend orders.
-TOWN_GARRISON_RATIO :: 0.10
+TOWN_GARRISON_RATIO :: d32.Value(10*d32.SCALE/100)
 
 Kingdom :: struct {
 	name: Name,
@@ -505,7 +505,7 @@ TownInitialize :: proc(w: ^World, kingdomSlot, townSlot, hallSlot, x, y: int, st
 	if KingdomHasTech(w, kingdomSlot, .Metropolis) do town.areaRadius += 1
 	town.buildingSlots[.TownHall] = hallSlot
 	town.buildingCounts[.TownHall] = 1
-	town.orderWard = PositionFromF32(TownAegisMax(w, kingdomSlot, townSlot))
+	town.orderWard = TownAegisMax(w, kingdomSlot, townSlot)
 	town.growthCooldown = d32.FromInt(i32(TOWN_ERAS[0].interval))
 	town.growthInterval = town.growthCooldown
 	town.growthBatch = TOWN_ERAS[0].batch
@@ -526,19 +526,19 @@ TownEra :: proc(w: ^World, kingdomSlot, townSlot: int) -> int {
 // walls, towers and cannons, which means losing those structures weakens the
 // shield. Every high order spends ward when it lands; the spent amount absorbs
 // part of the strike and the ward regenerates slowly afterwards.
-TOWN_AEGIS_CAP :: 100.0
-TOWN_AEGIS_REGEN_PER_SECOND :: 1.25
-TOWN_AEGIS_REGEN_DELAY :: 10.0
-TOWN_AEGIS_MAX_MITIGATION :: 0.65
+TOWN_AEGIS_CAP :: d32.Value(100*d32.SCALE)
+TOWN_AEGIS_REGEN_PER_SECOND :: d32.Value(125*d32.SCALE/100)
+TOWN_AEGIS_REGEN_DELAY :: d32.Value(10*d32.SCALE)
+TOWN_AEGIS_MAX_MITIGATION :: d32.Value(65*d32.SCALE/100)
 
-TownAegisMax :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
+TownAegisMax :: proc(w: ^World, kingdomSlot, townSlot: int) -> d32.Value {
 	t := &w.kingdoms[kingdomSlot].towns[townSlot]
-	value := f32(t.buildingCounts[.TownHall])*10+
-		f32(t.buildingCounts[.DistrictHall])*5+
-		f32(t.buildingCounts[.Watchtower])*8+
-		f32(t.buildingCounts[.Cannon])*5+
-		f32(t.buildingCounts[.Wall])*2
-	return min(value, TOWN_AEGIS_CAP)
+	value := t.buildingCounts[.TownHall]*10+
+		t.buildingCounts[.DistrictHall]*5+
+		t.buildingCounts[.Watchtower]*8+
+		t.buildingCounts[.Cannon]*5+
+		t.buildingCounts[.Wall]*2
+	return min(d32.FromInt(i32(value)), TOWN_AEGIS_CAP)
 }
 
 // Returns the fraction of the incoming order that the town absorbed. The ward
@@ -546,15 +546,19 @@ TownAegisMax :: proc(w: ^World, kingdomSlot, townSlot: int) -> f32 {
 TownAegisAbsorb :: proc(w: ^World, kingdomSlot, townSlot: int, cost, x, y: f32) -> f32 {
 	if cost <= 0 || !WorldTownExists(w, kingdomSlot, townSlot) do return 0
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
-	maximum := PositionFromF32(TownAegisMax(w, kingdomSlot, townSlot))
+	maximum := TownAegisMax(w, kingdomSlot, townSlot)
 	if maximum <= d32.ZERO || town.orderWard <= d32.ZERO do return 0
 
 	costValue := PositionFromF32(cost)
 	before := town.orderWard
 	spend := min(town.orderWard, costValue)
-	mitigation := clamp(PositionToF32(d32.Div(spend, costValue)), 0, TOWN_AEGIS_MAX_MITIGATION)
+	mitigation := clamp(
+		PositionToF32(d32.Div(spend, costValue)),
+		0,
+		PositionToF32(TOWN_AEGIS_MAX_MITIGATION),
+	)
 	town.orderWard = max(d32.Sub(town.orderWard, spend), d32.ZERO)
-	town.orderWardRegenDelay = d32.FromInt(i32(TOWN_AEGIS_REGEN_DELAY))
+	town.orderWardRegenDelay = TOWN_AEGIS_REGEN_DELAY
 	town.aegisFlash = 0.65
 	town.aegisFlashX = x
 	town.aegisFlashY = y
@@ -573,7 +577,7 @@ WorldAegisUpdate :: proc(w: ^World, deltaTime: f32) {
 		for townSlot in 0..<TOWN_CAPACITY {
 			if !w.kingdoms[kingdomSlot].townUsed[townSlot] do continue
 			town := &w.kingdoms[kingdomSlot].towns[townSlot]
-			maximum := PositionFromF32(TownAegisMax(w, kingdomSlot, townSlot))
+			maximum := TownAegisMax(w, kingdomSlot, townSlot)
 			town.aegisFlash = max(town.aegisFlash-deltaTime, 0)
 			if maximum <= d32.ZERO {
 				town.orderWard = d32.ZERO
@@ -582,10 +586,7 @@ WorldAegisUpdate :: proc(w: ^World, deltaTime: f32) {
 			if town.orderWardRegenDelay > d32.ZERO {
 				town.orderWardRegenDelay = max(d32.Sub(town.orderWardRegenDelay, step), d32.ZERO)
 			} else {
-				regen := d32.Mul(
-					d32.FromRatio(i32(TOWN_AEGIS_REGEN_PER_SECOND*100), 100),
-					step,
-				)
+				regen := d32.Mul(TOWN_AEGIS_REGEN_PER_SECOND, step)
 				town.orderWard = min(d32.Add(town.orderWard, regen), maximum)
 			}
 			town.orderWard = min(town.orderWard, maximum)

@@ -304,11 +304,17 @@ KingdomTechFoundingSettlerReduction :: proc(w: ^World, kingdom: int) -> int {
 	return 0
 }
 
-KingdomTechConversionSpeedMultiplier :: proc(w: ^World, kingdom: int, kind: UnitKind) -> f32 {
-	multiplier: f32 = 1
-	if KingdomHasTech(w, kingdom, .Census) do multiplier *= 1.20
-	if KingdomHasTech(w, kingdom, .Drill) && UnitIsWarrior(UnitTypeFromKind(kind)) do multiplier *= 1.20
-	if KingdomHasTech(w, kingdom, .Muster) && kind == .CombatBuilder do multiplier *= 1.50
+KingdomTechConversionSpeedMultiplier :: proc(w: ^World, kingdom: int, kind: UnitKind) -> d32.Value {
+	multiplier := d32.ONE
+	if KingdomHasTech(w, kingdom, .Census) {
+		multiplier = d32.Mul(multiplier, d32.FromRatio(120, 100))
+	}
+	if KingdomHasTech(w, kingdom, .Drill) && UnitIsWarrior(UnitTypeFromKind(kind)) {
+		multiplier = d32.Mul(multiplier, d32.FromRatio(120, 100))
+	}
+	if KingdomHasTech(w, kingdom, .Muster) && kind == .CombatBuilder {
+		multiplier = d32.Mul(multiplier, d32.FromRatio(150, 100))
+	}
 	return multiplier
 }
 
@@ -348,8 +354,8 @@ KingdomTechBuildingKindCostMultiplier :: proc(w: ^World, kingdom: int, kind: Bui
 	return multiplier
 }
 
-KingdomTechGarrisonRatio :: proc(w: ^World, kingdom: int) -> f32 {
-	if KingdomHasTech(w, kingdom, .Bureaucracy) do return 0.05
+KingdomTechGarrisonRatio :: proc(w: ^World, kingdom: int) -> d32.Value {
+	if KingdomHasTech(w, kingdom, .Bureaucracy) do return d32.FromRatio(5, 100)
 	return TOWN_GARRISON_RATIO
 }
 
@@ -470,13 +476,15 @@ KingdomHasHarbor :: proc(w: ^World, kingdom: int) -> bool {
 	return false
 }
 
-KingdomCoastalWoodRate :: proc(w: ^World, kingdom: int) -> f32 {
-	if !KingdomHasTech(w, kingdom, .Harbor) do return 0
-	rate: f32 = 0
+KingdomCoastalWoodRate :: proc(w: ^World, kingdom: int) -> d32.Value {
+	if !KingdomHasTech(w, kingdom, .Harbor) do return d32.ZERO
+	rate := d32.ZERO
 	for townSlot in 0..<TOWN_CAPACITY {
 		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
 		if !TownIsCoastal(w, kingdom, townSlot) do continue
-		if TownFindBuilding(w, kingdom, townSlot, .Harbor) >= 0 do rate += 0.05
+		if TownFindBuilding(w, kingdom, townSlot, .Harbor) >= 0 {
+			rate = d32.Add(rate, d32.FromRatio(5, 100))
+		}
 	}
 	return rate
 }

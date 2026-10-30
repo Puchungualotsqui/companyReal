@@ -10,27 +10,33 @@ UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 	defer ProfileSectionEnd(.UnitExtinguish, start)
 	unit := &w.units[unitSlot]
 	rate := UnitExtinguishRate(unit.type)
-	if rate <= 0 do return false
+	if rate <= d32.ZERO do return false
 	if w.fireCount == 0 do return false
 	if !WorldTownExists(w, unit.kingdome, unit.town) do return false
 
 	fireSlot := -1
 	bestDistanceSquared: u64 = 0
-	extinguishRadiusRaw := UnitRawDistance(FIRE_EXTINGUISH_RADIUS)
+	extinguishRadiusRaw := i64(d32.Raw(FIRE_EXTINGUISH_RADIUS))
 	extinguishRadiusSquaredRaw := u64(extinguishRadiusRaw)*u64(extinguishRadiusRaw)
 	worldWidthRaw := i64(w.maxX)*d32.SCALE
 	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	RecursiveLockAcquire(&w.fireMutex)
 	for activeIndex in 0..<w.fireCount {
 		slot := w.fireActive[activeIndex]
-		if !TownPointInArea(w, unit.kingdome, unit.town, int(w.fires.x[slot]), int(w.fires.y[slot])) {
+		if !TownPointInArea(
+			w,
+			unit.kingdome,
+			unit.town,
+			PositionTile(w.fires.x[slot], int(w.maxX)),
+			PositionTile(w.fires.y[slot], int(w.maxY)),
+		) {
 			continue
 		}
 		distanceSquared, validDistance := d32.WrappedDistanceSquared(
 			unit.x,
 			unit.y,
-			PositionFromF32(w.fires.x[slot]),
-			PositionFromF32(w.fires.y[slot]),
+			w.fires.x[slot],
+			w.fires.y[slot],
 			worldWidthRaw,
 			worldHeightRaw,
 		)
@@ -52,7 +58,10 @@ UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 
 	if bestDistanceSquared <= extinguishRadiusSquaredRaw {
 		w.fires.remaining[fireSlot] = max(
-			d32.Sub(w.fires.remaining[fireSlot], PositionFromF32(rate*deltaTime)),
+			d32.Sub(
+				w.fires.remaining[fireSlot],
+				d32.Mul(rate, PositionFromF32(deltaTime)),
+			),
 			d32.ZERO,
 		)
 		if w.fires.remaining[fireSlot] <= d32.ZERO do WorldFireDespawn(w, fireSlot)
@@ -60,8 +69,8 @@ UnitTryExtinguish :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 		RecursiveLockRelease(&w.fireMutex)
 		return true
 	}
-	fireX := int(w.fires.x[fireSlot])
-	fireY := int(w.fires.y[fireSlot])
+	fireX := PositionTile(w.fires.x[fireSlot], int(w.maxX))
+	fireY := PositionTile(w.fires.y[fireSlot], int(w.maxY))
 	RecursiveLockRelease(&w.fireMutex)
 
 	targetX, targetY, found := FireAccessPoint(
@@ -268,8 +277,8 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		reached, blocked, _ := UnitStepTowards(
 			w,
 			unitSlot,
-			TileCenterRaw(w.units[unitSlot].pathTargetX),
-			TileCenterRaw(w.units[unitSlot].pathTargetY),
+			TileCenterPosition(w.units[unitSlot].pathTargetX),
+			TileCenterPosition(w.units[unitSlot].pathTargetY),
 			d32.Mul(speed, step),
 		)
 		if reached {
@@ -330,8 +339,8 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		reached, blocked, _ := UnitStepTowards(
 			w,
 			unitSlot,
-			TileCenterRaw(w.units[unitSlot].pathTargetX),
-			TileCenterRaw(w.units[unitSlot].pathTargetY),
+			TileCenterPosition(w.units[unitSlot].pathTargetX),
+			TileCenterPosition(w.units[unitSlot].pathTargetY),
 			d32.Mul(speed, step),
 		)
 		if reached {
@@ -364,8 +373,8 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		reached, blocked, _ := UnitStepTowards(
 			w,
 			unitSlot,
-			TileCenterRaw(w.units[unitSlot].pathTargetX),
-			TileCenterRaw(w.units[unitSlot].pathTargetY),
+			TileCenterPosition(w.units[unitSlot].pathTargetX),
+			TileCenterPosition(w.units[unitSlot].pathTargetY),
 			d32.Mul(speed, PositionFromF32(deltaTime)),
 		)
 		if reached {
@@ -560,8 +569,8 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		reached, blocked, _ := UnitStepTowards(
 			w,
 			unitSlot,
-			TileCenterRaw(w.units[unitSlot].pathTargetX),
-			TileCenterRaw(w.units[unitSlot].pathTargetY),
+			TileCenterPosition(w.units[unitSlot].pathTargetX),
+			TileCenterPosition(w.units[unitSlot].pathTargetY),
 			d32.Mul(speed, PositionFromF32(deltaTime)),
 		)
 		if reached {
@@ -648,7 +657,7 @@ UnitUpdateFarmer :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 		SpatialUnitRemove(w, unitSlot)
 		state.timer = d32.Div(
 			UnitDefaultTrainingTime(state.to),
-			PositionFromF32(KingdomTechConversionSpeedMultiplier(w, unit.kingdome, state.to)),
+			KingdomTechConversionSpeedMultiplier(w, unit.kingdome, state.to),
 		)
 		unit.pathReady = false
 	} else if !unit.pathFound {
@@ -858,7 +867,7 @@ UnitUpdatePacificSafety :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> boo
 	// rest of an alarmed town keeps working instead of scanning every update.
 	threatened := false
 	if alarm {
-		threatRadiusRaw := UnitRawDistance(f32(FLEE_THREAT_RADIUS*2))
+		threatRadiusRaw := i64(FLEE_THREAT_RADIUS*2)*d32.SCALE
 		threatRadiusSquaredRaw := u64(threatRadiusRaw)*u64(threatRadiusRaw)
 		distanceSquared, validDistance := d32.WrappedDistanceSquared(
 			unit.x,
@@ -883,7 +892,7 @@ UnitUpdatePacificSafety :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> boo
 	}
 	enemy := -1
 	if threatened && unit.decisionReady {
-		enemy = UnitFindNearbyEnemy(w, unitSlot, FLEE_THREAT_RADIUS)
+		enemy = UnitFindNearbyEnemy(w, unitSlot, d32.FromInt(FLEE_THREAT_RADIUS))
 	}
 	if !threatened {
 		if pacificState, pacific := unit.state.(StatePacific); pacific {
@@ -1019,7 +1028,7 @@ UnitUpdatePacificSleep :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool
 
 // Civilian roaming stays a little beyond the town's buildable area instead of
 // drifting across the map.
-TOWN_ROAM_AREA_FACTOR :: 1.25
+TOWN_ROAM_AREA_FACTOR :: d32.Value(125*d32.SCALE/100)
 
 UnitUpdateRoaming :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	unit := &w.units[unitSlot]
@@ -1042,8 +1051,8 @@ UnitUpdateRoaming :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	reached, blocked, _ := UnitStepTowards(
 		w,
 		unitSlot,
-		TileCenterRaw(unit.pathTargetX),
-		TileCenterRaw(unit.pathTargetY),
+		TileCenterPosition(unit.pathTargetX),
+		TileCenterPosition(unit.pathTargetY),
 		d32.Mul(speed, PositionFromF32(deltaTime)),
 	)
 	if reached || blocked {
@@ -1116,7 +1125,7 @@ UnitFindRoamingTarget :: proc(w: ^World, unitSlot, sequence: int) -> (int, int, 
 		unit.town,
 		circleIndex,
 	)
-	radius := int(f32(circleRadius)*TOWN_ROAM_AREA_FACTOR)
+	radius := int(d32.ToInt(d32.Mul(d32.FromInt(i32(circleRadius)), TOWN_ROAM_AREA_FACTOR)))
 	if radius <= 0 do return 0, 0, false
 
 	hallWidth, hallHeight := BuildingTileSize(TownHall{})

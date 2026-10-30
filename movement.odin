@@ -396,17 +396,6 @@ UnitEnemyDistanceSquared :: proc(w: ^World, x, y: d32.Value, enemySlot: int) -> 
 }
 
 // A wrapped coordinate interval may cross the short final spatial bucket.
-UnitNearbyChunkRange :: proc(position, radius, size: f32, chunkSize, chunkCount: int) -> (int, int) {
-	if radius >= size*0.5 do return 0, chunkCount
-	low, high := position-radius, position+radius
-	first := int(WorldWrapPosition(low, size))/chunkSize
-	last := int(WorldWrapPosition(high, size))/chunkSize
-	count := last-first+1
-	if low < 0 || high >= size do count += chunkCount
-	return first, min(count, chunkCount)
-}
-
-// Raw-coordinate variant of UnitNearbyChunkRange.
 UnitNearbyChunkRangeRaw :: proc(positionRaw, radiusRaw, sizeRaw: i64, chunkSize, chunkCount: int) -> (int, int) {
 	if sizeRaw <= 0 || chunkSize <= 0 || chunkCount <= 0 do return 0, 0
 	if radiusRaw >= sizeRaw/2 do return 0, chunkCount
@@ -423,9 +412,9 @@ UnitNearbyChunkRangeRaw :: proc(positionRaw, radiusRaw, sizeRaw: i64, chunkSize,
 }
 
 // Keep only the closest threats, visiting each intersecting wrapped chunk once.
-UnitCollectNearbyEnemies :: proc(w: ^World, unitSlot: int, radius: f32, enemies: []UnitNearbyEnemy) -> int {
+UnitCollectNearbyEnemies :: proc(w: ^World, unitSlot: int, radius: d32.Value, enemies: []UnitNearbyEnemy) -> int {
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] ||
-		w.units[unitSlot].health <= d32.ZERO || !(radius >= 0) || len(enemies) == 0 {
+		w.units[unitSlot].health <= d32.ZERO || radius < d32.ZERO || len(enemies) == 0 {
 				return 0
 			}
 	if w.maxX <= 0 || w.maxY <= 0 || w.spatial.chunkSize <= 0 ||
@@ -433,7 +422,7 @@ UnitCollectNearbyEnemies :: proc(w: ^World, unitSlot: int, radius: f32, enemies:
 				return 0
 			}
 	unit := &w.units[unitSlot]
-	radiusRaw := UnitRawDistance(radius)
+	radiusRaw := i64(d32.Raw(radius))
 	radiusSquared := u64(radiusRaw)*u64(radiusRaw)
 	firstX, countX := UnitNearbyChunkRangeRaw(
 		i64(d32.Raw(unit.x)),
@@ -481,7 +470,7 @@ UnitCollectNearbyEnemies :: proc(w: ^World, unitSlot: int, radius: f32, enemies:
 }
 
 // Visible means outdoors, not player fog-of-war or line of sight.
-UnitFindNearbyEnemy :: proc(w: ^World, unitSlot: int, radius: f32) -> int {
+UnitFindNearbyEnemy :: proc(w: ^World, unitSlot: int, radius: d32.Value) -> int {
 	enemies: [1]UnitNearbyEnemy
 	if UnitCollectNearbyEnemies(w, unitSlot, radius, enemies[:]) == 0 do return -1
 	return enemies[0].slot
@@ -592,7 +581,7 @@ UnitFleeEnemy :: proc(w: ^World, unitSlot, enemySlot: int, deltaTime: f32) -> bo
 	// Include the explicit threat even if outside the local radius or crowded out.
 	threats: [FLEE_CLEARANCE_ENEMIES]UnitNearbyEnemy
 	threats[0] = UnitNearbyEnemy{enemySlot, 0}
-	count := 1+UnitCollectNearbyEnemies(w, unitSlot, FLEE_THREAT_RADIUS, threats[1:])
+	count := 1+UnitCollectNearbyEnemies(w, unitSlot, d32.FromInt(FLEE_THREAT_RADIUS), threats[1:])
 	enemies := threats[:count]
 	clearanceSquared := UnitFleeClearanceSquared(w, w.units.x[unitSlot], w.units.y[unitSlot], enemies)
 	clearanceRaw := d32.SqrtRaw(clearanceSquared)
@@ -643,7 +632,7 @@ UnitFleeEnemy :: proc(w: ^World, unitSlot, enemySlot: int, deltaTime: f32) -> bo
 			unit.pathReady = false
 			return false
 		}
-		reached, blocked, left := UnitStepTowards(w, unitSlot, TileCenterRaw(nx), TileCenterRaw(ny), remaining)
+		reached, blocked, left := UnitStepTowards(w, unitSlot, TileCenterPosition(nx), TileCenterPosition(ny), remaining)
 		if blocked {
 			unit.pathReady, unit.pathFound = false, false
 			return false
@@ -671,8 +660,8 @@ UnitFollowEscapePath :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 		reached, blocked, left := UnitStepTowards(
 			w,
 			unitSlot,
-			TileCenterRaw(nx),
-			TileCenterRaw(ny),
+			TileCenterPosition(nx),
+			TileCenterPosition(ny),
 			remaining,
 		)
 		if blocked {
@@ -994,8 +983,8 @@ UnitFollowFlowField :: proc(w: ^World, unitSlot: int, field: ^FlowField, deltaTi
 		reached, blocked, left := UnitStepTowards(
 			w,
 			unitSlot,
-			TileCenterRaw(nextX),
-			TileCenterRaw(nextY),
+			TileCenterPosition(nextX),
+			TileCenterPosition(nextY),
 			remaining,
 		)
 		if blocked do return .Unreachable
@@ -1163,7 +1152,7 @@ UnitDirectPath :: proc(
 	return len(path) > 0
 }
 
-UnitStepTowards :: proc(w: ^World, unitSlot: int, targetX, targetY: f32, distance: d32.Value) -> (reached: bool, blocked: bool, remaining: d32.Value) {
+UnitStepTowards :: proc(w: ^World, unitSlot: int, targetX, targetY: d32.Value, distance: d32.Value) -> (reached: bool, blocked: bool, remaining: d32.Value) {
 	remaining = distance
 	if unitSlot < 0 || unitSlot >= UNIT_CAPACITY || !w.unitUsed[unitSlot] {
 		return false, true, remaining
@@ -1175,12 +1164,12 @@ UnitStepTowards :: proc(w: ^World, unitSlot: int, targetX, targetY: f32, distanc
 	unit := &w.units[unitSlot]
 	defer SpatialUnitMove(w, unitSlot)
 	targetPositionX, validTargetX := d32.WrapRaw(
-		i64(d32.Raw(PositionFromF32(targetX))),
+		i64(d32.Raw(targetX)),
 		d32.ZERO,
 		width,
 	)
 	targetPositionY, validTargetY := d32.WrapRaw(
-		i64(d32.Raw(PositionFromF32(targetY))),
+		i64(d32.Raw(targetY)),
 		d32.ZERO,
 		height,
 	)
@@ -1385,11 +1374,6 @@ PositionFromF32 :: proc(value: f32) -> d32.Value {
 	if scaled <= f64(d32.Raw(d32.MIN)) do return d32.MIN
 	if scaled < 0 do return d32.FromRaw(i32(i64(scaled-0.5)))
 	return d32.FromRaw(i32(i64(scaled+0.5)))
-}
-
-// Legacy f32 distance or speed as raw units; every float conversion goes here.
-UnitRawDistance :: proc(distance: f32) -> i64 {
-	return i64(d32.Raw(PositionFromF32(distance)))
 }
 
 // Raw distance below which two positions count as the same point (~1e-4 units).

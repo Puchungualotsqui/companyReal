@@ -1971,9 +1971,9 @@ UIDrawAegisDome :: proc(w: ^World, camera: rl.Camera2D, kingdom, townSlot: int) 
 	if !WorldTownExists(w, kingdom, townSlot) do return
 	t := &w.kingdoms[kingdom].towns[townSlot]
 	maximum := TownAegisMax(w, kingdom, townSlot)
-	if maximum <= 0 do return
+	if maximum <= d32.ZERO do return
 
-	ratio := clamp(PositionToF32(t.orderWard)/maximum, 0, 1)
+	ratio := clamp(PositionToF32(t.orderWard)/PositionToF32(maximum), 0, 1)
 	flash := clamp(t.aegisFlash/0.65, 0, 1)
 	if ratio <= 0 && flash <= 0 do return
 
@@ -2466,7 +2466,7 @@ UIFillStats :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState, stats: ^[
 			}
 			stats[1] = {
 				"Growth",
-				fmt.ctprintf("+%d%%", int(TOWN_DISTRICT_GROWTH_BONUS*100)),
+				fmt.ctprintf("+%d%%", int(PositionToF32(TOWN_DISTRICT_GROWTH_BONUS)*100+0.5)),
 				UI_COLOR_GOOD,
 				{},
 			}
@@ -2593,11 +2593,11 @@ UIDrawAegisBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 	if !WorldTownExists(w, kingdom, town) do return
 	t := &w.kingdoms[kingdom].towns[town]
 	maximum := TownAegisMax(w, kingdom, town)
-	if maximum <= 0 do return
+	if maximum <= d32.ZERO do return
 
 	y := panel.y+UI_STAT_Y+4*UI_STAT_H+4
 	labelColor := UI_COLOR_DEFEND
-	if t.orderWardRegenDelay > d32.ZERO && PositionToF32(t.orderWard) < maximum do labelColor = UI_COLOR_DIM
+	if t.orderWardRegenDelay > d32.ZERO && t.orderWard < maximum do labelColor = UI_COLOR_DIM
 	UIText("AEGIS", panel.x+UI_PAD, y, labelColor)
 	bar := rl.Rectangle{
 		panel.x+UI_PAD+62,
@@ -2605,7 +2605,7 @@ UIDrawAegisBar :: proc(w: ^World, panel: rl.Rectangle, kingdom, town: int) {
 		panel.width-2*UI_PAD-62-52,
 		9,
 	}
-	ratio := clamp(PositionToF32(t.orderWard)/maximum, 0, 1)
+	ratio := clamp(PositionToF32(t.orderWard)/PositionToF32(maximum), 0, 1)
 	rl.DrawRectangleRec(bar, UI_COLOR_BUTTON_OFF)
 	if ratio > 0 {
 		rl.DrawRectangleRec(
@@ -2795,8 +2795,10 @@ UIDrawOrdersTab :: proc(w: ^World, renderer: ^WorldRenderer, panel: rl.Rectangle
 	orders := UITownOrderCount(w, kingdom, town)
 
 	UIText("STANDING ORDERS", panel.x+UI_PAD, top, UI_COLOR_DIM)
+	garrison := KingdomTechGarrisonRatio(w, kingdom)
+	garrisonPercent := int((i64(d32.Raw(garrison))*100+d32.SCALE/2)/d32.SCALE)
 	UITextRight(
-		fmt.ctprintf("%d orders  -  garrison %d%%", orders, int(KingdomTechGarrisonRatio(w, kingdom)*100)),
+		fmt.ctprintf("%d orders  -  garrison %d%%", orders, garrisonPercent),
 		panel.x+panel.width-UI_PAD,
 		top,
 		UI_COLOR_DIM,
@@ -4117,7 +4119,7 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 		UIText(
 			fmt.ctprintf(
 				"Town Aegis absorbs up to %d%% of the strike.",
-				int(TOWN_AEGIS_MAX_MITIGATION*100),
+				int(PositionToF32(TOWN_AEGIS_MAX_MITIGATION)*100+0.5),
 			),
 			box.x+UI_PAD,
 			lineY,
@@ -5372,13 +5374,13 @@ UIDrawTileInfo :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D) {
 	} else {
 		def := TILE_DEFS[tile.type]
 		UIText(
-			fmt.ctprintf("Move x%.2f   Wood %.1f", PositionToF32(def.moveCost), def.wood),
+			fmt.ctprintf("Move x%.2f   Wood %.1f", PositionToF32(def.moveCost), PositionToF32(def.wood)),
 			box.x+padding,
 			bodyY,
 			UI_COLOR_DIM,
 		)
 		UIText(
-			fmt.ctprintf("Food %.1f   Water %.1f", PositionToF32(def.food), def.water),
+			fmt.ctprintf("Food %.1f   Water %.1f", PositionToF32(def.food), PositionToF32(def.water)),
 			box.x+padding,
 			bodyY+bodyStep,
 			UI_COLOR_DIM,

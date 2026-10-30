@@ -378,25 +378,22 @@ WorldDecorationClearRect :: proc(w: ^World, x, y, width, height: int) -> d32.Val
 }
 
 // Splash damage fells trees and brush around the impact; stone takes longer.
-WorldDecorationAreaDamage :: proc(w: ^World, x, y: f32, radius: d32.Value, damage: d32.Value) {
+WorldDecorationAreaDamage :: proc(w: ^World, x, y: d32.Value, radius: d32.Value, damage: d32.Value) {
 	if radius <= d32.ZERO || damage <= d32.ZERO do return
 	RecursiveLockGuard(&w.unitMutex)
 	chunkSize := w.spatial.chunkSize
 	if chunkSize <= 0 do return
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
-	centerX := WorldWrapPosition(x, worldWidth)
-	centerY := WorldWrapPosition(y, worldHeight)
-	centerPositionX := PositionFromF32(centerX)
-	centerPositionY := PositionFromF32(centerY)
 	worldWidthRaw := i64(w.maxX)*d32.SCALE
 	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	centerPositionX, validX := d32.WrapRaw(i64(d32.Raw(x)), d32.ZERO, worldWidthRaw)
+	centerPositionY, validY := d32.WrapRaw(i64(d32.Raw(y)), d32.ZERO, worldHeightRaw)
+	if !validX || !validY do return
 	radiusRaw := i64(d32.Raw(radius))
 	radiusSquaredRaw := u64(radiusRaw)*u64(radiusRaw)
 	hit := 0
 
-	centerChunkX := int(centerX)/chunkSize
-	centerChunkY := int(centerY)/chunkSize
+	centerChunkX := int(d32.ToInt(centerPositionX))/chunkSize
+	centerChunkY := int(d32.ToInt(centerPositionY))/chunkSize
 	chunkRadius := int(d32.ToInt(radius))/chunkSize+1
 	for offsetX in -chunkRadius..=chunkRadius {
 		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
@@ -424,7 +421,9 @@ WorldDecorationAreaDamage :: proc(w: ^World, x, y: f32, radius: d32.Value, damag
 		}
 	}
 
-	if hit > 0 do DecorationBlastBurst(w, centerX, centerY, PositionToF32(radius))
+	if hit > 0 {
+		DecorationBlastBurst(w, PositionToF32(centerPositionX), PositionToF32(centerPositionY), PositionToF32(radius))
+	}
 }
 
 WorldDecorationUpdate :: proc(w: ^World, deltaTime: f32) {

@@ -13,46 +13,46 @@ ORDER_BLOCKADE_DURATION_TICKS :: u64(ORDER_BLOCKADE_DURATION_SECONDS/TOWN_SIMULA
 ORDER_MORTAR_RADIUS :: d32.Value(4*d32.SCALE)
 ORDER_MORTAR_SPREAD_RADIUS :: d32.Value(3*d32.SCALE)
 ORDER_MORTAR_BLAST_RADIUS :: d32.Value(16*d32.SCALE/10)
-ORDER_MORTAR_DURATION :: 10.0
-ORDER_MORTAR_COOLDOWN :: 30.0
-ORDER_MORTAR_TICK :: 0.6
+ORDER_MORTAR_DURATION :: d32.Value(10*d32.SCALE)
+ORDER_MORTAR_COOLDOWN :: d32.Value(30*d32.SCALE)
+ORDER_MORTAR_TICK :: d32.Value(6*d32.SCALE/10)
 ORDER_MORTAR_UNIT_DAMAGE :: d32.Value(7*d32.SCALE)
 ORDER_MORTAR_BUILDING_DAMAGE :: d32.Value(20*d32.SCALE)
 
 ORDER_GLACIER_RADIUS :: d32.Value(4*d32.SCALE)
-ORDER_GLACIER_COOLDOWN :: 150.0
+ORDER_GLACIER_COOLDOWN :: d32.Value(150*d32.SCALE)
 
 ORDER_TREMOR_RADIUS :: d32.Value(45*d32.SCALE/10)
-ORDER_TREMOR_DURATION :: 4.0
-ORDER_TREMOR_TICK :: 0.7
+ORDER_TREMOR_DURATION :: d32.Value(4*d32.SCALE)
+ORDER_TREMOR_TICK :: d32.Value(7*d32.SCALE/10)
 ORDER_TREMOR_UNIT_DAMAGE :: d32.Value(6*d32.SCALE)
 ORDER_TREMOR_BUILDING_DAMAGE :: d32.Value(55*d32.SCALE)
-ORDER_TREMOR_COOLDOWN :: 120.0
+ORDER_TREMOR_COOLDOWN :: d32.Value(120*d32.SCALE)
 
 ORDER_STARFALL_RADIUS :: d32.Value(55*d32.SCALE/10)
 ORDER_STARFALL_UNIT_DAMAGE :: d32.Value(120*d32.SCALE)
 ORDER_STARFALL_BUILDING_DAMAGE :: d32.Value(350*d32.SCALE)
-ORDER_STARFALL_COOLDOWN :: 240.0
+ORDER_STARFALL_COOLDOWN :: d32.Value(240*d32.SCALE)
 
 ORDER_FLOOD_RADIUS :: d32.Value(4*d32.SCALE)
-ORDER_FLOOD_COOLDOWN :: 150.0
+ORDER_FLOOD_COOLDOWN :: d32.Value(150*d32.SCALE)
 
 ORDER_MIASMA_RADIUS :: d32.Value(35*d32.SCALE/10)
-ORDER_MIASMA_DURATION :: 18.0
-ORDER_MIASMA_COOLDOWN :: 180.0
+ORDER_MIASMA_DURATION :: d32.Value(18*d32.SCALE)
+ORDER_MIASMA_COOLDOWN :: d32.Value(180*d32.SCALE)
 
 ORDER_NAPALM_RADIUS :: d32.Value(5*d32.SCALE)
-ORDER_NAPALM_DURATION :: 5.0
-ORDER_NAPALM_TICK :: 0.6
-ORDER_NAPALM_COOLDOWN :: 180.0
+ORDER_NAPALM_DURATION :: d32.Value(5*d32.SCALE)
+ORDER_NAPALM_TICK :: d32.Value(6*d32.SCALE/10)
+ORDER_NAPALM_COOLDOWN :: d32.Value(180*d32.SCALE)
 
-ORDER_MORTAR_TELEGRAPH :: 0.8
-ORDER_GLACIER_TELEGRAPH :: 1.2
-ORDER_TREMOR_TELEGRAPH :: 1.2
-ORDER_STARFALL_TELEGRAPH :: 2.0
-ORDER_FLOOD_TELEGRAPH :: 1.2
-ORDER_MIASMA_TELEGRAPH :: 1.2
-ORDER_NAPALM_TELEGRAPH :: 1.5
+ORDER_MORTAR_TELEGRAPH :: d32.Value(8*d32.SCALE/10)
+ORDER_GLACIER_TELEGRAPH :: d32.Value(12*d32.SCALE/10)
+ORDER_TREMOR_TELEGRAPH :: d32.Value(12*d32.SCALE/10)
+ORDER_STARFALL_TELEGRAPH :: d32.Value(2*d32.SCALE)
+ORDER_FLOOD_TELEGRAPH :: d32.Value(12*d32.SCALE/10)
+ORDER_MIASMA_TELEGRAPH :: d32.Value(12*d32.SCALE/10)
+ORDER_NAPALM_TELEGRAPH :: d32.Value(15*d32.SCALE/10)
 
 OrderKind :: enum {
 	GiantMortar,
@@ -145,15 +145,15 @@ OrderRadius :: proc(kind: OrderKind) -> d32.Value {
 OrderDuration :: proc(kind: OrderKind) -> d32.Value {
 	switch kind {
 	case .GiantMortar:
-		return d32.FromInt(i32(ORDER_MORTAR_DURATION))
+		return ORDER_MORTAR_DURATION
 	case .Blockade, .GlacierShell, .WaterBomber, .MiasmaBarrage:
 		return d32.ZERO
 	case .SiegeTremor:
-		return d32.FromInt(i32(ORDER_TREMOR_DURATION))
+		return ORDER_TREMOR_DURATION
 	case .Starfall:
 		return d32.ZERO
 	case .NapalmBarrage:
-		return d32.FromInt(i32(ORDER_NAPALM_DURATION))
+		return ORDER_NAPALM_DURATION
 	}
 	unreachable()
 }
@@ -161,21 +161,21 @@ OrderDuration :: proc(kind: OrderKind) -> d32.Value {
 OrderTelegraph :: proc(kind: OrderKind) -> d32.Value {
 	switch kind {
 	case .GiantMortar:
-		return d32.FromRatio(i32(ORDER_MORTAR_TELEGRAPH*10), 10)
+		return ORDER_MORTAR_TELEGRAPH
 	case .Blockade:
 		return d32.ZERO
 	case .GlacierShell:
-		return d32.FromRatio(i32(ORDER_GLACIER_TELEGRAPH*10), 10)
+		return ORDER_GLACIER_TELEGRAPH
 	case .SiegeTremor:
-		return d32.FromRatio(i32(ORDER_TREMOR_TELEGRAPH*10), 10)
+		return ORDER_TREMOR_TELEGRAPH
 	case .Starfall:
-		return d32.FromRatio(i32(ORDER_STARFALL_TELEGRAPH*10), 10)
+		return ORDER_STARFALL_TELEGRAPH
 	case .WaterBomber:
-		return d32.FromRatio(i32(ORDER_FLOOD_TELEGRAPH*10), 10)
+		return ORDER_FLOOD_TELEGRAPH
 	case .MiasmaBarrage:
-		return d32.FromRatio(i32(ORDER_MIASMA_TELEGRAPH*10), 10)
+		return ORDER_MIASMA_TELEGRAPH
 	case .NapalmBarrage:
-		return d32.FromRatio(i32(ORDER_NAPALM_TELEGRAPH*10), 10)
+		return ORDER_NAPALM_TELEGRAPH
 	}
 	unreachable()
 }
@@ -205,21 +205,21 @@ OrderWardCost :: proc(kind: OrderKind) -> f32 {
 OrderCooldownSeconds :: proc(kind: OrderKind) -> d32.Value {
 	switch kind {
 	case .GiantMortar:
-		return d32.FromInt(i32(ORDER_MORTAR_COOLDOWN))
+		return ORDER_MORTAR_COOLDOWN
 	case .Blockade:
 		return d32.FromInt(180)
 	case .GlacierShell:
-		return d32.FromInt(i32(ORDER_GLACIER_COOLDOWN))
+		return ORDER_GLACIER_COOLDOWN
 	case .SiegeTremor:
-		return d32.FromInt(i32(ORDER_TREMOR_COOLDOWN))
+		return ORDER_TREMOR_COOLDOWN
 	case .Starfall:
-		return d32.FromInt(i32(ORDER_STARFALL_COOLDOWN))
+		return ORDER_STARFALL_COOLDOWN
 	case .WaterBomber:
-		return d32.FromInt(i32(ORDER_FLOOD_COOLDOWN))
+		return ORDER_FLOOD_COOLDOWN
 	case .MiasmaBarrage:
-		return d32.FromInt(i32(ORDER_MIASMA_COOLDOWN))
+		return ORDER_MIASMA_COOLDOWN
 	case .NapalmBarrage:
-		return d32.FromInt(i32(ORDER_NAPALM_COOLDOWN))
+		return ORDER_NAPALM_COOLDOWN
 	}
 	unreachable()
 }
@@ -562,49 +562,49 @@ OrderBeginEffect :: proc(w: ^World, slot: int) {
 
 	switch order.orderKind {
 	case .GiantMortar:
-		order.orderActive = d32.FromInt(i32(ORDER_MORTAR_DURATION))
+		order.orderActive = ORDER_MORTAR_DURATION
 		order.orderTick = d32.ZERO
 	case .GlacierShell:
-		scale := 1-PositionToF32(order.orderMitigation)*0.6
+		scale := d32.Sub(d32.ONE, d32.Mul(order.orderMitigation, d32.FromRatio(3, 5)))
 		WorldHazardSpawnCircle(
 			w,
-			PositionToF32(order.orderTargetX),
-			PositionToF32(order.orderTargetY),
-			PositionToF32(ORDER_GLACIER_RADIUS)*scale,
+			order.orderTargetX,
+			order.orderTargetY,
+			d32.Mul(ORDER_GLACIER_RADIUS, scale),
 			.Ice,
-			14*scale,
-			24*scale,
+			d32.Mul(d32.FromInt(14), scale),
+			d32.Mul(d32.FromInt(24), scale),
 			0x1CE,
 		)
 	case .SiegeTremor:
-		order.orderActive = d32.FromInt(i32(ORDER_TREMOR_DURATION))
+		order.orderActive = ORDER_TREMOR_DURATION
 		order.orderTick = d32.ZERO
 	case .Starfall:
 		OrderStarfallImpact(w, slot)
 	case .WaterBomber:
-		scale := 1-PositionToF32(order.orderMitigation)*0.6
+		scale := d32.Sub(d32.ONE, d32.Mul(order.orderMitigation, d32.FromRatio(3, 5)))
 		WorldHazardSpawnCircle(
 			w,
-			PositionToF32(order.orderTargetX),
-			PositionToF32(order.orderTargetY),
-			PositionToF32(ORDER_FLOOD_RADIUS)*scale,
+			order.orderTargetX,
+			order.orderTargetY,
+			d32.Mul(ORDER_FLOOD_RADIUS, scale),
 			.Flood,
-			9*scale,
-			17*scale,
+			d32.Mul(d32.FromInt(9), scale),
+			d32.Mul(d32.FromInt(17), scale),
 			0xF100,
 		)
 	case .MiasmaBarrage:
-		scale := 1-PositionToF32(order.orderMitigation)*0.6
+		scale := d32.Sub(d32.ONE, d32.Mul(order.orderMitigation, d32.FromRatio(3, 5)))
 		WorldGasCloudSpawn(
 			w,
-			PositionToF32(order.orderTargetX),
-			PositionToF32(order.orderTargetY),
-			PositionToF32(ORDER_MIASMA_RADIUS)*scale,
-			ORDER_MIASMA_DURATION*scale,
+			order.orderTargetX,
+			order.orderTargetY,
+			d32.Mul(ORDER_MIASMA_RADIUS, scale),
+			d32.Mul(ORDER_MIASMA_DURATION, scale),
 		)
 	case .NapalmBarrage:
 		scale := d32.Sub(d32.ONE, d32.Mul(order.orderMitigation, d32.FromRatio(3, 5)))
-		order.orderActive = d32.Mul(d32.FromInt(i32(ORDER_NAPALM_DURATION)), scale)
+		order.orderActive = d32.Mul(ORDER_NAPALM_DURATION, scale)
 		order.orderTick = d32.ZERO
 	case .Blockade:
 	}
@@ -650,7 +650,7 @@ BuildingUpdateGiantMortar :: proc(w: ^World, slot: int, deltaTime: f32) {
 		sequence += 1
 		order.orderTick = d32.Add(
 			order.orderTick,
-			d32.FromRatio(i32(ORDER_MORTAR_TICK*10), 10),
+			ORDER_MORTAR_TICK,
 		)
 		if _, stillUsed := BuildingOrderState(w, slot); !stillUsed do return
 	}
@@ -674,7 +674,7 @@ BuildingUpdateSiegeTremor :: proc(w: ^World, slot: int, deltaTime: f32) {
 		sequence += 1
 		order.orderTick = d32.Add(
 			order.orderTick,
-			d32.FromRatio(i32(ORDER_TREMOR_TICK*10), 10),
+			ORDER_TREMOR_TICK,
 		)
 		if _, stillUsed := BuildingOrderState(w, slot); !stillUsed do return
 	}
@@ -698,7 +698,7 @@ BuildingUpdateNapalm :: proc(w: ^World, slot: int, deltaTime: f32) {
 		sequence += 1
 		order.orderTick = d32.Add(
 			order.orderTick,
-			d32.FromRatio(i32(ORDER_NAPALM_TICK*10), 10),
+			ORDER_NAPALM_TICK,
 		)
 		if _, stillUsed := BuildingOrderState(w, slot); !stillUsed do return
 	}
@@ -791,12 +791,12 @@ OrderNapalmFireShell :: proc(w: ^World, slot, sequence: int) {
 
 	WorldProjectileBurst(w, centerX, centerY, effectX, effectY, 60, 1.6, 0.5, 1.2, 0, 0, .Boulder)
 	OrderImpactBurst(w, effectX, effectY)
-	WorldFireIgnite(w, effectX, effectY, 1.5, 1.15)
+	WorldFireIgnite(w, impactX, impactY, 1.5, 1.15)
 	for i in 0..<2 {
 		jitterOffsetX := d32.FromRatio((i32(WorldNoiseHashInt(slot, 2+i*2, seed))-500_000)*7, 5_000_000)
 		jitterOffsetY := d32.FromRatio((i32(WorldNoiseHashInt(slot, 3+i*2, seed))-500_000)*7, 5_000_000)
-		jitterX := PositionToF32(d32.Add(impactX, jitterOffsetX))
-		jitterY := PositionToF32(d32.Add(impactY, jitterOffsetY))
+		jitterX := d32.Add(impactX, jitterOffsetX)
+		jitterY := d32.Add(impactY, jitterOffsetY)
 		WorldFireIgnite(w, jitterX, jitterY, 1.2, 1.0)
 	}
 }
@@ -835,8 +835,8 @@ OrderStarfallImpact :: proc(w: ^World, slot: int) {
 		)
 		WorldFireIgnite(
 			w,
-			PositionToF32(OrderWrappedAdd(x, offsetX, i64(w.maxX)*d32.SCALE)),
-			PositionToF32(OrderWrappedAdd(y, offsetY, i64(w.maxY)*d32.SCALE)),
+			OrderWrappedAdd(x, offsetX, i64(w.maxX)*d32.SCALE),
+			OrderWrappedAdd(y, offsetY, i64(w.maxY)*d32.SCALE),
 			1.6,
 			1.2,
 		)
@@ -922,9 +922,7 @@ OrderAreaDamage :: proc(
 	centerPositionX, validX := d32.WrapRaw(i64(d32.Raw(x)), d32.ZERO, worldWidthRaw)
 	centerPositionY, validY := d32.WrapRaw(i64(d32.Raw(y)), d32.ZERO, worldHeightRaw)
 	if !validX || !validY do return
-	// Raw distance tests; f32 only crosses the effect and building-query bounds.
-	centerX := PositionToF32(centerPositionX)
-	centerY := PositionToF32(centerPositionY)
+	// Raw distance tests; f32 only crosses into effects.
 	radiusRaw := i64(d32.Raw(radius))
 	radiusSquaredRaw := u64(radiusRaw)*u64(radiusRaw)
 
@@ -952,7 +950,7 @@ OrderAreaDamage :: proc(
 						worldHeightRaw,
 					)
 					if validDistance && distanceSquared <= radiusSquaredRaw {
-						UnitApplyDamage(w, slot, unitDamage, centerX, centerY, .Area)
+						UnitApplyDamage(w, slot, unitDamage, centerPositionX, centerPositionY, .Area)
 					}
 				}
 				slot = next
@@ -963,9 +961,17 @@ OrderAreaDamage :: proc(
 				next := w.spatial.buildingNext[slot]
 				if w.buildingUsed[slot] && w.buildings.kingdom[slot] != attackerKingdom &&
 					KingdomAtWar(w, attackerKingdom, w.buildings.kingdom[slot]) {
-					distanceSquared, impactX, impactY := WarriorBuildingNearestPointSquared(w, centerX, centerY, slot)
+					distanceSquared, impactX, impactY := WarriorBuildingNearestPointSquared(w, centerPositionX, centerPositionY, slot)
 					if distanceSquared <= radiusSquaredRaw {
-						OrderDamageBuilding(w, slot, buildingDamage, impactX, impactY, attackerKingdom, eventSeed)
+						OrderDamageBuilding(
+							w,
+							slot,
+							buildingDamage,
+							impactX,
+							impactY,
+							attackerKingdom,
+							eventSeed,
+						)
 					}
 				}
 				slot = next
@@ -973,7 +979,7 @@ OrderAreaDamage :: proc(
 		}
 	}
 
-	WorldDecorationAreaDamage(w, centerX, centerY, radius, buildingDamage)
+	WorldDecorationAreaDamage(w, centerPositionX, centerPositionY, radius, buildingDamage)
 }
 
 @(private = "file")
@@ -981,7 +987,7 @@ OrderDamageBuilding :: proc(
 	w: ^World,
 	slot: int,
 	damage: d32.Value,
-	impactX, impactY: f32,
+	impactX, impactY: d32.Value,
 	attackerKingdom: int,
 	eventSeed: u64,
 ) {
@@ -1002,7 +1008,7 @@ OrderDamageBuilding :: proc(
 		)
 	}
 
-	BuildingHitBurst(w, slot, impactX, impactY)
+	BuildingHitBurst(w, slot, PositionToF32(impactX), PositionToF32(impactY))
 	building.health = d32.Sub(building.health, damage)
 	if building.health > d32.ZERO do return
 

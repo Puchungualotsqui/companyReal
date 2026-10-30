@@ -18,7 +18,7 @@ WORLD_HASH_INTERVAL :: 16
 UNIT_UPDATE_SLICES :: 2
 // Towns use the same model for economy, growth and construction progress.
 TOWN_UPDATE_SLICES :: 2
-TOWN_ALARM_AREA_FACTOR :: 1.25
+TOWN_ALARM_AREA_FACTOR :: d32.Value(125*d32.SCALE/100)
 WORLD_DAY_LENGTH_SECONDS :: 7*60.0
 
 // --- weather ---------------------------------------------------------------
@@ -28,8 +28,8 @@ WEATHER_MIN_SECONDS :: 90
 WEATHER_MAX_SECONDS :: 180
 WEATHER_RAMP_IN :: 25
 WEATHER_RAMP_OUT :: 15
-WEATHER_LIGHTNING_DECAY :: 2.5
-GAS_CLOUD_WIND_DRIFT :: 0.8
+WEATHER_LIGHTNING_DECAY :: d32.Value(25*d32.SCALE/10)
+GAS_CLOUD_WIND_DRIFT :: d32.Value(8*d32.SCALE/10)
 
 Season :: enum u8 {
 	Spring,
@@ -382,7 +382,10 @@ WorldWeatherUpdate :: proc(w: ^World, deltaTime: f32) {
 			w.weather.lightningFlash = 1
 		}
 	}
-	w.weather.lightningFlash = max(w.weather.lightningFlash-deltaTime*WEATHER_LIGHTNING_DECAY, 0)
+	w.weather.lightningFlash = max(
+		w.weather.lightningFlash-deltaTime*PositionToF32(WEATHER_LIGHTNING_DECAY),
+		0,
+	)
 
 	weatherEffects := WorldWeatherEffects(w)
 	active := w.weather.value > d32.FromRatio(1, 5)
@@ -431,8 +434,8 @@ WorldWeatherUpdate :: proc(w: ^World, deltaTime: f32) {
 			w,
 			unitSlot,
 			damage,
-			UnitX(w, unitSlot),
-			UnitY(w, unitSlot),
+			w.units.x[unitSlot],
+			w.units.y[unitSlot],
 			.Weather,
 		)
 	}
@@ -1017,9 +1020,9 @@ EnvironmentEventActivate :: proc(w: ^World) {
 	e := &w.environment
 	scaleValue := EnvironmentSeverityScale(e.severity)
 	scale := PositionToF32(scaleValue)
-	centerX := PositionToF32(e.centerX)
-	centerY := PositionToF32(e.centerY)
-	radius := PositionToF32(e.radius)
+	centerX := e.centerX
+	centerY := e.centerY
+	radius := e.radius
 	switch e.kind {
 	case .Wildfire:
 		EnvironmentFireBurst(w, centerX, centerY, radius, 5+int(scale*6))
@@ -1030,8 +1033,8 @@ EnvironmentEventActivate :: proc(w: ^World) {
 			centerY,
 			radius,
 			.Flood,
-			20+10*scale,
-			30+15*scale,
+			d32.Add(d32.FromInt(20), d32.Mul(d32.FromInt(10), scaleValue)),
+			d32.Add(d32.FromInt(30), d32.Mul(d32.FromInt(15), scaleValue)),
 			u64(e.sequence)+0xF100,
 		)
 	case .Hurricane:
@@ -1041,8 +1044,8 @@ EnvironmentEventActivate :: proc(w: ^World) {
 			centerY,
 			radius,
 			.Flood,
-			25+12*scale,
-			35+18*scale,
+			d32.Add(d32.FromInt(25), d32.Mul(d32.FromInt(12), scaleValue)),
+			d32.Add(d32.FromInt(35), d32.Mul(d32.FromInt(18), scaleValue)),
 			u64(e.sequence)+0xF101,
 		)
 		EnvironmentDamageArea(
@@ -1064,7 +1067,12 @@ EnvironmentEventActivate :: proc(w: ^World) {
 			d32.Mul(d32.FromInt(70), scaleValue),
 			.Area,
 		)
-		DecorationBlastBurst(w, centerX, centerY, radius*0.8)
+		DecorationBlastBurst(
+			w,
+			PositionToF32(centerX),
+			PositionToF32(centerY),
+			PositionToF32(d32.Mul(radius, d32.FromRatio(8, 10))),
+		)
 		WorldTerrainQuakeApply(w, centerX, centerY, radius, u64(e.sequence)+0x9E01)
 	case .Eruption:
 		EnvironmentDamageArea(
@@ -1077,14 +1085,26 @@ EnvironmentEventActivate :: proc(w: ^World) {
 			.Fire,
 		)
 		EnvironmentFireBurst(w, centerX, centerY, radius, 10+int(scale*8))
-		DecorationBlastBurst(w, centerX, centerY, radius)
+		DecorationBlastBurst(w, PositionToF32(centerX), PositionToF32(centerY), PositionToF32(radius))
 		WorldTerrainEruptionApply(w, centerX, centerY, radius, u64(e.sequence)+0x9E02)
 	case .MeteorShower:
 		EnvironmentMeteorImpact(w)
 	case .Blizzard:
-		WorldTerrainFreezeApply(w, centerX, centerY, radius*1.4, u64(e.sequence)+0x9E03)
+		WorldTerrainFreezeApply(
+			w,
+			centerX,
+			centerY,
+			d32.Mul(radius, d32.FromRatio(14, 10)),
+			u64(e.sequence)+0x9E03,
+		)
 	case .Drought:
-		WorldTerrainDroughtApply(w, centerX, centerY, radius*1.6, u64(e.sequence)+0x9E04)
+		WorldTerrainDroughtApply(
+			w,
+			centerX,
+			centerY,
+			d32.Mul(radius, d32.FromRatio(16, 10)),
+			u64(e.sequence)+0x9E04,
+		)
 	case .Locusts:
 	}
 }
@@ -1096,9 +1116,9 @@ EnvironmentEventTick :: proc(w: ^World, deltaTime: f32) {
 	e.tick = EnvironmentEventTickSeconds(e.kind)
 	scaleValue := EnvironmentSeverityScale(e.severity)
 	scale := PositionToF32(scaleValue)
-	centerX := PositionToF32(e.centerX)
-	centerY := PositionToF32(e.centerY)
-	radius := PositionToF32(e.radius)
+	centerX := e.centerX
+	centerY := e.centerY
+	radius := e.radius
 
 	switch e.kind {
 	case .Wildfire:
@@ -1194,8 +1214,7 @@ EnvironmentEventTownFactors :: proc(
 	return
 }
 
-// Unit-disc offset from deterministic d32 arithmetic; callers scale by the
-// effect's existing f32 radius at the boundary.
+// Unit-disc offset in Q16.16; callers scale it by the effect radius.
 @(private = "file")
 EnvironmentPlacementOffset :: proc(turnRoll, radiusRoll: u32) -> (d32.Value, d32.Value) {
 	turns := d32.FromRatio(i32(turnRoll), 1_000_000)
@@ -1205,15 +1224,28 @@ EnvironmentPlacementOffset :: proc(turnRoll, radiusRoll: u32) -> (d32.Value, d32
 	return d32.Mul(cosine, distance), d32.Mul(sine, distance)
 }
 
-EnvironmentFireBurst :: proc(w: ^World, x, y, radius: f32, count: int) {
+EnvironmentFireBurst :: proc(w: ^World, x, y, radius: d32.Value, count: int) {
 	if count <= 0 do return
 	salt := int(WorldCurrentTick(w)*2)
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	for i in 0..<count {
 		turnRoll := WorldNoiseHashInt(i, int(w.environment.sequence)+salt, w.seed+0x3A1)
 		radiusRoll := WorldNoiseHashInt(i, int(w.environment.sequence)+salt+7, w.seed+0x3A3)
 		offsetX, offsetY := EnvironmentPlacementOffset(turnRoll, radiusRoll)
-		fx := WorldWrapPosition(x+f32(d32.Raw(offsetX))/f32(d32.SCALE)*radius, f32(w.maxX))
-		fy := WorldWrapPosition(y+f32(d32.Raw(offsetY))/f32(d32.SCALE)*radius, f32(w.maxY))
+		fx, validX := d32.AddRawWrapped(
+			i64(d32.Raw(x)),
+			i64(d32.Raw(d32.Mul(offsetX, radius))),
+			d32.ZERO,
+			worldWidthRaw,
+		)
+		fy, validY := d32.AddRawWrapped(
+			i64(d32.Raw(y)),
+			i64(d32.Raw(d32.Mul(offsetY, radius))),
+			d32.ZERO,
+			worldHeightRaw,
+		)
+		if !validX || !validY do continue
 		WorldFireIgnite(w, fx, fy, 1.0, 1.0)
 	}
 }
@@ -1222,50 +1254,59 @@ EnvironmentMeteorImpact :: proc(w: ^World) {
 	e := &w.environment
 	scaleValue := EnvironmentSeverityScale(e.severity)
 	scale := PositionToF32(scaleValue)
-	centerX := PositionToF32(e.centerX)
-	centerY := PositionToF32(e.centerY)
-	radius := PositionToF32(e.radius)
 	tick := PositionToF32(e.tick)
 	turnRoll := WorldNoiseHashInt(int(tick*17)+int(e.sequence), int(WorldCurrentTick(w)), w.seed+0x4A1)
 	radiusRoll := WorldNoiseHashInt(int(e.sequence), int(WorldCurrentTick(w)), w.seed+0x4A3)
 	offsetX, offsetY := EnvironmentPlacementOffset(turnRoll, radiusRoll)
-	x := WorldWrapPosition(centerX+f32(d32.Raw(offsetX))/f32(d32.SCALE)*radius, f32(w.maxX))
-	y := WorldWrapPosition(centerY+f32(d32.Raw(offsetY))/f32(d32.SCALE)*radius, f32(w.maxY))
+	worldWidthRaw := i64(w.maxX)*d32.SCALE
+	worldHeightRaw := i64(w.maxY)*d32.SCALE
+	x, validX := d32.AddRawWrapped(
+		i64(d32.Raw(e.centerX)),
+		i64(d32.Raw(d32.Mul(offsetX, e.radius))),
+		d32.ZERO,
+		worldWidthRaw,
+	)
+	y, validY := d32.AddRawWrapped(
+		i64(d32.Raw(e.centerY)),
+		i64(d32.Raw(d32.Mul(offsetY, e.radius))),
+		d32.ZERO,
+		worldHeightRaw,
+	)
+	if !validX || !validY do return
+	impactRadius := d32.Add(d32.FromRatio(5, 2), scaleValue)
 	EnvironmentDamageArea(
 		w,
 		x,
 		y,
-		2.5+scale,
+		impactRadius,
 		d32.Mul(d32.FromInt(10), scaleValue),
 		d32.Mul(d32.FromInt(45), scaleValue),
 		.Fire,
 	)
-	EnvironmentFireBurst(w, x, y, 2+scale, 3+int(scale*2))
-	DecorationBlastBurst(w, x, y, 2+scale)
-	WorldTerrainMeteorCrater(w, int(x), int(y), u64(e.sequence)+0x3E00)
+	fireRadius := d32.Add(d32.FromInt(2), scaleValue)
+	EnvironmentFireBurst(w, x, y, fireRadius, 3+int(scale*2))
+	DecorationBlastBurst(w, PositionToF32(x), PositionToF32(y), PositionToF32(fireRadius))
+	WorldTerrainMeteorCrater(w, PositionTile(x, int(w.maxX)), PositionTile(y, int(w.maxY)), u64(e.sequence)+0x3E00)
 }
 
 EnvironmentDamageArea :: proc(
 	w: ^World,
-	x, y, radius: f32,
+	x, y, radius: d32.Value,
 	unitDamage, buildingDamage: d32.Value,
 	damageKind: DamageKind,
 ) {
 	chunkSize := w.spatial.chunkSize
 	if chunkSize <= 0 do return
-	worldWidth := f32(w.maxX)
-	worldHeight := f32(w.maxY)
-	centerX := WorldWrapPosition(x, worldWidth)
-	centerY := WorldWrapPosition(y, worldHeight)
-	centerPositionX := PositionFromF32(centerX)
-	centerPositionY := PositionFromF32(centerY)
 	worldWidthRaw := i64(w.maxX)*d32.SCALE
 	worldHeightRaw := i64(w.maxY)*d32.SCALE
-	radiusRaw := UnitRawDistance(radius) // rounded once to the nearest raw unit
+	centerPositionX, validX := d32.WrapRaw(i64(d32.Raw(x)), d32.ZERO, worldWidthRaw)
+	centerPositionY, validY := d32.WrapRaw(i64(d32.Raw(y)), d32.ZERO, worldHeightRaw)
+	if !validX || !validY do return
+	radiusRaw := i64(d32.Raw(radius))
 	radiusSquaredRaw := u64(radiusRaw)*u64(radiusRaw)
-	centerChunkX := int(centerX)/chunkSize
-	centerChunkY := int(centerY)/chunkSize
-	chunkRadius := int(radius)/chunkSize+1
+	centerChunkX := int(d32.ToInt(centerPositionX))/chunkSize
+	centerChunkY := int(d32.ToInt(centerPositionY))/chunkSize
+	chunkRadius := int(d32.ToInt(radius))/chunkSize+1
 
 	for offsetX in -chunkRadius..=chunkRadius {
 		chunkX := WorldWrapCoordinate(centerChunkX+offsetX, w.spatial.chunksX)
@@ -1286,7 +1327,7 @@ EnvironmentDamageArea :: proc(
 						worldHeightRaw,
 					)
 					if validDistance && distanceSquared <= radiusSquaredRaw {
-						UnitApplyDamage(w, slot, unitDamage, centerX, centerY, damageKind)
+						UnitApplyDamage(w, slot, unitDamage, centerPositionX, centerPositionY, damageKind)
 					}
 				}
 				slot = next
@@ -1298,12 +1339,18 @@ EnvironmentDamageArea :: proc(
 				if w.buildingUsed[slot] {
 					distanceSquared, impactX, impactY := WarriorBuildingNearestPointSquared(
 						w,
-						centerX,
-						centerY,
+						centerPositionX,
+						centerPositionY,
 						slot,
 					)
 					if distanceSquared <= radiusSquaredRaw {
-						EnvironmentDamageBuilding(w, slot, buildingDamage, impactX, impactY)
+						EnvironmentDamageBuilding(
+							w,
+							slot,
+							buildingDamage,
+							PositionToF32(impactX),
+							PositionToF32(impactY),
+						)
 					}
 				}
 				slot = next
@@ -1313,9 +1360,9 @@ EnvironmentDamageArea :: proc(
 
 	WorldDecorationAreaDamage(
 		w,
-		centerX,
-		centerY,
-		PositionFromF32(radius),
+		centerPositionX,
+		centerPositionY,
+		radius,
 		d32.Mul(buildingDamage, d32.HALF),
 	)
 }
@@ -1502,20 +1549,19 @@ TownHasNearbyEnemy :: proc(
 	worldWidthRaw := i64(w.maxX)*d32.SCALE
 	worldHeightRaw := i64(w.maxY)*d32.SCALE
 	// The hall footprint is a box, so the unit delta is shrunk by its half size.
-	halfFootprintRawX := UnitRawDistance(f32(width-1)*0.5)
-	halfFootprintRawY := UnitRawDistance(f32(height-1)*0.5)
+	halfFootprintRawX := i64(width-1)*(d32.SCALE/2)
+	halfFootprintRawY := i64(height-1)*(d32.SCALE/2)
 
 	for circleIndex in 0..<TownAreaCircleCount(w, kingdom, townSlot) {
 		circleX, circleY, circleRadius := TownAreaCircle(w, kingdom, townSlot, circleIndex)
-		centerX := f32(circleX)+f32(width-1)*0.5
-		centerY := f32(circleY)+f32(height-1)*0.5
-		radius := f32(circleRadius)*TOWN_ALARM_AREA_FACTOR
-		radiusRaw := UnitRawDistance(radius)
+		radius := d32.Mul(d32.FromInt(i32(circleRadius)), TOWN_ALARM_AREA_FACTOR)
+		radiusRaw := i64(d32.Raw(radius))
 		radiusSquaredRaw := u64(radiusRaw)*u64(radiusRaw)
-		centerPositionX := PositionFromF32(centerX)
-		centerPositionY := PositionFromF32(centerY)
-		chunkRadius := int((radius+f32(max(width, height)))/f32(chunkSize))+1
-		centerChunkX, centerChunkY := int(centerX)/chunkSize, int(centerY)/chunkSize
+		centerPositionX := d32.FromRaw(i32(i64(circleX)*d32.SCALE+halfFootprintRawX))
+		centerPositionY := d32.FromRaw(i32(i64(circleY)*d32.SCALE+halfFootprintRawY))
+		chunkExtentRaw := radiusRaw+i64(max(width, height))*d32.SCALE
+		chunkRadius := int(chunkExtentRaw/(i64(chunkSize)*d32.SCALE))+1
+		centerChunkX, centerChunkY := int(d32.ToInt(centerPositionX))/chunkSize, int(d32.ToInt(centerPositionY))/chunkSize
 		for offsetX in 0..<min(chunkRadius*2+1, w.spatial.chunksX) {
 			chunkX := WorldWrapCoordinate(centerChunkX-chunkRadius+offsetX, w.spatial.chunksX)
 			for offsetY in 0..<min(chunkRadius*2+1, w.spatial.chunksY) {
@@ -1915,7 +1961,7 @@ WorldConversionAssign :: proc(w: ^World) {
 		case WarriorIdle, WarriorGarrison:
 		}
 		if !UnitIsWarrior(unit.type) && UnitKindOf(unit.type) != .CombatBuilder {
-			if town.alarmActive || UnitFindNearbyEnemy(w, unitSlot, FLEE_THREAT_RADIUS) >= 0 do continue
+			if town.alarmActive || UnitFindNearbyEnemy(w, unitSlot, d32.FromInt(FLEE_THREAT_RADIUS)) >= 0 do continue
 			if state, pacific := unit.state.(StatePacific); pacific && (state == .Hiding || state == .Fleeing) do continue
 		}
 
@@ -2144,7 +2190,7 @@ TownWaterAccess :: proc(w: ^World, kingdomSlot, townSlot: int) -> d32.Value {
 		for offsetY in -radius..=radius {
 			y := WorldWrapCoordinate(centerY+offsetY, worldHeight)
 			tileType := WorldTileAt(w, x, y).type
-			if TILE_DEFS[tileType].water <= 0 do continue
+			if TILE_DEFS[tileType].water <= d32.ZERO do continue
 			distanceSquared := offsetX*offsetX + offsetY*offsetY
 			if !foundWater || distanceSquared < nearestDistanceSquared {
 				nearestDistanceSquared = distanceSquared

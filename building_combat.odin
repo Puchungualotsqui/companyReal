@@ -366,7 +366,7 @@ CombatBuilderPatrol :: proc(w: ^World, unitSlot, kingdomSlot, townSlot: int, del
 	speed := UnitDefaultSpeed(unit.type)
 	if unit.effects[.NoWater] do speed = d32.Mul(speed, d32.FromRatio(7, 10))
 	reached, blocked, _ := UnitStepTowards(w, unitSlot,
-		TileCenterRaw(unit.pathTargetX), TileCenterRaw(unit.pathTargetY), d32.Mul(speed, PositionFromF32(deltaTime)))
+		TileCenterPosition(unit.pathTargetX), TileCenterPosition(unit.pathTargetY), d32.Mul(speed, PositionFromF32(deltaTime)))
 	if reached || blocked do unit.pathReady = false
 }
 
@@ -390,7 +390,7 @@ CombatBuilderDefend :: proc(w: ^World, unitSlot: int, deltaTime: f32) -> bool {
 
 	unit.cooldown = UnitDefaultCooldown(unit.type)
 	UnitAttackBurst(w, unitSlot, UnitX(w, target), UnitY(w, target))
-	UnitApplyDamage(w, target, UnitDefaultDamage(unit.type), UnitX(w, unitSlot), UnitY(w, unitSlot), .Melee)
+	UnitApplyDamage(w, target, UnitDefaultDamage(unit.type), unit.x, unit.y, .Melee)
 	return true
 }
 

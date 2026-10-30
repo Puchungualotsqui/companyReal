@@ -22,33 +22,33 @@ TERRAIN_SEED :: u64(0x5EED_7E44_A1)
 TileDef :: struct {
 	name:        cstring,
 	moveCost:    d32.Value,
-	wood:        f32,
+	wood:        d32.Value,
 	food:        d32.Value,
-	water:       f32,
-	fireRisk:    f32,
-	visionCover: f32,
+	water:       d32.Value,
+	fireRisk:    d32.Value,
+	visionCover: d32.Value,
 	buildable:   bool,
 	passable:    bool,
 }
 
 TILE_DEFS := [TileType]TileDef{
-	.Ocean = {"Ocean", d32.Value(d32.SCALE), 0.0, d32.ZERO, 0.0, 0.00, 0.0, false, false},
-	.Lake = {"Lake", d32.Value(d32.SCALE), 0.0, d32.ZERO, 1.0, 0.00, 0.0, false, false},
-	.River = {"River", d32.Value(d32.SCALE), 0.0, d32.ZERO, 0.9, 0.00, 0.0, false, true},
-	.Ice = {"Ice", d32.Value(115*d32.SCALE/100), 0.0, d32.ZERO, 0.4, 0.00, 0.0, false, true},
-	.Marsh = {"Marsh", d32.Value(160*d32.SCALE/100), 0.3, d32.Value(30*d32.SCALE/100), 0.5, 0.35, 1.2, true, true},
-	.Sand = {"Sand", d32.Value(110*d32.SCALE/100), 0.0, d32.Value(10*d32.SCALE/100), 0.0, 0.00, 0.0, true, true},
-	.Grassland = {"Grassland", d32.Value(d32.SCALE), 0.1, d32.Value(60*d32.SCALE/100), 0.0, 0.70, 0.1, true, true},
-	.Plains = {"Plains", d32.Value(d32.SCALE), 0.1, d32.Value(d32.SCALE), 0.0, 0.85, 0.0, true, true},
-	.Forest = {"Forest", d32.Value(135*d32.SCALE/100), 1.0, d32.Value(40*d32.SCALE/100), 0.0, 1.00, 1.0, true, true},
-	.Taiga = {"Taiga", d32.Value(140*d32.SCALE/100), 0.8, d32.Value(20*d32.SCALE/100), 0.0, 0.70, 0.9, true, true},
-	.Steppe = {"Steppe", d32.Value(95*d32.SCALE/100), 0.0, d32.Value(45*d32.SCALE/100), 0.0, 1.10, 0.0, true, true},
-	.Hill = {"Hill", d32.Value(140*d32.SCALE/100), 0.2, d32.Value(20*d32.SCALE/100), 0.0, 0.40, 0.5, true, true},
-	.Mountain = {"Mountain", d32.Value(d32.SCALE), 0.0, d32.ZERO, 0.0, 0.00, 1.4, false, false},
-	.Desert = {"Desert", d32.Value(125*d32.SCALE/100), 0.0, d32.Value(5*d32.SCALE/100), 0.0, 0.10, 0.0, true, true},
-	.Tundra = {"Tundra", d32.Value(130*d32.SCALE/100), 0.0, d32.Value(10*d32.SCALE/100), 0.0, 0.20, 0.0, true, true},
-	.Ash = {"Ash", d32.Value(110*d32.SCALE/100), 0.0, d32.Value(30*d32.SCALE/100), 0.0, 0.00, 0.0, true, true},
-	.Lava = {"Lava", d32.Value(d32.SCALE), 0.0, d32.ZERO, 0.0, 0.00, 0.0, false, false},
+	.Ocean = {"Ocean", d32.Value(d32.SCALE), d32.ZERO, d32.ZERO, d32.ZERO, d32.ZERO, d32.ZERO, false, false},
+	.Lake = {"Lake", d32.Value(d32.SCALE), d32.ZERO, d32.ZERO, d32.ONE, d32.ZERO, d32.ZERO, false, false},
+	.River = {"River", d32.Value(d32.SCALE), d32.ZERO, d32.ZERO, d32.Value(9*d32.SCALE/10), d32.ZERO, d32.ZERO, false, true},
+	.Ice = {"Ice", d32.Value(115*d32.SCALE/100), d32.ZERO, d32.ZERO, d32.Value(4*d32.SCALE/10), d32.ZERO, d32.ZERO, false, true},
+	.Marsh = {"Marsh", d32.Value(160*d32.SCALE/100), d32.Value(3*d32.SCALE/10), d32.Value(30*d32.SCALE/100), d32.HALF, d32.Value(35*d32.SCALE/100), d32.Value(12*d32.SCALE/10), true, true},
+	.Sand = {"Sand", d32.Value(110*d32.SCALE/100), d32.ZERO, d32.Value(10*d32.SCALE/100), d32.ZERO, d32.ZERO, d32.ZERO, true, true},
+	.Grassland = {"Grassland", d32.Value(d32.SCALE), d32.Value(d32.SCALE/10), d32.Value(60*d32.SCALE/100), d32.ZERO, d32.Value(70*d32.SCALE/100), d32.Value(d32.SCALE/10), true, true},
+	.Plains = {"Plains", d32.Value(d32.SCALE), d32.Value(d32.SCALE/10), d32.Value(d32.SCALE), d32.ZERO, d32.Value(85*d32.SCALE/100), d32.ZERO, true, true},
+	.Forest = {"Forest", d32.Value(135*d32.SCALE/100), d32.ONE, d32.Value(40*d32.SCALE/100), d32.ZERO, d32.ONE, d32.ONE, true, true},
+	.Taiga = {"Taiga", d32.Value(140*d32.SCALE/100), d32.Value(8*d32.SCALE/10), d32.Value(20*d32.SCALE/100), d32.ZERO, d32.Value(70*d32.SCALE/100), d32.Value(9*d32.SCALE/10), true, true},
+	.Steppe = {"Steppe", d32.Value(95*d32.SCALE/100), d32.ZERO, d32.Value(45*d32.SCALE/100), d32.ZERO, d32.Value(110*d32.SCALE/100), d32.ZERO, true, true},
+	.Hill = {"Hill", d32.Value(140*d32.SCALE/100), d32.Value(2*d32.SCALE/10), d32.Value(20*d32.SCALE/100), d32.ZERO, d32.Value(40*d32.SCALE/100), d32.HALF, true, true},
+	.Mountain = {"Mountain", d32.Value(d32.SCALE), d32.ZERO, d32.ZERO, d32.ZERO, d32.ZERO, d32.Value(14*d32.SCALE/10), false, false},
+	.Desert = {"Desert", d32.Value(125*d32.SCALE/100), d32.ZERO, d32.Value(5*d32.SCALE/100), d32.ZERO, d32.Value(10*d32.SCALE/100), d32.ZERO, true, true},
+	.Tundra = {"Tundra", d32.Value(130*d32.SCALE/100), d32.ZERO, d32.Value(10*d32.SCALE/100), d32.ZERO, d32.Value(20*d32.SCALE/100), d32.ZERO, true, true},
+	.Ash = {"Ash", d32.Value(110*d32.SCALE/100), d32.ZERO, d32.Value(30*d32.SCALE/100), d32.ZERO, d32.ZERO, d32.ZERO, true, true},
+	.Lava = {"Lava", d32.Value(d32.SCALE), d32.ZERO, d32.ZERO, d32.ZERO, d32.ZERO, d32.ZERO, false, false},
 }
 
 TileIsWater :: proc(kind: TileType) -> bool {
@@ -615,7 +615,7 @@ WorldHazardSpawnCell :: proc(
 	w: ^World,
 	tileX, tileY: int,
 	kind: HazardKind,
-	duration: f32,
+	duration: d32.Value,
 	seed: u64,
 ) -> int {
 	worldWidth := int(w.maxX)
@@ -639,9 +639,8 @@ WorldHazardSpawnCell :: proc(
 	w.hazardCells.x[slot] = wrappedX
 	w.hazardCells.y[slot] = wrappedY
 	w.hazardCells.kind[slot] = kind
-	lifetime := PositionFromF32(duration)
-	w.hazardCells.remaining[slot] = lifetime
-	w.hazardCells.duration[slot] = lifetime
+	w.hazardCells.remaining[slot] = duration
+	w.hazardCells.duration[slot] = duration
 	w.hazardCells.seed[slot] = seed
 	w.hazardCells.stage[slot] = .Solid
 	w.hazardUsed[slot] = true
@@ -700,17 +699,17 @@ WorldHazardDespawn :: proc(w: ^World, slot: int) {
 
 WorldHazardSpawnCircle :: proc(
 	w: ^World,
-	centerX, centerY, radius: f32,
+	centerX, centerY, radius: d32.Value,
 	kind: HazardKind,
-	minDuration, maxDuration: f32,
+	minDuration, maxDuration: d32.Value,
 	salt: u64,
 ) {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
-	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
-	tileCenterX := int(WorldWrapPosition(centerX, f32(worldWidth)))
-	tileCenterY := int(WorldWrapPosition(centerY, f32(worldHeight)))
-	radiusRaw := UnitRawDistance(radius) // rounded once to the nearest raw unit
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= d32.ZERO do return
+	tileCenterX := PositionTile(centerX, worldWidth)
+	tileCenterY := PositionTile(centerY, worldHeight)
+	radiusRaw := i64(d32.Raw(radius))
 	radiusSquared := radiusRaw*radiusRaw
 	reach := int((radiusRaw+d32.SCALE-1)/d32.SCALE)
 	spawned := 0
@@ -731,8 +730,8 @@ WorldHazardSpawnCircle :: proc(
 				WorldFireExtinguishAt(w, tileX, tileY)
 			}
 
-			roll := WorldNoiseHash(tileX, tileY, salt)
-			duration := minDuration+roll*(maxDuration-minDuration)
+			roll := d32.FromRatio(i32(WorldNoiseHashInt(tileX, tileY, salt)), 1_000_000)
+			duration := d32.Add(minDuration, d32.Mul(roll, d32.Sub(maxDuration, minDuration)))
 			if WorldHazardSpawnCell(w, tileX, tileY, kind, duration, salt+u64(tileX*31+tileY)) >= 0 {
 				spawned += 1
 			}
@@ -742,11 +741,14 @@ WorldHazardSpawnCircle :: proc(
 
 	w.navigationRevision += 1
 	w.pathRevision += 1
+	effectX := PositionToF32(centerX)
+	effectY := PositionToF32(centerY)
+	effectRadius := PositionToF32(radius)
 	for _ in 0..<10 {
 		angle := PRandom(w)*6.2831853
-		distance := radius*math.sqrt(PRandom(w))*0.8
-		x := centerX+math.cos(angle)*distance
-		y := centerY+math.sin(angle)*distance
+		distance := effectRadius*math.sqrt(PRandom(w))*0.8
+		x := effectX+math.cos(angle)*distance
+		y := effectY+math.sin(angle)*distance
 		if kind == .Flood {
 			ParticleSpawn(w, Particle{
 				x = x,
@@ -896,8 +898,8 @@ WorldHazardUpdate :: proc(w: ^World, deltaTime: f32) {
 				w,
 				unitSlot,
 				d32.Mul(FLOOD_DROWN_DAMAGE_PER_SECOND, step),
-				UnitX(w, unitSlot),
-				UnitY(w, unitSlot),
+				w.units.x[unitSlot],
+				w.units.y[unitSlot],
 				.Drowning,
 			)
 		}
@@ -1017,7 +1019,7 @@ WorldTerrainTransform :: proc(
 	x, y: int,
 	to: TileType,
 	scar: TerrainScar,
-	seconds: f32,
+	seconds: d32.Value,
 ) -> bool {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
@@ -1038,7 +1040,7 @@ WorldTerrainTransform :: proc(
 	if tile.scar != .None && tile.scar != .Enriched do original = tile.scarFrom
 	wasScarred := tile.scar != .None
 
-	lifetime := PositionFromF32(seconds)
+	lifetime := seconds
 	if tile.type == to && tile.scar == scar {
 		tile.scarTimer = max(tile.scarTimer, lifetime)
 		return true
@@ -1268,16 +1270,16 @@ WorldTerrainFloodEnrich :: proc(w: ^World, x, y: int) {
 	case .Ocean, .Lake, .River, .Ice, .Plains, .Forest, .Taiga, .Hill, .Mountain, .Tundra, .Lava:
 		return
 	}
-	WorldTerrainTransform(w, wrappedX, wrappedY, target, .Enriched, ENRICHED_SECONDS)
+	WorldTerrainTransform(w, wrappedX, wrappedY, target, .Enriched, d32.FromInt(ENRICHED_SECONDS))
 }
 
-WorldTerrainDroughtApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: u64) {
+WorldTerrainDroughtApply :: proc(w: ^World, centerX, centerY, radius: d32.Value, salt: u64) {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
-	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
-	centerTileX := int(WorldWrapPosition(centerX, f32(worldWidth)))
-	centerTileY := int(WorldWrapPosition(centerY, f32(worldHeight)))
-	radiusRaw := UnitRawDistance(radius) // rounded once to the nearest raw unit
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= d32.ZERO do return
+	centerTileX := PositionTile(centerX, worldWidth)
+	centerTileY := PositionTile(centerY, worldHeight)
+	radiusRaw := i64(d32.Raw(radius))
 	radiusSquared := radiusRaw*radiusRaw
 	reach := int((radiusRaw+d32.SCALE-1)/d32.SCALE)
 	for offsetX in -reach..=reach {
@@ -1290,9 +1292,11 @@ WorldTerrainDroughtApply :: proc(w: ^World, centerX, centerY, radius: f32, salt:
 			tile := &w.ground[x][y]
 			if tile.scar != .None do continue
 			rollInt := WorldNoiseHashInt(x, y, salt+0xD0D0)
-			roll := f32(rollInt)/1_000_000.0
-			seconds := PARCHED_MIN_SECONDS+
-				roll*(PARCHED_MAX_SECONDS-PARCHED_MIN_SECONDS)
+			roll := d32.FromRatio(i32(rollInt), 1_000_000)
+			seconds := d32.Add(
+				d32.FromInt(PARCHED_MIN_SECONDS),
+				d32.Mul(roll, d32.FromInt(PARCHED_MAX_SECONDS-PARCHED_MIN_SECONDS)),
+			)
 			switch tile.type {
 			case .River:
 				if rollInt < 800_000 {
@@ -1316,13 +1320,13 @@ WorldTerrainDroughtApply :: proc(w: ^World, centerX, centerY, radius: f32, salt:
 	}
 }
 
-WorldTerrainFreezeApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: u64) {
+WorldTerrainFreezeApply :: proc(w: ^World, centerX, centerY, radius: d32.Value, salt: u64) {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
-	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
-	centerTileX := int(WorldWrapPosition(centerX, f32(worldWidth)))
-	centerTileY := int(WorldWrapPosition(centerY, f32(worldHeight)))
-	radiusRaw := UnitRawDistance(radius) // rounded once to the nearest raw unit
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= d32.ZERO do return
+	centerTileX := PositionTile(centerX, worldWidth)
+	centerTileY := PositionTile(centerY, worldHeight)
+	radiusRaw := i64(d32.Raw(radius))
 	radiusSquared := radiusRaw*radiusRaw
 	reach := int((radiusRaw+d32.SCALE-1)/d32.SCALE)
 	for offsetX in -reach..=reach {
@@ -1334,8 +1338,11 @@ WorldTerrainFreezeApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: 
 			if w.tileBuilding[x*worldHeight+y] >= 0 do continue
 			tile := &w.ground[x][y]
 			if tile.scar != .None do continue
-			roll := WorldNoiseHash(x, y, salt+0xF0F0)
-			seconds := FROZEN_MIN_SECONDS+roll*(FROZEN_MAX_SECONDS-FROZEN_MIN_SECONDS)
+			roll := d32.FromRatio(i32(WorldNoiseHashInt(x, y, salt+0xF0F0)), 1_000_000)
+			seconds := d32.Add(
+				d32.FromInt(FROZEN_MIN_SECONDS),
+				d32.Mul(roll, d32.FromInt(FROZEN_MAX_SECONDS-FROZEN_MIN_SECONDS)),
+			)
 			switch tile.type {
 			case .Lake, .River, .Marsh:
 				WorldTerrainTransform(w, x, y, .Ice, .Frozen, seconds)
@@ -1345,13 +1352,13 @@ WorldTerrainFreezeApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: 
 	}
 }
 
-WorldTerrainQuakeApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: u64) {
+WorldTerrainQuakeApply :: proc(w: ^World, centerX, centerY, radius: d32.Value, salt: u64) {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
-	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
-	centerTileX := int(WorldWrapPosition(centerX, f32(worldWidth)))
-	centerTileY := int(WorldWrapPosition(centerY, f32(worldHeight)))
-	radiusRaw := UnitRawDistance(radius) // rounded once to the nearest raw unit
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= d32.ZERO do return
+	centerTileX := PositionTile(centerX, worldWidth)
+	centerTileY := PositionTile(centerY, worldHeight)
+	radiusRaw := i64(d32.Raw(radius))
 	radiusSquared := radiusRaw*radiusRaw
 	reach := int((radiusRaw+d32.SCALE-1)/d32.SCALE)
 	for offsetX in -reach..=reach {
@@ -1364,8 +1371,11 @@ WorldTerrainQuakeApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: u
 			tile := &w.ground[x][y]
 			if tile.scar != .None do continue
 			rollInt := WorldNoiseHashInt(x, y, salt+0xC1EA)
-			roll := f32(rollInt)/1_000_000.0
-			seconds := CLEFT_MIN_SECONDS+roll*(CLEFT_MAX_SECONDS-CLEFT_MIN_SECONDS)
+			roll := d32.FromRatio(i32(rollInt), 1_000_000)
+			seconds := d32.Add(
+				d32.FromInt(CLEFT_MIN_SECONDS),
+				d32.Mul(roll, d32.FromInt(CLEFT_MAX_SECONDS-CLEFT_MIN_SECONDS)),
+			)
 			switch tile.type {
 			case .Grassland, .Plains, .Steppe, .Forest, .Taiga, .Tundra, .Desert, .Sand, .Marsh, .Ash:
 				if rollInt < 240_000 {
@@ -1381,16 +1391,17 @@ WorldTerrainQuakeApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: u
 	}
 }
 
-WorldTerrainEruptionApply :: proc(w: ^World, centerX, centerY, radius: f32, salt: u64) {
+WorldTerrainEruptionApply :: proc(w: ^World, centerX, centerY, radius: d32.Value, salt: u64) {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
-	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
-	centerTileX := int(WorldWrapPosition(centerX, f32(worldWidth)))
-	centerTileY := int(WorldWrapPosition(centerY, f32(worldHeight)))
-	radiusRaw := UnitRawDistance(radius) // rounded once to the nearest raw unit
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= d32.ZERO do return
+	centerTileX := PositionTile(centerX, worldWidth)
+	centerTileY := PositionTile(centerY, worldHeight)
+	radiusRaw := i64(d32.Raw(radius))
 	radiusSquared := radiusRaw*radiusRaw
 	reach := int((radiusRaw+d32.SCALE-1)/d32.SCALE)
-	lavaRadiusRaw := UnitRawDistance(max(radius*0.45, 1.5))
+	lavaRadius := max(d32.Mul(radius, d32.FromRatio(45, 100)), d32.FromRatio(3, 2))
+	lavaRadiusRaw := i64(d32.Raw(lavaRadius))
 	lavaRadiusSquared := lavaRadiusRaw*lavaRadiusRaw
 	for offsetX in -reach..=reach {
 		for offsetY in -reach..=reach {
@@ -1402,23 +1413,28 @@ WorldTerrainEruptionApply :: proc(w: ^World, centerX, centerY, radius: f32, salt
 			tile := &w.ground[x][y]
 			if tile.scar != .None do continue
 			rollInt := WorldNoiseHashInt(x, y, salt+0xE402)
-			roll := f32(rollInt)/1_000_000.0
+			roll := d32.FromRatio(i32(rollInt), 1_000_000)
 			lavaRoll := WorldNoiseHashInt(x, y, salt+0xE401)
 			switch tile.type {
 			case .Ocean, .Lake, .River, .Ice, .Lava:
 				continue
 			case .Mountain, .Hill:
 				if distanceSquared <= i128(lavaRadiusSquared) && lavaRoll < 550_000 {
-					WorldTerrainTransform(w, x, y, .Lava, .Volcanic, 40+roll*40)
+					seconds := d32.Add(d32.FromInt(40), d32.Mul(roll, d32.FromInt(40)))
+					WorldTerrainTransform(w, x, y, .Lava, .Volcanic, seconds)
 				}
 			case .Grassland, .Plains, .Steppe, .Forest, .Taiga, .Tundra, .Desert, .Sand, .Marsh, .Ash:
 				if distanceSquared <= i128(lavaRadiusSquared) && lavaRoll < 650_000 {
-					seconds := VOLCANIC_MIN_SECONDS+
-						roll*(VOLCANIC_MAX_SECONDS-VOLCANIC_MIN_SECONDS)
+					seconds := d32.Add(
+						d32.FromInt(VOLCANIC_MIN_SECONDS),
+						d32.Mul(roll, d32.FromInt(VOLCANIC_MAX_SECONDS-VOLCANIC_MIN_SECONDS)),
+					)
 					WorldTerrainTransform(w, x, y, .Lava, .Volcanic, seconds)
 				} else if rollInt < 500_000 {
-					seconds := SCORCHED_MIN_SECONDS+
-						roll*(SCORCHED_MAX_SECONDS-SCORCHED_MIN_SECONDS)
+					seconds := d32.Add(
+						d32.FromInt(SCORCHED_MIN_SECONDS),
+						d32.Mul(roll, d32.FromInt(SCORCHED_MAX_SECONDS-SCORCHED_MIN_SECONDS)),
+					)
 					WorldTerrainTransform(w, x, y, .Ash, .Scorched, seconds)
 				}
 			}
@@ -1426,13 +1442,13 @@ WorldTerrainEruptionApply :: proc(w: ^World, centerX, centerY, radius: f32, salt
 	}
 }
 
-WorldTerrainLavaSpread :: proc(w: ^World, centerX, centerY, radius: f32, salt: u64) {
+WorldTerrainLavaSpread :: proc(w: ^World, centerX, centerY, radius: d32.Value, salt: u64) {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
-	if worldWidth <= 0 || worldHeight <= 0 || radius <= 0 do return
-	centerTileX := int(WorldWrapPosition(centerX, f32(worldWidth)))
-	centerTileY := int(WorldWrapPosition(centerY, f32(worldHeight)))
-	radiusValue := PositionFromF32(radius)
+	if worldWidth <= 0 || worldHeight <= 0 || radius <= d32.ZERO do return
+	centerTileX := PositionTile(centerX, worldWidth)
+	centerTileY := PositionTile(centerY, worldHeight)
+	radiusValue := radius
 	tick := int(WorldCurrentTick(w))
 	for attempt in 0..<3 {
 		turns := d32.FromRatio(i32(WorldNoiseHashInt(attempt, tick, salt+0xEA12)), 1_000_000)
@@ -1450,8 +1466,11 @@ WorldTerrainLavaSpread :: proc(w: ^World, centerX, centerY, radius: f32, salt: u
 		case .Ocean, .Lake, .River, .Ice, .Lava:
 			continue
 		case .Grassland, .Plains, .Steppe, .Forest, .Taiga, .Tundra, .Desert, .Sand, .Marsh, .Ash, .Hill, .Mountain:
-			seconds := VOLCANIC_MIN_SECONDS+
-				WorldNoiseHash(x, y, salt+0xEA14)*(VOLCANIC_MAX_SECONDS-VOLCANIC_MIN_SECONDS)
+			roll := d32.FromRatio(i32(WorldNoiseHashInt(x, y, salt+0xEA14)), 1_000_000)
+			seconds := d32.Add(
+				d32.FromInt(VOLCANIC_MIN_SECONDS),
+				d32.Mul(roll, d32.FromInt(VOLCANIC_MAX_SECONDS-VOLCANIC_MIN_SECONDS)),
+			)
 			WorldTerrainTransform(w, x, y, .Lava, .Volcanic, seconds)
 		}
 	}
@@ -1475,9 +1494,11 @@ WorldTerrainMeteorCrater :: proc(w: ^World, x, y: int, salt: u64) {
 			case .Grassland, .Plains, .Steppe, .Forest, .Taiga, .Tundra, .Desert, .Sand, .Marsh, .Ash, .Hill:
 				rollInt := WorldNoiseHashInt(wrappedX, wrappedY, salt+0x3E11)
 				if rollInt < 800_000 {
-					roll := f32(rollInt)/1_000_000.0
-					seconds := SCORCHED_MIN_SECONDS+
-						roll*(SCORCHED_MAX_SECONDS-SCORCHED_MIN_SECONDS)
+					roll := d32.FromRatio(i32(rollInt), 1_000_000)
+					seconds := d32.Add(
+						d32.FromInt(SCORCHED_MIN_SECONDS),
+						d32.Mul(roll, d32.FromInt(SCORCHED_MAX_SECONDS-SCORCHED_MIN_SECONDS)),
+					)
 					WorldTerrainTransform(w, wrappedX, wrappedY, .Ash, .Scorched, seconds)
 				}
 			}
@@ -1501,8 +1522,8 @@ WorldTerrainLavaUpdate :: proc(w: ^World, deltaTime: f32) {
 			w,
 			unitSlot,
 			d32.Mul(LAVA_DAMAGE_PER_SECOND, step),
-			TileCenterRaw(tileX),
-			TileCenterRaw(tileY),
+			TileCenterPosition(tileX),
+			TileCenterPosition(tileY),
 			.Fire,
 		)
 	}

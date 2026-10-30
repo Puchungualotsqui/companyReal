@@ -683,7 +683,7 @@ UnitApplyDamage :: proc(
 	w: ^World,
 	victimSlot: int,
 	damage: d32.Value,
-	sourceX, sourceY: f32,
+	sourceX, sourceY: d32.Value,
 	kind: DamageKind,
 ) -> bool {
 	if victimSlot < 0 || victimSlot >= UNIT_CAPACITY || !w.unitUsed[victimSlot] do return false
@@ -708,7 +708,7 @@ UnitApplyDamageNow :: proc(
 	w: ^World,
 	victimSlot: int,
 	damage: d32.Value,
-	sourceX, sourceY: f32,
+	sourceX, sourceY: d32.Value,
 	kind: DamageKind,
 ) -> bool {
 	RecursiveLockGuard(&w.unitMutex)
@@ -724,8 +724,22 @@ UnitApplyDamageNow :: proc(
 	// A hit unit may be LOD-dormant and must react immediately.
 	if !dead do UnitWake(w, victimSlot)
 
-	dirX := WorldShortestWrappedDelta(x-sourceX, f32(w.maxX))
-	dirY := WorldShortestWrappedDelta(y-sourceY, f32(w.maxY))
+	deltaX, validX := d32.ShortestWrappedDelta(
+		sourceX,
+		w.units.x[victimSlot],
+		i64(w.maxX)*d32.SCALE,
+	)
+	deltaY, validY := d32.ShortestWrappedDelta(
+		sourceY,
+		w.units.y[victimSlot],
+		i64(w.maxY)*d32.SCALE,
+	)
+	dirX: f32
+	dirY: f32
+	if validX && validY {
+		dirX = PositionToF32(d32.FromRaw(i32(deltaX)))
+		dirY = PositionToF32(d32.FromRaw(i32(deltaY)))
+	}
 	length := math.sqrt(dirX*dirX+dirY*dirY)
 	if length > 0.001 {
 		dirX /= length
@@ -1175,8 +1189,8 @@ DecorationBlastBurst :: proc(w: ^World, x, y, radius: f32) {
 
 FireParticleTick :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 	intensity := w.fires.intensity[fireSlot]
-	x := w.fires.x[fireSlot]
-	y := w.fires.y[fireSlot]
+	x := PositionToF32(w.fires.x[fireSlot])
+	y := PositionToF32(w.fires.y[fireSlot])
 
 	if PRandom(w) < 0.42*deltaTime*intensity {
 		ParticleSpawn(w, Particle{

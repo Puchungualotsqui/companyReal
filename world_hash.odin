@@ -4,6 +4,9 @@ import "base:intrinsics"
 import "core:testing"
 import "d32"
 
+// Bump when authoritative numeric, generation, command or hash rules change.
+WORLD_STATE_VERSION :: u32(2)
+
 // FNV-1a over fixed-width, little-endian scalar encodings.
 WorldHashValue :: proc(hash: ^u64, value: $T) {
 	when intrinsics.type_is_boolean(T) {
@@ -319,6 +322,7 @@ WorldHashTown :: proc(hash: ^u64, town: ^Town) {
 // Call only at a quiescent simulation boundary, not during parallel updates.
 WorldStateHash :: proc(w: ^World) -> u64 {
 	hash: u64 = 0xcbf29ce484222325
+	WorldHashValue(&hash, WORLD_STATE_VERSION)
 	WorldHashValue(&hash, w.seed)
 	WorldHashValue(&hash, w.maxX)
 	WorldHashValue(&hash, w.maxY)

@@ -18,7 +18,7 @@ FOG_MEMORY_TINT :: rl.Color{190, 194, 200, 255}
 
 // Own towns always keep an extra ring of vision around their whole area so
 // large attacks can be seen coming.
-FOG_TOWN_AREA_VISION_FACTOR :: 1.5
+FOG_TOWN_AREA_VISION_FACTOR :: d32.Value(15*d32.SCALE/10)
 FOG_RENDER_CHUNK_TILES :: 32
 // Vision changes slowly; rebuilding it less often keeps reveal and contact
 // latency well under a second at the simulation step.
@@ -532,7 +532,7 @@ FogUpdate :: proc(w: ^World) {
 			continue
 		}
 		vision := d32.Mul(
-			PositionFromF32(UnitDefaultVision(w.units[unitSlot].type, isNight)),
+			UnitDefaultVision(w.units[unitSlot].type, isNight),
 			WorldWeatherVisionFactor(w),
 		)
 		FogRevealCircle(w, x, y, vision, kingdom)
@@ -551,7 +551,7 @@ FogUpdate :: proc(w: ^World) {
 			TownPointInArea(w, building.kingdom, building.town, centerX, centerY) {
 			continue
 		}
-		vision := PositionFromF32(BuildingVision(BuildingKindOf(building.type)))
+		vision := BuildingVision(BuildingKindOf(building.type))
 		FogRevealCircle(
 			w,
 			centerX,
@@ -575,7 +575,7 @@ FogUpdate :: proc(w: ^World) {
 					w,
 					site.x+width/2,
 					site.y+height/2,
-					PositionFromF32(BuildingVision(site.kind)),
+					BuildingVision(site.kind),
 					kingdomSlot,
 				)
 			}
@@ -595,7 +595,7 @@ FogUpdate :: proc(w: ^World) {
 					w,
 					circleX+width/2,
 					circleY+height/2,
-					PositionFromF32(f32(circleRadius)*FOG_TOWN_AREA_VISION_FACTOR),
+					d32.Mul(d32.FromInt(i32(circleRadius)), FOG_TOWN_AREA_VISION_FACTOR),
 					kingdomSlot,
 				)
 			}

@@ -198,7 +198,7 @@ RecursiveLockGuard :: proc(l: ^RecursiveLock) -> bool {
 PendingDamage :: struct {
 	victim: int,
 	damage: d32.Value,
-	sourceX, sourceY: f32,
+	sourceX, sourceY: d32.Value,
 	kind: DamageKind,
 }
 
@@ -226,8 +226,8 @@ PendingDamageLess :: proc(a, b: PendingDamage) -> bool {
 	if a.victim != b.victim do return a.victim < b.victim
 	if a.kind != b.kind do return a.kind < b.kind
 	if d32.Raw(a.damage) != d32.Raw(b.damage) do return d32.Raw(a.damage) < d32.Raw(b.damage)
-	if transmute(u32)a.sourceX != transmute(u32)b.sourceX do return transmute(u32)a.sourceX < transmute(u32)b.sourceX
-	return transmute(u32)a.sourceY < transmute(u32)b.sourceY
+	if d32.Raw(a.sourceX) != d32.Raw(b.sourceX) do return d32.Raw(a.sourceX) < d32.Raw(b.sourceX)
+	return d32.Raw(a.sourceY) < d32.Raw(b.sourceY)
 }
 
 

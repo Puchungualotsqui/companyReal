@@ -309,7 +309,11 @@ SpatialDecorationRemove :: proc(w: ^World, decorationSlot: int) {
 }
 
 SpatialFireInsert :: proc(w: ^World, fireSlot: int) {
-	chunk := SpatialChunkIndex(w, int(w.fires.x[fireSlot]), int(w.fires.y[fireSlot]))
+	chunk := SpatialChunkIndex(
+		w,
+		PositionTile(w.fires.x[fireSlot], int(w.maxX)),
+		PositionTile(w.fires.y[fireSlot], int(w.maxY)),
+	)
 	if chunk < 0 do return
 	head := w.spatial.fireHead[chunk]
 	w.spatial.fireNext[fireSlot] = head
