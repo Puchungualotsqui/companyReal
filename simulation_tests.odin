@@ -1,7 +1,10 @@
 package main
 
 import "core:math"
+import "core:sync"
 import "core:testing"
+
+simulationTestMutex: sync.Mutex
 
 WorldSoloTimingAndSingleTick :: proc(t: ^testing.T) {
 	w := new(World)
@@ -114,6 +117,7 @@ WorldSeededHashSequence :: proc(t: ^testing.T) -> (hashes: [17]u64, ok: bool) {
 
 @(test)
 WorldSimulationTimingAndHashSequence :: proc(t: ^testing.T) {
+	sync.guard(&simulationTestMutex)
 	if !testing.expect(t, !ParallelAvailable(), "simulation test requires serial execution without ParallelInit") do return
 	WorldSoloTimingAndSingleTick(t)
 

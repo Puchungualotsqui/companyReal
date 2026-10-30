@@ -325,8 +325,7 @@ WorldStateHash :: proc(w: ^World) -> u64 {
 	WorldHashValue(&hash, w.fireCursor)
 	WorldHashValue(&hash, w.fireCount)
 	WorldHashValue(&hash, w.unitsBurning)
-	// This visual stream still affects damage knockback until phase 2.
-	WorldHashValue(&hash, w.particleRandom)
+
 	WorldHashValue(&hash, w.navigationRevision)
 	WorldHashValue(&hash, w.pathRevision)
 	WorldHashValue(&hash, w.terrainRevision)
@@ -561,8 +560,7 @@ WorldStateHashCoverage :: proc(t: ^testing.T) {
 	w.fog.contacts[0][1] = false
 	testing.expect(t, baseline == WorldStateHash(w))
 	w.particleRandom = 1
-	testing.expect(t, baseline != WorldStateHash(w))
-	w.particleRandom = 0
+	testing.expect(t, baseline == WorldStateHash(w))
 
 	w.unitUsed[7] = true
 	w.units.type[7] = Builder{carriedResource = 2}

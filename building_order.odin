@@ -605,8 +605,10 @@ BuildingUpdateGiantMortar :: proc(w: ^World, slot: int, deltaTime: f32) {
 
 	order.orderActive = max(order.orderActive-deltaTime, 0)
 	order.orderTick -= deltaTime
+	sequence := 0
 	for order.orderTick <= 0 {
-		OrderMortarFireShell(w, slot)
+		OrderMortarFireShell(w, slot, sequence)
+		sequence += 1
 		order.orderTick += ORDER_MORTAR_TICK
 		if _, stillUsed := BuildingOrderState(w, slot); !stillUsed do return
 	}
@@ -623,8 +625,10 @@ BuildingUpdateSiegeTremor :: proc(w: ^World, slot: int, deltaTime: f32) {
 
 	order.orderActive = max(order.orderActive-deltaTime, 0)
 	order.orderTick -= deltaTime
+	sequence := 0
 	for order.orderTick <= 0 {
-		OrderTremorPulse(w, slot)
+		OrderTremorPulse(w, slot, sequence)
+		sequence += 1
 		order.orderTick += ORDER_TREMOR_TICK
 		if _, stillUsed := BuildingOrderState(w, slot); !stillUsed do return
 	}
@@ -641,8 +645,10 @@ BuildingUpdateNapalm :: proc(w: ^World, slot: int, deltaTime: f32) {
 
 	order.orderActive = max(order.orderActive-deltaTime, 0)
 	order.orderTick -= deltaTime
+	sequence := 0
 	for order.orderTick <= 0 {
-		OrderNapalmFireShell(w, slot)
+		OrderNapalmFireShell(w, slot, sequence)
+		sequence += 1
 		order.orderTick += ORDER_NAPALM_TICK
 		if _, stillUsed := BuildingOrderState(w, slot); !stillUsed do return
 	}
@@ -666,8 +672,15 @@ BuildingUpdateStarfall :: proc(w: ^World, slot: int, deltaTime: f32) {
 	order.orderTick = 0
 }
 
+// Sequence distinguishes catch-up events emitted by one source in the same tick.
 @(private = "file")
-OrderTremorPulse :: proc(w: ^World, slot: int) {
+OrderEventSeed :: proc(w: ^World, slot, sequence: int, domain: u64) -> u64 {
+	return w.seed ~ w.simulationTick*0x9E3779B97F4A7C15 ~
+		u64(slot+1)*0xBF58476D1CE4E5B9 ~ u64(sequence+1)*0x94D049BB133111EB ~ domain
+}
+
+@(private = "file")
+OrderTremorPulse :: proc(w: ^World, slot, sequence: int) {
 	order, isOrder := BuildingOrderState(w, slot)
 	if !isOrder do return
 	kingdom := w.buildings.kingdom[slot]
@@ -682,6 +695,7 @@ OrderTremorPulse :: proc(w: ^World, slot: int) {
 		ORDER_TREMOR_RADIUS,
 		ORDER_TREMOR_UNIT_DAMAGE*scale,
 		ORDER_TREMOR_BUILDING_DAMAGE*scale,
+		OrderEventSeed(w, slot, sequence, 0x7E00),
 	)
 	OrderImpactBurst(w, x, y)
 	for _ in 0..<3 {
@@ -696,21 +710,22 @@ OrderTremorPulse :: proc(w: ^World, slot: int) {
 }
 
 @(private = "file")
-OrderNapalmFireShell :: proc(w: ^World, slot: int) {
+OrderNapalmFireShell :: proc(w: ^World, slot, sequence: int) {
 	order, isOrder := BuildingOrderState(w, slot)
 	if !isOrder do return
 	centerX, centerY := OrderBuildingCenter(w, slot)
-	angle := PRandom(w)*6.2831853
-	distance := math.sqrt(PRandom(w))*ORDER_NAPALM_RADIUS
+	seed := OrderEventSeed(w, slot, sequence, 0xA001)
+	angle := WorldNoiseHash(slot, 0, seed)*6.2831853
+	distance := math.sqrt(WorldNoiseHash(slot, 1, seed))*ORDER_NAPALM_RADIUS
 	impactX := WorldWrapPosition(order.orderTargetX+math.cos(angle)*distance, f32(w.maxX))
 	impactY := WorldWrapPosition(order.orderTargetY+math.sin(angle)*distance, f32(w.maxY))
 
 	WorldProjectileBurst(w, centerX, centerY, impactX, impactY, 60, 1.6, 0.5, 1.2, 0, 0, .Boulder)
 	OrderImpactBurst(w, impactX, impactY)
 	WorldFireIgnite(w, impactX, impactY, 1.5, 1.15)
-	for _ in 0..<2 {
-		jitterX := impactX+(PRandom(w)-0.5)*1.4
-		jitterY := impactY+(PRandom(w)-0.5)*1.4
+	for i in 0..<2 {
+		jitterX := impactX+(WorldNoiseHash(slot, 2+i*2, seed)-0.5)*1.4
+		jitterY := impactY+(WorldNoiseHash(slot, 3+i*2, seed)-0.5)*1.4
 		WorldFireIgnite(w, jitterX, jitterY, 1.2, 1.0)
 	}
 }
@@ -731,14 +746,16 @@ OrderStarfallImpact :: proc(w: ^World, slot: int) {
 		ORDER_STARFALL_RADIUS,
 		ORDER_STARFALL_UNIT_DAMAGE*scale,
 		ORDER_STARFALL_BUILDING_DAMAGE*scale,
+		OrderEventSeed(w, slot, 0, 0x57A2),
 	)
 	for _ in 0..<6 {
 		OrderImpactBurst(w, x, y)
 	}
 	DecorationBlastBurst(w, x, y, ORDER_STARFALL_RADIUS*0.7)
-	for _ in 0..<10 {
-		angle := PRandom(w)*6.2831853
-		distance := ORDER_STARFALL_RADIUS*math.sqrt(PRandom(w))*0.75
+	seed := OrderEventSeed(w, slot, 0, 0x57A2)
+	for i in 0..<10 {
+		angle := WorldNoiseHash(slot, i*2, seed)*6.2831853
+		distance := ORDER_STARFALL_RADIUS*math.sqrt(WorldNoiseHash(slot, i*2+1, seed))*0.75
 		WorldFireIgnite(
 			w,
 			WorldWrapPosition(x+math.cos(angle)*distance, f32(w.maxX)),
@@ -750,14 +767,15 @@ OrderStarfallImpact :: proc(w: ^World, slot: int) {
 }
 
 @(private = "file")
-OrderMortarFireShell :: proc(w: ^World, slot: int) {
+OrderMortarFireShell :: proc(w: ^World, slot, sequence: int) {
 	order, isOrder := BuildingOrderState(w, slot)
 	if !isOrder do return
 	centerX, centerY := OrderBuildingCenter(w, slot)
 	targetX := order.orderTargetX
 	targetY := order.orderTargetY
-	angle := PRandom(w)*6.2831853
-	distance := math.sqrt(PRandom(w))*ORDER_MORTAR_SPREAD_RADIUS
+	seed := OrderEventSeed(w, slot, sequence, 0xB047)
+	angle := WorldNoiseHash(slot, 0, seed)*6.2831853
+	distance := math.sqrt(WorldNoiseHash(slot, 1, seed))*ORDER_MORTAR_SPREAD_RADIUS
 	impactX := WorldWrapPosition(targetX+math.cos(angle)*distance, f32(w.maxX))
 	impactY := WorldWrapPosition(targetY+math.sin(angle)*distance, f32(w.maxY))
 
@@ -772,6 +790,7 @@ OrderMortarFireShell :: proc(w: ^World, slot: int) {
 		ORDER_MORTAR_BLAST_RADIUS,
 		ORDER_MORTAR_UNIT_DAMAGE*scale,
 		ORDER_MORTAR_BUILDING_DAMAGE*scale,
+		seed,
 	)
 }
 
@@ -814,6 +833,7 @@ OrderAreaDamage :: proc(
 	w: ^World,
 	attackerKingdom: int,
 	x, y, radius, unitDamage, buildingDamage: f32,
+	eventSeed: u64,
 ) {
 	chunkSize := w.spatial.chunkSize
 	if chunkSize <= 0 do return
@@ -854,7 +874,7 @@ OrderAreaDamage :: proc(
 					KingdomAtWar(w, attackerKingdom, w.buildings.kingdom[slot]) {
 					distance, impactX, impactY := WarriorBuildingNearestPoint(w, centerX, centerY, slot)
 					if distance <= radius {
-						OrderDamageBuilding(w, slot, buildingDamage, impactX, impactY, attackerKingdom)
+						OrderDamageBuilding(w, slot, buildingDamage, impactX, impactY, attackerKingdom, eventSeed)
 					}
 				}
 				slot = next
@@ -872,6 +892,7 @@ OrderDamageBuilding :: proc(
 	damage: f32,
 	impactX, impactY: f32,
 	attackerKingdom: int,
+	eventSeed: u64,
 ) {
 	if slot < 0 || slot >= BUILDING_CAPACITY || !w.buildingUsed[slot] do return
 	building := &w.buildings[slot]
@@ -896,7 +917,8 @@ OrderDamageBuilding :: proc(
 
 	wasBurning := BuildingOnFire(w, slot)
 	kind := BuildingKindOf(building.type)
-	if !BuildingImmuneToFire(kind) && PRandom(w) < 0.15 {
+	ignitionSeed := eventSeed ~ 0xD357A0 ~ u64(building.y)*0x9E3779B97F4A7C15
+	if !BuildingImmuneToFire(kind) && WorldNoiseHash(slot, building.x, ignitionSeed) < 0.15 {
 		WorldFireIgnite(w, impactX, impactY, 1)
 	}
 	BuildingSpawnDebris(w, slot, wasBurning)

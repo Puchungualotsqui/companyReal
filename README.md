@@ -25,7 +25,7 @@ Each phase ends with the same seed and input log producing the same state hash o
 ## Phase 0 - Baseline (already correct, do not regress)
 
 - No hash-map iteration anywhere; state lives in arrays and slices.
-- Gameplay randomness already uses `WorldNoiseHash(x, y, seed)` (`generation.odin`), a pure integer hash.
+- Gameplay randomness uses `WorldNoiseHash(x, y, seed)` (`generation.odin`), a pure integer hash.
 - Fixed simulation step `TOWN_SIMULATION_STEP :: 0.25` and all state in one `World` struct.
 - World generation is seed-driven (`WorldGenerationSettings.seed`).
 
@@ -45,17 +45,18 @@ Done when: two runs with the same seed and input log produce identical hash sequ
 
 With profiling enabled, `profiler.log` records the post-tick gameplay hash every `WORLD_HASH_INTERVAL` ticks (currently 16). The first mismatch identifies the first sampled divergent tick, not necessarily the tick where divergence began. Set the interval to 1 to pinpoint it; hashing scans the world and has a cost. The log is overwritten at startup, so save it before a second run.
 
-The hash excludes particles, alerts, interpolation and observer-local fog. Contacts are included because they affect diplomacy. The shared particle random state is also included for now because it affects damage knockback, so visual effects can change the hash until phase 2 separates the streams. Observer-dependent command validation, contacts and player-specific game-end behavior still need a multiplayer design.
+The hash excludes particles, visual random state, alerts, interpolation and observer-local fog. Contacts are included because they affect diplomacy. Observer-dependent command validation, contacts and player-specific game-end behavior still need a multiplayer design.
 
-A 16-tick scripted command replay checks same-seed hash sequences in serial execution. Matching hashes are not proof of identical state; shared randomness and parallel merges can still cause divergence until later phases are implemented.
+A 16-tick scripted command replay checks same-seed hash sequences in serial execution. Matching hashes are not proof of identical state; parallel merges can still cause divergence until later phases are implemented.
 
 ## Phase 2 - Per-unit RNG
 
-Goal: no shared random stream.
+Goal: no shared random stream for gameplay.
 
-- `PRandom` (`parallel.odin`) is `atomic_add(&w.particleRandom, ...)`, so values depend on global consumption order across the 11 workers.
-- Gameplay use: `UnitApplyDamageNow` (`blood.odin`) picks the knockback direction with it, which moves units.
-- Replace with `WorldNoiseHash(unitSlot, tick, salt)` or per-unit PRNG state in `Unit`. Particles and blood may keep a visual-only stream, but it must never feed `World`.
+- `PRandom` (`particles.odin`) advances `w.particleRandom` atomically; consumption order can vary across workers and render frames. It is reserved for visual effects.
+- Building orders use `WorldNoiseHash` keyed by world seed, simulation tick, source slot, event sequence and effect-specific salts for impact positions and building ignition.
+- `UnitApplyDamageNow` uses `PRandom` only for visual blood direction; it does not apply knockback. No per-unit gameplay RNG is currently needed.
+- The gameplay hash excludes `particleRandom`. Tests compare gameplay outcomes after different numbers of visual random draws.
 
 Done when: no `PRandom` call influences unit or kingdom state.
 
