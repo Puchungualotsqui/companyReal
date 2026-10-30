@@ -1425,6 +1425,8 @@ WorldTick :: proc(w: ^World) {
 	tickStamp := ProfilerBegin("Sim:Tick")
 	w.simulationInTick = true
 	w.simulationTime = f32(f64(WorldCurrentTick(w))*TOWN_SIMULATION_STEP)
+	WorldApplyPendingCommands(w)
+	WorldTrimCommandLog(w)
 	WorldAlertPrune(w)
 	w.dayTime += TOWN_SIMULATION_STEP
 	if w.dayTime >= f32(WORLD_DAY_LENGTH_SECONDS) {
@@ -1491,8 +1493,17 @@ WorldTick :: proc(w: ^World) {
 	w.simulationTick += 1
 	w.simulationInTick = false
 	if w.simulationTick%WORLD_HASH_INTERVAL == 0 && profiler.file != nil {
-		buffer: [128]u8
-		line := fmt.bprintf(buffer[:], "WORLD HASH tick=%d hash=%016x\n", w.simulationTick, WorldStateHash(w))
+		buffer: [256]u8
+		stateHash := WorldStateHash(w)
+		line := fmt.bprintf(
+			buffer[:],
+			"WORLD HASH tick=%d hash=%016x session=%016x commands=%d commandHash=%016x\n",
+			w.simulationTick,
+			stateHash,
+			SessionHashWithState(w, stateHash),
+			len(w.commandLog),
+			WorldCommandLogHash(w),
+		)
 		ProfilerWrite(line)
 	}
 	ProfilerEnd(tickStamp)

@@ -118,7 +118,7 @@ The game binary has a headless trace mode:
 companiaReal -hash_trace -hash_seed:1 -hash_size:128 -hash_ticks:64
 ```
 
-Optional flags: `-hash_kingdoms:N` and `-hash_parallel` (initializes the worker pool). It prints `HASH_TRACE` lines with the state version, initial hash and one hash per tick.
+Optional flags: `-hash_kingdoms:N`, `-hash_parallel` (initializes the worker pool) and `-hash_commands` (runs a deterministic external command script and then replays the command log into a fresh world, printing `REPLAY ok|failed`). It prints `HASH_TRACE` lines with the state version, initial hash and one hash per tick.
 
 Windows x64 and Linux x64 (WSL, Odin `dev-2026-07`) produced identical traces for seeds 1-3, sizes 128 and 512, with and without the worker pool. Windows used 11 helper threads while WSL used 1, so the match also covers differing worker counts. This is same-build evidence for those scenarios, not proof for every possible state or for macOS/ARM.
 
@@ -128,13 +128,49 @@ Done when: authoritative gameplay and initialization follow the contract and mat
 
 Goal: the world only changes through logged commands applied at a known tick.
 
-- UI handlers mutate `World` immediately (`UIBuildPalettePress`, `UICommandBarPress`, conversion clicks, `UIMilestoneClick`, `TownStartFounding`).
-- Wrap each in a `Command`, apply commands in the tick loop before unit updates, and ship them to peers.
+Implemented:
+
+- UI actions enqueue `KingdomCommand`s with `WorldQueueCommand`. `WorldApplyPendingCommands` runs at the start of `WorldTick`, before weather and unit updates, in queue order.
+- AI issues the same commands through `KingdomIssueCommand` during its controller update. Both paths are validated by one function.
+- Every applied command is appended to `World.commandLog` with tick, sequence, kingdom, command, acceptance and source (`Human` or `AI`). Rejected attempts are logged too.
+- `WorldReplayCommands` re-applies accepted `Human` entries for a matching tick. AI entries are not replayed because each peer recomputes AI deterministically.
+- `profiler.log` records `COMMAND` lines and `WORLD HASH` lines include the command-log hash.
+
+Verification:
+
+```sh
+companiaReal -hash_trace -hash_seed:1 -hash_size:128 -hash_ticks:12 -hash_commands
+```
+
+This queues deterministic external commands, prints the per-tick hashes, then replays the human command log into a fresh world and prints `REPLAY ok` when every hash matches. The current run reports `REPLAY ok`.
+
+Remaining: bounded retention of the command log and linking the wire format to an actual transport (phase 7).
 
 Done when: replaying the command log rebuilds the same state hash sequence.
 
 ## Phase 7 - Session plumbing
 
-- Seed exchange: `AppNewSeed` uses the system clock and `rl.GetRandomValue`, so the resulting seed must be sent to peers, not regenerated.
-- Tick scheduling: agree that "tick N consumes every player's commands for tick N", with a small input delay.
-- Optional: periodic state-hash exchange for desync detection and command-log replay for recovery.
+Implemented:
+
+- `SessionConfig` captures protocol version, seed, map size, kingdom count, local kingdom and spectator flag. `SessionLog` prints it when a game starts; peers must exchange this instead of regenerating the seed. `SessionConfigCompatible` rejects mismatched sessions.
+- `SessionConfigEncode`/`SessionConfigDecode` provide a fixed-width wire format.
+- External commands are scheduled with `SESSION_INPUT_DELAY_TICKS` (2). Each queued command carries a `targetTick`; `WorldApplyPendingCommands` applies entries whose tick has arrived and leaves later entries queued.
+- `LoggedCommandEncode`/`LoggedCommandDecode` serialize the command log (tick, sequence, kingdom, acceptance, source, command). Command variants use explicit tags and fixed-width fields; `d32` values travel as raw `i32`.
+- `SessionHash` combines the session config, authoritative state hash and command-log hash. `WORLD HASH` log lines include it for periodic desync detection.
+- Replaying a received log uses `WorldReplayCommands`, which schedules accepted `Human` entries at their recorded ticks.
+- Packets are transport-agnostic byte buffers. `SessionEncodeConfigPacket`, `SessionEncodeHashPacket` and `SessionEncodeCommandsPacket` produce them; `SessionDecodePacket` parses them; `WorldReceiveSessionPacket` applies them to a world. Any reliable byte-stream or datagram layer can carry them.
+- `WorldCollectHumanCommands` packs the human commands accepted for the current tick into an outgoing batch.
+- Command-log retention is bounded: AI entries older than 512 ticks are dropped every 64 ticks, while human entries are kept so peers can replay them.
+- Periodic hashes are exchanged with the `Hash` packet. `WorldCheckPeerHash` compares the peer hash with `SessionHash` at the same tick, sets `World.desyncDetected` and logs a `DESYNC` line on mismatch.
+
+Verification:
+
+```sh
+companiaReal -hash_trace -hash_seed:1 -hash_size:128 -hash_ticks:10 -hash_commands
+```
+
+Prints the session config, per-tick hashes, `WIRE ok=true` after encoding and decoding every logged command, and `REPLAY ok` after rebuilding the sequence from the human log. It then runs an in-process loopback session (`SessionTraceNetwork`): config handshake, a command batch round trip and a per-tick hash exchange, printing `NETWORK ok=true commands=2` when both peers stay in sync.
+
+Done when: two worlds driven by the same session config and command stream agree on every hash. The loopback session verifies that. Same-build traces also match across Windows x64 and Linux x64.
+
+Remaining: a real TCP/UDP transport on top of the packet API, plus reconnect and desync recovery policy (resync from a fresh replay versus dropping the peer).

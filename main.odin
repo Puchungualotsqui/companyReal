@@ -12,6 +12,8 @@ CommandLineFlagPresent :: proc(flag: string) -> bool {
 }
 
 main :: proc() {
+	if HashTraceRun() do return
+
 	rl.InitWindow(1280, 800, "Compania Real")
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)

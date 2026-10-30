@@ -1,5 +1,6 @@
 package main
 
+import "core:fmt"
 import "d32"
 
 // A kingdom is driven by a controller, never by the simulation directly.
@@ -108,46 +109,297 @@ CommandUseOrder :: struct {
 	x, y: d32.Value,
 }
 
-KingdomIssueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) -> bool {
-	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do return false
+// UI commands wait for the next tick. AI commands are issued inside its periodic
+// update and take effect immediately, but both are logged with their tick.
+CommandSource :: enum {
+	Human, // External input; replay it on every peer
+	AI, // Recomputed deterministically by every peer
+}
 
-	switch cmd in command {
-	case CommandQueueConversion:
-		return TownAddConversion(w, kingdom, cmd.town, cmd.from, cmd.to, cmd.count)
-	case CommandRemoveConversion:
-		return TownRemoveConversion(w, kingdom, cmd.town, cmd.from, cmd.to, cmd.count)
-	case CommandChooseMilestone:
-		return TownChooseMilestone(w, kingdom, cmd.town, cmd.option)
-	case CommandFoundTown:
-		return TownStartFounding(w, kingdom, cmd.town, cmd.x, cmd.y)
-	case CommandFuseTown:
-		return TownFuse(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
-	case CommandBuildCombat:
-		return TownStartCombatConstruction(w, kingdom, cmd.town, cmd.kind, cmd.x, cmd.y)
-	case CommandAttackTown:
-		return TownStartAttack(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
-	case CommandDefendTown:
-		if !WorldTownExists(w, kingdom, cmd.town) do return false
-		TownStartDefending(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
-		return true
-	case CommandStopAttack:
-		if !WorldTownExists(w, kingdom, cmd.town) do return false
-		TownStopAttack(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
-		return true
-	case CommandStopDefend:
-		if !WorldTownExists(w, kingdom, cmd.town) do return false
-		TownStopDefending(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
-		return true
-	case CommandDeclareWar:
-		return KingdomDeclareWar(w, kingdom, cmd.other)
-	case CommandMakePeace:
-		if !KingdomAtWar(w, kingdom, cmd.other) do return false
-		KingdomMakePeace(w, kingdom, cmd.other)
-		return true
-	case CommandUseOrder:
-		return OrderStart(w, kingdom, cmd.kind, cmd.x, cmd.y)
+QueuedCommand :: struct {
+	kingdom:   int,
+	command:   KingdomCommand,
+	targetTick: u64,
+}
+
+LoggedCommand :: struct {
+	tick: u64,
+	sequence: u32,
+	kingdom: int,
+	command: KingdomCommand,
+	accepted: bool,
+	source: CommandSource,
+}
+
+WorldQueueCommandAt :: proc(
+	w: ^World,
+	kingdom: int,
+	command: KingdomCommand,
+	targetTick: u64,
+) -> bool {
+	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do return false
+	append(&w.pendingCommands, QueuedCommand {
+		kingdom = kingdom,
+		command = command,
+		targetTick = targetTick,
+	})
+	return true
+}
+
+// External input is scheduled a few ticks ahead so every peer can receive it.
+WorldQueueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) -> bool {
+	return WorldQueueCommandAt(
+		w,
+		kingdom,
+		command,
+		WorldCurrentTick(w)+SESSION_INPUT_DELAY_TICKS,
+	)
+}
+
+// Commands whose target tick has arrived are applied in arrival order. Later
+// entries stay queued, so late input shifts instead of reordering.
+WorldApplyPendingCommands :: proc(w: ^World) {
+	current := WorldCurrentTick(w)
+	write := 0
+	for index in 0..<len(w.pendingCommands) {
+		queued := w.pendingCommands[index]
+		if queued.targetTick > current {
+			w.pendingCommands[write] = queued
+			write += 1
+			continue
+		}
+		KingdomIssueCommand(w, queued.kingdom, queued.command, .Human)
+	}
+	resize(&w.pendingCommands, write)
+}
+
+// AI entries only matter for recent hash exchange; human entries are kept for
+// recovery. Trimming runs at a fixed tick cadence so every peer stays in sync.
+SESSION_AI_LOG_TICKS :: u64(512)
+SESSION_TRIM_INTERVAL :: u64(64)
+
+WorldTrimCommandLog :: proc(w: ^World) {
+	current := WorldCurrentTick(w)
+	if current%SESSION_TRIM_INTERVAL != 0 do return
+	write := 0
+	for entry in w.commandLog {
+		if entry.source == .AI && current > entry.tick &&
+			current-entry.tick > SESSION_AI_LOG_TICKS {
+			continue
+		}
+		w.commandLog[write] = entry
+		write += 1
+	}
+	resize(&w.commandLog, write)
+}
+
+WorldCommandLogHash :: proc(w: ^World) -> u64 {
+	hash: u64 = 0xcbf29ce484222325
+	WorldHashValue(&hash, u64(len(w.commandLog)))
+	for entry in w.commandLog {
+		WorldHashValue(&hash, entry.tick)
+		WorldHashValue(&hash, entry.sequence)
+		WorldHashValue(&hash, entry.kingdom)
+		WorldHashValue(&hash, CommandHash(entry.command))
+		WorldHashValue(&hash, entry.accepted)
+		WorldHashValue(&hash, entry.source)
+	}
+	return hash
+}
+
+// Matches a peer's periodic session hash. A mismatch is a desync marker; the
+// recovery path is to rebuild from the config and the retained human log.
+WorldCheckPeerHash :: proc(w: ^World, tick: u64, peerHash: u64) -> bool {
+	w.peerHashTick = tick
+	w.peerHash = peerHash
+	w.peerHashSeen = true
+	if tick != WorldCurrentTick(w) do return true
+	if peerHash == SessionHash(w) do return true
+	w.desyncDetected = true
+	if profiler.file != nil {
+		buffer: [192]u8
+		line := fmt.bprintf(
+			buffer[:],
+			"DESYNC tick=%d local=%016x peer=%016x\n",
+			tick,
+			SessionHash(w),
+			peerHash,
+		)
+		ProfilerWrite(line)
 	}
 	return false
+}
+
+// Re-applies accepted log entries for one tick while replaying a fresh world.
+WorldReplayCommands :: proc(w: ^World, log: []LoggedCommand, tick: u64) {
+	for entry in log {
+		if entry.tick != tick || !entry.accepted || entry.source != .Human do continue
+		WorldQueueCommandAt(w, entry.kingdom, entry.command, tick)
+	}
+}
+
+CommandKindTag :: proc(command: KingdomCommand) -> u8 {
+	switch _ in command {
+	case CommandQueueConversion: return 0
+	case CommandRemoveConversion: return 1
+	case CommandChooseMilestone: return 2
+	case CommandFoundTown: return 3
+	case CommandFuseTown: return 4
+	case CommandBuildCombat: return 5
+	case CommandAttackTown: return 6
+	case CommandDefendTown: return 7
+	case CommandStopAttack: return 8
+	case CommandStopDefend: return 9
+	case CommandDeclareWar: return 10
+	case CommandMakePeace: return 11
+	case CommandUseOrder: return 12
+	}
+	return 0
+}
+
+CommandHash :: proc(command: KingdomCommand) -> u64 {
+	hash: u64 = 0xcbf29ce484222325
+	WorldHashValue(&hash, CommandKindTag(command))
+	switch cmd in command {
+	case CommandQueueConversion:
+		WorldHashValue(&hash, cmd.town)
+		WorldHashValue(&hash, cmd.from)
+		WorldHashValue(&hash, cmd.to)
+		WorldHashValue(&hash, cmd.count)
+	case CommandRemoveConversion:
+		WorldHashValue(&hash, cmd.town)
+		WorldHashValue(&hash, cmd.from)
+		WorldHashValue(&hash, cmd.to)
+		WorldHashValue(&hash, cmd.count)
+	case CommandChooseMilestone:
+		WorldHashValue(&hash, cmd.town)
+		WorldHashValue(&hash, cmd.option)
+	case CommandFoundTown:
+		WorldHashValue(&hash, cmd.town)
+		WorldHashValue(&hash, cmd.x)
+		WorldHashValue(&hash, cmd.y)
+	case CommandFuseTown:
+		WorldHashValue(&hash, cmd.town)
+		WorldHashValue(&hash, cmd.targetKingdom)
+		WorldHashValue(&hash, cmd.targetTown)
+	case CommandBuildCombat:
+		WorldHashValue(&hash, cmd.town)
+		WorldHashValue(&hash, cmd.kind)
+		WorldHashValue(&hash, cmd.x)
+		WorldHashValue(&hash, cmd.y)
+	case CommandAttackTown:
+		WorldHashValue(&hash, cmd.town)
+		WorldHashValue(&hash, cmd.targetKingdom)
+		WorldHashValue(&hash, cmd.targetTown)
+	case CommandDefendTown:
+		WorldHashValue(&hash, cmd.town)
+		WorldHashValue(&hash, cmd.targetKingdom)
+		WorldHashValue(&hash, cmd.targetTown)
+	case CommandStopAttack:
+		WorldHashValue(&hash, cmd.town)
+		WorldHashValue(&hash, cmd.targetKingdom)
+		WorldHashValue(&hash, cmd.targetTown)
+	case CommandStopDefend:
+		WorldHashValue(&hash, cmd.town)
+		WorldHashValue(&hash, cmd.targetKingdom)
+		WorldHashValue(&hash, cmd.targetTown)
+	case CommandDeclareWar:
+		WorldHashValue(&hash, cmd.other)
+	case CommandMakePeace:
+		WorldHashValue(&hash, cmd.other)
+	case CommandUseOrder:
+		WorldHashValue(&hash, cmd.kind)
+		WorldHashValue(&hash, cmd.x)
+		WorldHashValue(&hash, cmd.y)
+	}
+	return hash
+}
+
+CommandLogAppend :: proc(
+	w: ^World,
+	kingdom: int,
+	command: KingdomCommand,
+	accepted: bool,
+	source: CommandSource,
+) {
+	append(&w.commandLog, LoggedCommand {
+		tick = WorldCurrentTick(w),
+		sequence = w.commandSequence,
+		kingdom = kingdom,
+		command = command,
+		accepted = accepted,
+		source = source,
+	})
+	w.commandSequence += 1
+	if profiler.file == nil do return
+	buffer: [160]u8
+	line := fmt.bprintf(
+		buffer[:],
+		"COMMAND tick=%d seq=%d kingdom=%d kind=%d hash=%016x ok=%v source=%d\n",
+		WorldCurrentTick(w),
+		w.commandSequence-1,
+		kingdom,
+		CommandKindTag(command),
+		CommandHash(command),
+		accepted,
+		source,
+	)
+	ProfilerWrite(line)
+}
+
+KingdomIssueCommand :: proc(
+	w: ^World,
+	kingdom: int,
+	command: KingdomCommand,
+	source := CommandSource.AI,
+) -> bool {
+	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] {
+		return false
+	}
+
+	result := false
+	switch cmd in command {
+	case CommandQueueConversion:
+		result = TownAddConversion(w, kingdom, cmd.town, cmd.from, cmd.to, cmd.count)
+	case CommandRemoveConversion:
+		result = TownRemoveConversion(w, kingdom, cmd.town, cmd.from, cmd.to, cmd.count)
+	case CommandChooseMilestone:
+		result = TownChooseMilestone(w, kingdom, cmd.town, cmd.option)
+	case CommandFoundTown:
+		result = TownStartFounding(w, kingdom, cmd.town, cmd.x, cmd.y)
+	case CommandFuseTown:
+		result = TownFuse(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
+	case CommandBuildCombat:
+		result = TownStartCombatConstruction(w, kingdom, cmd.town, cmd.kind, cmd.x, cmd.y)
+	case CommandAttackTown:
+		result = TownStartAttack(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
+	case CommandDefendTown:
+		if WorldTownExists(w, kingdom, cmd.town) {
+			TownStartDefending(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
+			result = true
+		}
+	case CommandStopAttack:
+		if WorldTownExists(w, kingdom, cmd.town) {
+			TownStopAttack(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
+			result = true
+		}
+	case CommandStopDefend:
+		if WorldTownExists(w, kingdom, cmd.town) {
+			TownStopDefending(w, kingdom, cmd.town, cmd.targetKingdom, cmd.targetTown)
+			result = true
+		}
+	case CommandDeclareWar:
+		result = KingdomDeclareWar(w, kingdom, cmd.other)
+	case CommandMakePeace:
+		if KingdomAtWar(w, kingdom, cmd.other) {
+			KingdomMakePeace(w, kingdom, cmd.other)
+			result = true
+		}
+	case CommandUseOrder:
+		result = OrderStart(w, kingdom, cmd.kind, cmd.x, cmd.y)
+	}
+	CommandLogAppend(w, kingdom, command, result, source)
+	return result
 }
 
 // Configures who drives each kingdom. `localKingdom` is the slot controlled

@@ -1458,7 +1458,7 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 			return
 		}
 		if !rl.IsMouseButtonPressed(.LEFT) do return
-		KingdomIssueCommand(
+		WorldQueueCommand(
 			w,
 			ui.buildKingdom,
 			CommandBuildCombat{
@@ -1482,7 +1482,7 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 		if !ok do return
 		if TownFoundingFailure(w, kingdom, town, tileX, tileY) != .None do return
 		if !rl.IsMouseButtonPressed(.LEFT) do return
-		if KingdomIssueCommand(w, kingdom, CommandFoundTown{town = town, x = tileX, y = tileY}) {
+		if WorldQueueCommand(w, kingdom, CommandFoundTown{town = town, x = tileX, y = tileY}) {
 			ui.command = .Inspect
 		}
 		return
@@ -1504,13 +1504,13 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 		}
 		if !valid || !rl.IsMouseButtonPressed(.LEFT) do return
 		if ui.command == .Attack {
-			KingdomIssueCommand(
+			WorldQueueCommand(
 				w,
 				kingdom,
 				CommandAttackTown{town = town, targetKingdom = targetKingdom, targetTown = targetTown},
 			)
 		} else {
-			KingdomIssueCommand(
+			WorldQueueCommand(
 				w,
 				kingdom,
 				CommandDefendTown{town = town, targetKingdom = targetKingdom, targetTown = targetTown},
@@ -1523,7 +1523,7 @@ UICommandUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mouse: rl.
 		if !found do return
 		if TownFusionFailure(w, kingdom, town, targetKingdom, targetTown) != .None do return
 		if !rl.IsMouseButtonPressed(.LEFT) do return
-		if KingdomIssueCommand(
+		if WorldQueueCommand(
 			w,
 			kingdom,
 			CommandFuseTown{town = town, targetKingdom = targetKingdom, targetTown = targetTown},
@@ -1571,13 +1571,13 @@ UIOrdersClick :: proc(w: ^World, ui: ^UIState, panel: rl.Rectangle, mouse: rl.Ve
 		attack, targetKingdom, targetTown, found := UITownOrderAt(w, kingdom, town, index)
 		if !found do return
 		if attack {
-			KingdomIssueCommand(
+			WorldQueueCommand(
 				w,
 				kingdom,
 				CommandStopAttack{town = town, targetKingdom = targetKingdom, targetTown = targetTown},
 			)
 		} else {
-			KingdomIssueCommand(
+			WorldQueueCommand(
 				w,
 				kingdom,
 				CommandStopDefend{town = town, targetKingdom = targetKingdom, targetTown = targetTown},
@@ -1640,7 +1640,7 @@ UIMilestoneClick :: proc(w: ^World, kingdom, town: int, mouse: rl.Vector2) {
 	cards := UIMilestoneCardRects(w, kingdom, town, modal)
 	for card, option in cards {
 		if rl.CheckCollisionPointRec(mouse, card) {
-			KingdomIssueCommand(w, kingdom, CommandChooseMilestone{town = town, option = option})
+			WorldQueueCommand(w, kingdom, CommandChooseMilestone{town = town, option = option})
 			return
 		}
 	}
@@ -1761,13 +1761,13 @@ UIConversionClick :: proc(w: ^World, view: ^WorldView, panel: rl.Rectangle, mous
 		if rl.CheckCollisionPointRec(mouse, plus) {
 			if UICanConvertTo(w, kingdom, town, kind) {
 				if UIConversionCount(w, kingdom, town, kind, .Villager) > 0 {
-					KingdomIssueCommand(
+					WorldQueueCommand(
 						w,
 						kingdom,
 						CommandRemoveConversion{town = town, from = kind, to = .Villager, count = step},
 					)
 				} else {
-					KingdomIssueCommand(
+					WorldQueueCommand(
 						w,
 						kingdom,
 						CommandQueueConversion{town = town, from = .Villager, to = kind, count = step},
@@ -1779,13 +1779,13 @@ UIConversionClick :: proc(w: ^World, view: ^WorldView, panel: rl.Rectangle, mous
 		if rl.CheckCollisionPointRec(mouse, minus) {
 			if UICanConvertFrom(w, kingdom, town, kind) {
 				if UIConversionCount(w, kingdom, town, .Villager, kind) > 0 {
-					KingdomIssueCommand(
+					WorldQueueCommand(
 						w,
 						kingdom,
 						CommandRemoveConversion{town = town, from = .Villager, to = kind, count = step},
 					)
 				} else {
-					KingdomIssueCommand(
+					WorldQueueCommand(
 						w,
 						kingdom,
 						CommandQueueConversion{town = town, from = kind, to = .Villager, count = step},
@@ -3908,7 +3908,7 @@ UIOrderTargetingUpdate :: proc(w: ^World, ui: ^UIState, camera: rl.Camera2D, mou
 	if !OrderTargetValid(w, local, ui.orderKind, targetX, targetY) do return
 	if !rl.IsMouseButtonPressed(.LEFT) do return
 	if OrderSourceReadyCount(w, local, ui.orderKind) <= 0 do return
-	if KingdomIssueCommand(
+	if WorldQueueCommand(
 		w,
 		local,
 		CommandUseOrder{kind = ui.orderKind, x = targetX, y = targetY},
@@ -5811,9 +5811,9 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 						if kingdomSlot, found := UIDiplomacyAt(w, row); found {
 							if rl.CheckCollisionPointRec(mouse, UIDiplomacyActionRect(panel, row)) {
 								if KingdomAtWar(w, local, kingdomSlot) {
-									KingdomIssueCommand(w, local, CommandMakePeace{other = kingdomSlot})
+									WorldQueueCommand(w, local, CommandMakePeace{other = kingdomSlot})
 								} else {
-									KingdomIssueCommand(w, local, CommandDeclareWar{other = kingdomSlot})
+									WorldQueueCommand(w, local, CommandDeclareWar{other = kingdomSlot})
 								}
 							} else if townSlot, townFound := FogFirstDiscoveredTown(w, kingdomSlot); townFound {
 								UIFocusTown(w, view, kingdomSlot, townSlot)

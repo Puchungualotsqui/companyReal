@@ -129,6 +129,8 @@ AppStartGame :: proc(app: ^App) -> bool {
 	AssignKingdomColors(localKingdom, localColor, &world.kingdomColors)
 	WorldConfigureGame(world, localKingdom, app.config.spectator)
 	FogUpdate(world)
+	// Exchange this config with peers instead of regenerating the seed.
+	SessionLog(world)
 
 	app.world = world
 	app.view = WorldViewInit(world)

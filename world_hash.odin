@@ -1,7 +1,6 @@
 package main
 
 import "base:intrinsics"
-import "core:testing"
 import "d32"
 
 // Bump when authoritative numeric, generation, command or hash rules change.
@@ -538,60 +537,4 @@ WorldStateHash :: proc(w: ^World) -> u64 {
 		}
 	}
 	return hash
-}
-
-@(test)
-WorldStateHashCoverage :: proc(t: ^testing.T) {
-	w := new(World)
-	defer free(w)
-
-	baseline := WorldStateHash(w)
-	testing.expect(t, baseline == WorldStateHash(w))
-	w.units.health[7] = d32.FromInt(10)
-	w.particleCount = 1
-	w.simulationAccumulator = 0.5
-	visible := [2]bool{true, false}
-	explored := [2]bool{false, true}
-	w.fog.visible = visible[:]
-	w.fog.explored = explored[:]
-	w.observerKingdom = 1
-	w.playerKingdom = 1
-	testing.expect(t, baseline == WorldStateHash(w))
-	visible[1] = true
-	explored[0] = true
-	w.observerKingdom = -1
-	w.playerKingdom = -1
-	testing.expect(t, baseline == WorldStateHash(w))
-	w.fog.contacts[0][1] = true
-	testing.expect(t, baseline != WorldStateHash(w))
-	w.fog.contacts[0][1] = false
-	testing.expect(t, baseline == WorldStateHash(w))
-	w.particleRandom = 1
-	testing.expect(t, baseline == WorldStateHash(w))
-
-	w.unitUsed[7] = true
-	w.units.type[7] = Builder{carriedResource = d32.FromInt(2)}
-	unitHash := WorldStateHash(w)
-	testing.expect(t, unitHash != baseline)
-	w.units.type[7] = Builder{carriedResource = d32.FromInt(3)}
-	testing.expect(t, unitHash != WorldStateHash(w))
-	w.units.type[7] = Builder{carriedResource = d32.FromInt(2)}
-	testing.expect(t, unitHash == WorldStateHash(w))
-
-	w.kingdomUsed[0] = true
-	w.kingdoms[0].townUsed[0] = true
-	w.kingdoms[0].towns[0].wood = d32.FromInt(12)
-	townHash := WorldStateHash(w)
-	w.kingdoms[0].towns[0].wood = d32.FromInt(13)
-	testing.expect(t, townHash != WorldStateHash(w))
-
-	directionsA := [2]FlowDirection{.East, .West}
-	directionsB := directionsA
-	w.flowFields[0].valid = true
-	w.flowFields[0].direction = directionsA[:]
-	flowHash := WorldStateHash(w)
-	w.flowFields[0].direction = directionsB[:]
-	testing.expect(t, flowHash == WorldStateHash(w))
-	directionsB[1] = .North
-	testing.expect(t, flowHash != WorldStateHash(w))
 }

@@ -116,6 +116,15 @@ World :: struct {
 	combatSiteUsed: [COMBAT_SITE_CAPACITY]bool,
 	fog: FogOfWar,
 	alerts: AlertFeed,
+	pendingCommands: [dynamic]QueuedCommand, // Applied at the next tick boundary
+	commandLog: [dynamic]LoggedCommand, // Applied commands, for replay and desync checks
+	commandSequence: u32,
+	peerConfig: SessionConfig, // Remote config, for handshake validation
+	peerConfigSeen: bool,
+	peerHashTick: u64,
+	peerHash: u64,
+	peerHashSeen: bool,
+	desyncDetected: bool,
 }
 
 WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerationSettings) -> bool {
@@ -130,6 +139,8 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.unitCount = 0
 	w.unitFreeHint = 0
 	w.pendingDespawns = make([dynamic]int, 0, UNIT_CAPACITY)
+	w.pendingCommands = make([dynamic]QueuedCommand, 0, 16)
+	w.commandLog = make([dynamic]LoggedCommand, 0, 64)
 	w.dayTime = f32(WORLD_DAY_LENGTH_SECONDS)*6/24
 	WorldWeatherTransition(w, .Clear)
 	w.environment.phase = .None
@@ -201,6 +212,8 @@ WorldDeinit :: proc(w: ^World) {
 	delete(w.scarTiles)
 	delete(w.terrainChunkRevisions)
 	delete(w.pendingDespawns)
+	delete(w.pendingCommands)
+	delete(w.commandLog)
 	delete(w.groundStorage)
 	delete(w.ground)
 	FogDeinit(w)
