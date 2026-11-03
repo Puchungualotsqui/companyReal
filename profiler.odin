@@ -6,8 +6,9 @@ import "core:strings"
 import "core:sync"
 import rl "vendor:raylib"
 
-// Set to false to remove profiling output and its overhead.
-PROFILING_ENABLED :: true
+// Compile-time switch. Build with -define:PROFILING=false to remove all
+// instrumentation, timing calls, log writes and the periodic state hash.
+PROFILING_ENABLED :: #config(PROFILING, true)
 
 // Lightweight frame profiler. Instrument sections with ProfilerBegin/ProfilerEnd.
 // Results are printed to the console and written to profiler.log.
@@ -94,14 +95,14 @@ UNIT_PROFILE_NAMES := [UnitKind]cstring{
 }
 
 ProfilerInit :: proc() {
-	profiler = Profiler{
-		enabled = PROFILING_ENABLED,
-		frameStart = rl.GetTime(),
-		reportStart = rl.GetTime(),
-	}
 	for &index in profiler.unitKindIndex do index = -1
 	for &index in profiler.sectionIndex do index = -1
-	if !PROFILING_ENABLED do return
+	when !PROFILING_ENABLED {
+		return
+	}
+	profiler.enabled = true
+	profiler.frameStart = rl.GetTime()
+	profiler.reportStart = rl.GetTime()
 	for name, kind in UNIT_PROFILE_NAMES {
 		profiler.unitKindIndex[kind] = ProfilerRegister(name)
 	}
@@ -114,17 +115,26 @@ ProfilerInit :: proc() {
 }
 
 ProfilerDeinit :: proc() {
+	when !PROFILING_ENABLED {
+		return
+	}
 	if profiler.file == nil do return
 	os.close(profiler.file)
 	profiler.file = nil
 }
 
 ProfilerWrite :: proc(text: string) {
+	when !PROFILING_ENABLED {
+		return
+	}
 	fmt.print(text)
 	if profiler.file != nil do _, _ = os.write(profiler.file, transmute([]byte)text)
 }
 
 ProfilerRegister :: proc(name: cstring) -> int {
+	when !PROFILING_ENABLED {
+		return -1
+	}
 	sync.guard(&profiler.mutex)
 	for entry, i in profiler.entries[:profiler.count] {
 		if entry.name == name do return i
@@ -137,12 +147,18 @@ ProfilerRegister :: proc(name: cstring) -> int {
 }
 
 ProfilerBegin :: proc(name: cstring) -> ProfileStamp {
-	if !profiler.enabled || profiler.parallel do return {index = -1}
+	when !PROFILING_ENABLED {
+		return {index = -1}
+	}
+	if profiler.parallel do return {index = -1}
 	return ProfileStamp{index = ProfilerRegister(name), start = rl.GetTime()}
 }
 
 ProfilerAdd :: proc(index: int, elapsed: f64) {
-	if !profiler.enabled || index < 0 || index >= profiler.count do return
+	when !PROFILING_ENABLED {
+		return
+	}
+	if index < 0 || index >= profiler.count do return
 	sync.guard(&profiler.mutex)
 	entry := &profiler.entries[index]
 	entry.total += elapsed
@@ -151,7 +167,10 @@ ProfilerAdd :: proc(index: int, elapsed: f64) {
 
 // Merges per-worker timing captured during a parallel phase.
 ProfilerAddTotal :: proc(index: int, elapsed: f64, calls: int) {
-	if !profiler.enabled || index < 0 || index >= profiler.count do return
+	when !PROFILING_ENABLED {
+		return
+	}
+	if index < 0 || index >= profiler.count do return
 	sync.guard(&profiler.mutex)
 	entry := &profiler.entries[index]
 	entry.total += elapsed
@@ -159,11 +178,17 @@ ProfilerAddTotal :: proc(index: int, elapsed: f64, calls: int) {
 }
 
 ProfilerUnitStart :: proc(index: int) -> f64 {
+	when !PROFILING_ENABLED {
+		return 0
+	}
 	if index < 0 do return 0
 	return rl.GetTime()
 }
 
 ProfilerUnitElapsed :: proc(index: int, start: f64) -> f64 {
+	when !PROFILING_ENABLED {
+		return 0
+	}
 	if index < 0 do return 0
 	return rl.GetTime()-start
 }
@@ -171,17 +196,25 @@ ProfilerUnitElapsed :: proc(index: int, start: f64) -> f64 {
 // Hot-loop helpers. ProfilerBegin cannot be used here because it resolves the
 // name on every call.
 ProfileSectionBegin :: proc(section: ProfileSection) -> f64 {
-	if !profiler.enabled do return 0
+	when !PROFILING_ENABLED {
+		return 0
+	}
 	return rl.GetTime()
 }
 
 ProfileSectionEnd :: proc(section: ProfileSection, start: f64) {
-	if !profiler.enabled || profiler.parallel do return
+	when !PROFILING_ENABLED {
+		return
+	}
+	if profiler.parallel do return
 	ProfilerAdd(profiler.sectionIndex[section], rl.GetTime()-start)
 }
 
 ProfilerEnd :: proc(stamp: ProfileStamp) {
-	if !profiler.enabled || profiler.parallel || stamp.index < 0 do return
+	when !PROFILING_ENABLED {
+		return
+	}
+	if profiler.parallel || stamp.index < 0 do return
 	elapsed := rl.GetTime()-stamp.start
 	{
 		sync.guard(&profiler.mutex)
@@ -206,6 +239,9 @@ ProfilerEnd :: proc(stamp: ProfileStamp) {
 }
 
 ProfilerDumpCurrent :: proc() {
+	when !PROFILING_ENABLED {
+		return
+	}
 	order: [PROFILER_MAX_ENTRIES]int
 	orderCount := 0
 	for i in 0..<profiler.count {
@@ -242,7 +278,9 @@ ProfilerDumpCurrent :: proc() {
 }
 
 ProfilerFrameEnd :: proc(w: ^World) {
-	if !profiler.enabled do return
+	when !PROFILING_ENABLED {
+		return
+	}
 	now := rl.GetTime()
 	profiler.frameTime = now-profiler.frameStart
 	profiler.reportFrames += 1
@@ -278,9 +316,14 @@ ProfilerEntryLess :: proc(a, b: ProfilerEntry) -> bool {
 }
 
 ProfilerReport :: proc(w: ^World) {
+	when !PROFILING_ENABLED {
+		return
+	}
 	interval := rl.GetTime()-profiler.reportStart
 	frames := max(profiler.reportFrames, 1)
 	units, buildings, towns := ProfilerWorldCounts(w)
+	fires := 0
+	if w != nil do fires = w.fireCount
 	report: strings.Builder
 	defer strings.builder_destroy(&report)
 
@@ -294,7 +337,7 @@ ProfilerReport :: proc(w: ^World) {
 		units,
 		buildings,
 		towns,
-		w.fireCount,
+		fires,
 		parallelHelperCount,
 	)
 

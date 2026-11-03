@@ -4,9 +4,17 @@ import "base:intrinsics"
 import "d32"
 
 // Bump when authoritative numeric, generation, command or hash rules change.
-WORLD_STATE_VERSION :: u32(2)
+WORLD_STATE_VERSION :: u32(3)
 
-// FNV-1a over fixed-width, little-endian scalar encodings.
+// One multiply per 64-bit word keeps per-tile state cheap while staying exactly
+// reproducible: each step is a bijection, so any changed value changes the hash.
+WORLD_HASH_PRIME :: 0x100000001b3
+
+WorldHashMix :: proc(hash: ^u64, word: u64) {
+	hash^ = (hash^ ~ word)*WORLD_HASH_PRIME
+}
+
+// Mixes fixed-width, little-endian scalar encodings into the 64-bit state hash.
 WorldHashValue :: proc(hash: ^u64, value: $T) {
 	when intrinsics.type_is_boolean(T) {
 		WorldHashValue(hash, u8(value ? 1 : 0))
@@ -17,11 +25,7 @@ WorldHashValue :: proc(hash: ^u64, value: $T) {
 	} else when T == d32.Value {
 		WorldHashValue(hash, d32.Raw(value))
 	} else when intrinsics.type_is_integer(T) {
-		bits := u64(value)
-		for _ in 0..<8 {
-			hash^ = (hash^ ~ (bits & 255))*0x100000001b3
-			bits >>= 8
-		}
+		WorldHashMix(hash, u64(value))
 	} else when T == f32 {
 		WorldHashValue(hash, transmute(u32)value)
 	} else when intrinsics.type_is_array(T) || intrinsics.type_is_enumerated_array(T) || intrinsics.type_is_slice(T) || intrinsics.type_is_dynamic_array(T) {
@@ -30,6 +34,18 @@ WorldHashValue :: proc(hash: ^u64, value: $T) {
 	} else {
 		#panic("Unsupported world hash type")
 	}
+}
+
+// Bulk byte hashing for large per-tile buffers such as navigation masks.
+WorldHashBytes :: proc(hash: ^u64, data: []u8) {
+	WorldHashValue(hash, len(data))
+	index := 0
+	for ; index+8 <= len(data); index += 8 {
+		word: u64
+		for offset in 0..<8 do word |= u64(data[index+offset])<<(8*u32(offset))
+		WorldHashMix(hash, word)
+	}
+	for ; index < len(data); index += 1 do WorldHashMix(hash, u64(data[index]))
 }
 
 WorldHashOrder :: proc(hash: ^u64, order: WarriorOrder) {
@@ -379,11 +395,13 @@ WorldStateHash :: proc(w: ^World) -> u64 {
 	WorldHashValue(&hash, w.eventBag)
 	WorldHashValue(&hash, len(w.groundStorage))
 	for tile in w.groundStorage {
-		WorldHashValue(&hash, tile.type)
-		WorldHashValue(&hash, tile.climate)
-		WorldHashValue(&hash, tile.scar)
-		WorldHashValue(&hash, tile.scarFrom)
-		WorldHashValue(&hash, tile.scarTimer)
+		// All five fields fit in one 64-bit word, so a tile costs a single mix.
+		packed := u64(tile.type) |
+			u64(tile.climate)<<8 |
+			u64(tile.scar)<<16 |
+			u64(tile.scarFrom)<<24 |
+			u64(u32(d32.Raw(tile.scarTimer)))<<32
+		WorldHashMix(&hash, packed)
 	}
 	WorldHashValue(&hash, w.scarTiles)
 	WorldHashValue(&hash, w.terrainChunkRevisions)
@@ -525,9 +543,9 @@ WorldStateHash :: proc(w: ^World) -> u64 {
 		WorldHashValue(&hash, field.maskRevision)
 		if field.valid || field.building do WorldHashValue(&hash, field.direction)
 		if field.building && field.buildMask {
-			WorldHashValue(&hash, field.walkMask[:field.maskIndex])
+			WorldHashBytes(&hash, field.walkMask[:field.maskIndex])
 		} else {
-			WorldHashValue(&hash, field.walkMask)
+			WorldHashBytes(&hash, field.walkMask)
 		}
 	}
 	if w.flowBuildCount > 0 {

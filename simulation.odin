@@ -1492,19 +1492,21 @@ WorldTick :: proc(w: ^World) {
 	ProfilerEnd(stamp)
 	w.simulationTick += 1
 	w.simulationInTick = false
-	if w.simulationTick%WORLD_HASH_INTERVAL == 0 && profiler.file != nil {
-		buffer: [256]u8
-		stateHash := WorldStateHash(w)
-		line := fmt.bprintf(
-			buffer[:],
-			"WORLD HASH tick=%d hash=%016x session=%016x commands=%d commandHash=%016x\n",
-			w.simulationTick,
-			stateHash,
-			SessionHashWithState(w, stateHash),
-			len(w.commandLog),
-			WorldCommandLogHash(w),
-		)
-		ProfilerWrite(line)
+	when PROFILING_ENABLED {
+		if w.simulationTick%WORLD_HASH_INTERVAL == 0 && profiler.file != nil {
+			buffer: [256]u8
+			stateHash := WorldStateHash(w)
+			line := fmt.bprintf(
+				buffer[:],
+				"WORLD HASH tick=%d hash=%016x session=%016x commands=%d commandHash=%016x\n",
+				w.simulationTick,
+				stateHash,
+				SessionHashWithState(w, stateHash),
+				len(w.commandLog),
+				WorldCommandLogHash(w),
+			)
+			ProfilerWrite(line)
+		}
 	}
 	ProfilerEnd(tickStamp)
 }
