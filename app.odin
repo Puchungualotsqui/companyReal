@@ -123,11 +123,13 @@ AppStartGame :: proc(app: ^App) -> bool {
 	}
 
 	localKingdom := app.config.spectator ? -1 : 0
+	humanKingdoms: bit_set[0..<KINGDOMS_CAPACITY]
+	if localKingdom >= 0 do humanKingdoms += {localKingdom}
 	localColor := KINGDOM_COLOR_PALETTE[
 		clamp(app.config.colorIndex, 0, len(KINGDOM_COLOR_PALETTE)-1)
 	]
 	AssignKingdomColors(localKingdom, localColor, &world.kingdomColors)
-	WorldConfigureGame(world, localKingdom, app.config.spectator)
+	WorldConfigureGame(world, humanKingdoms, localKingdom, app.config.spectator)
 	FogUpdate(world)
 	// Exchange this config with peers instead of regenerating the seed.
 	SessionLog(world)

@@ -4,7 +4,7 @@ import "base:intrinsics"
 import "d32"
 
 // Bump when authoritative numeric, generation, command or hash rules change.
-WORLD_STATE_VERSION :: u32(3)
+WORLD_STATE_VERSION :: u32(4)
 
 // One multiply per 64-bit word keeps per-tile state cheap while staying exactly
 // reproducible: each step is a bijection, so any changed value changes the hash.
@@ -358,6 +358,7 @@ WorldStateHash :: proc(w: ^World) -> u64 {
 	WorldHashValue(&hash, w.gameOver)
 	WorldHashValue(&hash, w.winnerKingdom)
 	WorldHashValue(&hash, w.usedTownName)
+	WorldHashValue(&hash, w.humanKingdoms)
 	// Contact affects diplomacy; observer fog is peer-local.
 	WorldHashValue(&hash, w.fog.contacts)
 	WorldHashValue(&hash, w.weather.kind)

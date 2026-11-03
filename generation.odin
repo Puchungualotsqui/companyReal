@@ -71,6 +71,22 @@ WorldGenerationSettingsDefault :: proc() -> WorldGenerationSettings {
 	}
 }
 
+// Peers compare this fingerprint so silent setting edits cannot split a session.
+WorldGenerationHash :: proc(settings: WorldGenerationSettings) -> u64 {
+	hash: u64 = 0xcbf29ce484222325
+	WorldHashValue(&hash, settings.seed)
+	WorldHashValue(&hash, settings.landThreshold)
+	WorldHashValue(&hash, settings.sandThreshold)
+	WorldHashValue(&hash, settings.biomeSize)
+	WorldHashValue(&hash, settings.islandCount)
+	WorldHashValue(&hash, settings.beachWidth)
+	WorldHashValue(&hash, settings.riverCount)
+	WorldHashValue(&hash, settings.lakeCount)
+	WorldHashValue(&hash, settings.minLakeRadius)
+	WorldHashValue(&hash, settings.maxLakeRadius)
+	return hash
+}
+
 WorldGenerate :: proc(w: ^World, settings: WorldGenerationSettings) {
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)

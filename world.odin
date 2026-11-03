@@ -60,12 +60,14 @@ World :: struct {
 	kingdomUsed: [KINGDOM_SLOTS]bool,
 	kingdomColors: [KINGDOMS_CAPACITY]rl.Color,
 	controllers: [KINGDOMS_CAPACITY]KingdomController,
-	playerKingdom: int,
-	observerKingdom: int,
+	humanKingdoms: bit_set[0..<KINGDOMS_CAPACITY], // Shared ownership; peers must agree on it
+	playerKingdom: int, // Local player, never part of the simulation
+	observerKingdom: int, // Local camera/fog owner, never part of the simulation
 	gameOver: bool,
 	winnerKingdom: int,
 	usedTownName: [len(TownCulture)][TOWN_NAME_POOL_MAX]bool,
 	seed: u64,
+	generationHash: u64, // Fingerprint of the settings used to build the world
 	maxX, maxY: uint,
 	navigationRevision: u64,
 	pathRevision: u64,
@@ -118,7 +120,8 @@ World :: struct {
 	alerts: AlertFeed,
 	pendingCommands: [dynamic]QueuedCommand, // Applied at the next tick boundary
 	commandLog: [dynamic]LoggedCommand, // Applied commands, for replay and desync checks
-	commandSequence: u32,
+	commandSequence: u32, // Canonical apply order across the whole log
+	localCommandOrigin: [KINGDOMS_CAPACITY]u32, // Next origin to stamp on local input
 	peerConfig: SessionConfig, // Remote config, for handshake validation
 	peerConfigSeen: bool,
 	peerHashTick: u64,
@@ -136,6 +139,7 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	w.maxX = maxX
 	w.maxY = maxY
 	w.seed = settings.seed
+	w.generationHash = WorldGenerationHash(settings)
 	w.unitCount = 0
 	w.unitFreeHint = 0
 	w.pendingDespawns = make([dynamic]int, 0, UNIT_CAPACITY)
@@ -188,7 +192,7 @@ WorldInit :: proc(w: ^World, maxX, maxY, kingdoms: uint, settings: WorldGenerati
 	ok := WorldSpawnInitialKingdoms(w, int(kingdoms), settings.seed)
 	if ok {
 		AssignKingdomColors(0, KINGDOM_COLOR_PALETTE[0], &w.kingdomColors)
-		WorldConfigureGame(w, 0, false)
+		WorldConfigureGame(w, {0}, 0, false)
 		FogUpdate(w)
 	}
 	return ok

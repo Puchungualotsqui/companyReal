@@ -5,15 +5,19 @@ import "d32"
 
 // Session protocol and command wire format. The protocol version is exchanged
 // with the seed so peers reject incompatible builds before simulating.
-SESSION_PROTOCOL_VERSION :: u32(1)
+SESSION_PROTOCOL_VERSION :: u32(2)
 // Commands from peers arrive a couple of ticks ahead of the tick they affect.
 SESSION_INPUT_DELAY_TICKS :: u64(2)
 
+// Fields above the line must match on every peer. Local identity below it is
+// never hashed or compared, otherwise two peers could never agree.
 SessionConfig :: struct {
 	protocolVersion: u32,
 	seed:            u64,
+	generationHash:  u64, // Generation settings fingerprint
 	width, height:   u32,
 	kingdomCount:    u8,
+	humanKingdoms:   bit_set[0..<KINGDOMS_CAPACITY], // Shared ownership
 	localKingdom:    i8, // -1 for spectators
 	spectator:       bool,
 }
@@ -28,9 +32,11 @@ WorldSessionConfig :: proc(w: ^World) -> SessionConfig {
 	return SessionConfig {
 		protocolVersion = SESSION_PROTOCOL_VERSION,
 		seed = w.seed,
+		generationHash = w.generationHash,
 		width = u32(w.maxX),
 		height = u32(w.maxY),
 		kingdomCount = count,
+		humanKingdoms = w.humanKingdoms,
 		localKingdom = local,
 		spectator = WorldIsSpectating(w),
 	}
@@ -40,20 +46,23 @@ WorldSessionConfig :: proc(w: ^World) -> SessionConfig {
 SessionConfigCompatible :: proc(a, b: SessionConfig) -> bool {
 	return a.protocolVersion == b.protocolVersion &&
 		a.seed == b.seed &&
+		a.generationHash == b.generationHash &&
 		a.width == b.width &&
 		a.height == b.height &&
-		a.kingdomCount == b.kingdomCount
+		a.kingdomCount == b.kingdomCount &&
+		a.humanKingdoms == b.humanKingdoms
 }
 
+// Shared fields only: every peer must produce the same value.
 SessionConfigHash :: proc(config: SessionConfig) -> u64 {
 	hash: u64 = 0xcbf29ce484222325
 	WorldHashValue(&hash, config.protocolVersion)
 	WorldHashValue(&hash, config.seed)
+	WorldHashValue(&hash, config.generationHash)
 	WorldHashValue(&hash, config.width)
 	WorldHashValue(&hash, config.height)
 	WorldHashValue(&hash, config.kingdomCount)
-	WorldHashValue(&hash, config.localKingdom)
-	WorldHashValue(&hash, config.spectator)
+	WorldHashValue(&hash, config.humanKingdoms)
 	return hash
 }
 
@@ -73,12 +82,14 @@ SessionHash :: proc(w: ^World) -> u64 {
 SessionLog :: proc(w: ^World) {
 	config := WorldSessionConfig(w)
 	fmt.printfln(
-		"SESSION version=%d seed=%d width=%d height=%d kingdoms=%d local=%d spectator=%v configHash=%016x",
+		"SESSION version=%d seed=%d gen=%016x width=%d height=%d kingdoms=%d human=%v local=%d spectator=%v configHash=%016x",
 		config.protocolVersion,
 		config.seed,
+		config.generationHash,
 		config.width,
 		config.height,
 		config.kingdomCount,
+		config.humanKingdoms,
 		config.localKingdom,
 		config.spectator,
 		SessionConfigHash(config),
@@ -363,12 +374,13 @@ CommandDecode :: proc(buf: []u8) -> (command: KingdomCommand, used: int, ok: boo
 	return command, reader.pos, reader.ok
 }
 
-LOGGED_COMMAND_HEADER_BYTES :: 18 // tick, sequence, kingdom, accepted, source
+LOGGED_COMMAND_HEADER_BYTES :: 22 // tick, sequence, origin, kingdom, accepted, source
 
 LoggedCommandEncode :: proc(buf: []u8, entry: LoggedCommand) -> (used: int, ok: bool) {
 	writer := WireWrite{buf = buf, ok = true}
 	WirePutU64(&writer, entry.tick)
 	WirePutU32(&writer, entry.sequence)
+	WirePutU32(&writer, entry.origin)
 	WirePutI32(&writer, i32(entry.kingdom))
 	WirePutBool(&writer, entry.accepted)
 	WirePutU8(&writer, u8(entry.source))
@@ -382,6 +394,7 @@ LoggedCommandDecode :: proc(buf: []u8) -> (entry: LoggedCommand, used: int, ok: 
 	reader := WireRead{buf = buf, ok = true}
 	entry.tick = WireGetU64(&reader)
 	entry.sequence = WireGetU32(&reader)
+	entry.origin = WireGetU32(&reader)
 	entry.kingdom = int(WireGetI32(&reader))
 	entry.accepted = WireGetBool(&reader)
 	source := WireGetU8(&reader)
@@ -397,9 +410,11 @@ SessionConfigEncode :: proc(buf: []u8, config: SessionConfig) -> (used: int, ok:
 	writer := WireWrite{buf = buf, ok = true}
 	WirePutU32(&writer, config.protocolVersion)
 	WirePutU64(&writer, config.seed)
+	WirePutU64(&writer, config.generationHash)
 	WirePutU32(&writer, config.width)
 	WirePutU32(&writer, config.height)
 	WirePutU8(&writer, config.kingdomCount)
+	WirePutU8(&writer, transmute(u8)config.humanKingdoms)
 	WirePutU8(&writer, u8(config.localKingdom))
 	WirePutBool(&writer, config.spectator)
 	return writer.pos, writer.ok
@@ -545,7 +560,7 @@ WorldReceiveSessionPacket :: proc(w: ^World, buf: []u8) -> bool {
 			if !entryOk do return false
 			reader.pos += entryUsed
 			if !entry.accepted || entry.source != .Human do continue
-			WorldQueueCommandAt(w, entry.kingdom, entry.command, entry.tick)
+			WorldQueueCommandScheduled(w, entry.kingdom, entry.command, entry.tick, entry.origin)
 		}
 		return true
 	case .Hash:
@@ -563,9 +578,12 @@ SessionConfigDecode :: proc(buf: []u8) -> (config: SessionConfig, used: int, ok:
 	reader := WireRead{buf = buf, ok = true}
 	config.protocolVersion = WireGetU32(&reader)
 	config.seed = WireGetU64(&reader)
+	config.generationHash = WireGetU64(&reader)
 	config.width = WireGetU32(&reader)
 	config.height = WireGetU32(&reader)
 	config.kingdomCount = WireGetU8(&reader)
+	humanMask := WireGetU8(&reader)
+	config.humanKingdoms = transmute(bit_set[0..<KINGDOMS_CAPACITY])humanMask
 	config.localKingdom = i8(WireGetU8(&reader))
 	config.spectator = WireGetBool(&reader)
 	return config, reader.pos, reader.ok

@@ -117,48 +117,74 @@ CommandSource :: enum {
 }
 
 QueuedCommand :: struct {
-	kingdom:   int,
-	command:   KingdomCommand,
+	kingdom:    int,
+	command:    KingdomCommand,
 	targetTick: u64,
+	origin:     u32, // Per-kingdom sender sequence, used for canonical ordering
 }
 
 LoggedCommand :: struct {
-	tick: u64,
-	sequence: u32,
-	kingdom: int,
-	command: KingdomCommand,
+	tick:     u64,
+	sequence: u32, // Unique apply order in this world
+	kingdom:  int,
+	command:  KingdomCommand,
 	accepted: bool,
-	source: CommandSource,
+	source:   CommandSource,
+	origin:   u32, // Sender sequence, replayed so peers apply the same order
 }
 
-WorldQueueCommandAt :: proc(
+// Local input stamps its own origin. Every peer applies queued commands in
+// (tick, kingdom, origin) order, so arrival order never changes the result.
+WorldQueueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) -> bool {
+	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do return false
+	origin := w.localCommandOrigin[kingdom]
+	w.localCommandOrigin[kingdom] += 1
+	append(&w.pendingCommands, QueuedCommand {
+		kingdom = kingdom,
+		command = command,
+		targetTick = WorldCurrentTick(w)+SESSION_INPUT_DELAY_TICKS,
+		origin = origin,
+	})
+	return true
+}
+
+// Received and replayed commands keep the origin assigned by the issuing peer.
+WorldQueueCommandScheduled :: proc(
 	w: ^World,
 	kingdom: int,
 	command: KingdomCommand,
 	targetTick: u64,
+	origin: u32,
 ) -> bool {
 	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] do return false
 	append(&w.pendingCommands, QueuedCommand {
 		kingdom = kingdom,
 		command = command,
 		targetTick = targetTick,
+		origin = origin,
 	})
 	return true
 }
 
-// External input is scheduled a few ticks ahead so every peer can receive it.
-WorldQueueCommand :: proc(w: ^World, kingdom: int, command: KingdomCommand) -> bool {
-	return WorldQueueCommandAt(
-		w,
-		kingdom,
-		command,
-		WorldCurrentTick(w)+SESSION_INPUT_DELAY_TICKS,
-	)
+QueuedCommandBefore :: proc(a, b: QueuedCommand) -> bool {
+	if a.targetTick != b.targetTick do return a.targetTick < b.targetTick
+	if a.kingdom != b.kingdom do return a.kingdom < b.kingdom
+	return a.origin < b.origin
 }
 
-// Commands whose target tick has arrived are applied in arrival order. Later
+// Commands whose target tick has arrived are applied in canonical order. Later
 // entries stay queued, so late input shifts instead of reordering.
 WorldApplyPendingCommands :: proc(w: ^World) {
+	// Insertion sort: the queue holds a handful of commands per tick.
+	for index in 1..<len(w.pendingCommands) {
+		queued := w.pendingCommands[index]
+		slot := index
+		for slot > 0 && QueuedCommandBefore(queued, w.pendingCommands[slot-1]) {
+			w.pendingCommands[slot] = w.pendingCommands[slot-1]
+			slot -= 1
+		}
+		w.pendingCommands[slot] = queued
+	}
 	current := WorldCurrentTick(w)
 	write := 0
 	for index in 0..<len(w.pendingCommands) {
@@ -168,7 +194,7 @@ WorldApplyPendingCommands :: proc(w: ^World) {
 			write += 1
 			continue
 		}
-		KingdomIssueCommand(w, queued.kingdom, queued.command, .Human)
+		KingdomIssueCommand(w, queued.kingdom, queued.command, .Human, queued.origin)
 	}
 	resize(&w.pendingCommands, write)
 }
@@ -199,6 +225,7 @@ WorldCommandLogHash :: proc(w: ^World) -> u64 {
 	for entry in w.commandLog {
 		WorldHashValue(&hash, entry.tick)
 		WorldHashValue(&hash, entry.sequence)
+		WorldHashValue(&hash, entry.origin)
 		WorldHashValue(&hash, entry.kingdom)
 		WorldHashValue(&hash, CommandHash(entry.command))
 		WorldHashValue(&hash, entry.accepted)
@@ -231,10 +258,11 @@ WorldCheckPeerHash :: proc(w: ^World, tick: u64, peerHash: u64) -> bool {
 }
 
 // Re-applies accepted log entries for one tick while replaying a fresh world.
+// Origins are recorded, so the rebuilt queue sorts into the original order.
 WorldReplayCommands :: proc(w: ^World, log: []LoggedCommand, tick: u64) {
 	for entry in log {
 		if entry.tick != tick || !entry.accepted || entry.source != .Human do continue
-		WorldQueueCommandAt(w, entry.kingdom, entry.command, tick)
+		WorldQueueCommandScheduled(w, entry.kingdom, entry.command, tick, entry.origin)
 	}
 }
 
@@ -321,6 +349,7 @@ CommandLogAppend :: proc(
 	command: KingdomCommand,
 	accepted: bool,
 	source: CommandSource,
+	origin: u32,
 ) {
 	append(&w.commandLog, LoggedCommand {
 		tick = WorldCurrentTick(w),
@@ -329,15 +358,17 @@ CommandLogAppend :: proc(
 		command = command,
 		accepted = accepted,
 		source = source,
+		origin = origin,
 	})
 	w.commandSequence += 1
 	if profiler.file == nil do return
 	buffer: [160]u8
 	line := fmt.bprintf(
 		buffer[:],
-		"COMMAND tick=%d seq=%d kingdom=%d kind=%d hash=%016x ok=%v source=%d\n",
+		"COMMAND tick=%d seq=%d origin=%d kingdom=%d kind=%d hash=%016x ok=%v source=%d\n",
 		WorldCurrentTick(w),
 		w.commandSequence-1,
+		origin,
 		kingdom,
 		CommandKindTag(command),
 		CommandHash(command),
@@ -352,6 +383,7 @@ KingdomIssueCommand :: proc(
 	kingdom: int,
 	command: KingdomCommand,
 	source := CommandSource.AI,
+	origin: u32 = 0,
 ) -> bool {
 	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] {
 		return false
@@ -398,26 +430,33 @@ KingdomIssueCommand :: proc(
 	case CommandUseOrder:
 		result = OrderStart(w, kingdom, cmd.kind, cmd.x, cmd.y)
 	}
-	CommandLogAppend(w, kingdom, command, result, source)
+	CommandLogAppend(w, kingdom, command, result, source, origin)
 	return result
 }
 
-// Configures who drives each kingdom. `localKingdom` is the slot controlled
-// by the person at this screen; pass -1 for a pure spectator game.
-WorldConfigureGame :: proc(w: ^World, localKingdom: int, spectator: bool) {
+// Configures who drives each kingdom. `humanKingdoms` is shared by every peer;
+// `localKingdom` and `spectator` only describe this screen.
+WorldConfigureGame :: proc(
+	w: ^World,
+	humanKingdoms: bit_set[0..<KINGDOMS_CAPACITY],
+	localKingdom: int,
+	spectator: bool,
+) {
 	w.gameOver = false
 	w.winnerKingdom = -1
 	w.playerKingdom = -1
 	w.observerKingdom = -1
+	w.humanKingdoms = {}
 
 	for kingdom in 0 ..< KINGDOMS_CAPACITY {
-		w.controllers[kingdom] = KingdomController{kind = .AI}
-		if w.kingdomUsed[kingdom] do AIStateInit(w, kingdom)
+		human := kingdom in humanKingdoms && w.kingdomUsed[kingdom]
+		w.controllers[kingdom] = KingdomController{kind = human ? .Human : .AI}
+		if !human && w.kingdomUsed[kingdom] do AIStateInit(w, kingdom)
+		if human do w.humanKingdoms += {kingdom}
 	}
 
 	if !spectator && localKingdom >= 0 && localKingdom < KINGDOMS_CAPACITY &&
-		w.kingdomUsed[localKingdom] {
-		w.controllers[localKingdom].kind = .Human
+		localKingdom in w.humanKingdoms {
 		w.playerKingdom = localKingdom
 		w.observerKingdom = localKingdom
 	}
@@ -439,13 +478,15 @@ WorldIsSpectating :: proc(w: ^World) -> bool {
 	return w.observerKingdom < 0
 }
 
-// Hands every human-controlled kingdom to the AI and reveals the whole map.
-// Used by the "continue watching" flow on victory/defeat.
+// Hands the local player's kingdom to the AI and reveals the whole map. Used by
+// the "continue watching" flow on victory/defeat. Only the local seat changes,
+// so other peers' kingdoms keep their controllers.
 WorldEnterSpectator :: proc(w: ^World) {
-	for kingdom in 0 ..< KINGDOMS_CAPACITY {
-		if w.controllers[kingdom].kind != .Human do continue
-		w.controllers[kingdom].kind = .AI
-		if w.kingdomUsed[kingdom] do AIStateInit(w, kingdom)
+	local := w.playerKingdom
+	if local >= 0 && local < KINGDOMS_CAPACITY {
+		w.humanKingdoms -= {local}
+		w.controllers[local].kind = .AI
+		if w.kingdomUsed[local] do AIStateInit(w, local)
 	}
 	w.playerKingdom = -1
 	w.observerKingdom = -1

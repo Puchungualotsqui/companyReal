@@ -31,12 +31,15 @@ HashTraceQueueScript :: proc(w: ^World, tick: u64) {
 	switch tick {
 	case 1:
 		WorldQueueCommand(w, 0, CommandDeclareWar{other = 1})
-	case 3:
+	case 2:
+		// Two kingdoms, same target tick: arrival order must not matter.
 		WorldQueueCommand(w, 0, CommandAttackTown {
 			town = 0,
 			targetKingdom = 1,
 			targetTown = 0,
 		})
+		WorldQueueCommand(w, 0, CommandStopDefend{town = 0, targetKingdom = 1, targetTown = 0})
+		WorldQueueCommand(w, 1, CommandStopAttack{town = 0, targetKingdom = 0, targetTown = 0})
 	}
 }
 
@@ -83,7 +86,11 @@ HashTraceRun :: proc() -> bool {
 
 	live := make([]u64, ticks+1)
 	defer delete(live)
+	// Session hashes include the command log, so they catch apply-order drift.
+	liveSession := make([]u64, ticks+1)
+	defer delete(liveSession)
 	live[0] = WorldStateHash(w)
+	liveSession[0] = SessionHash(w)
 	fmt.printfln(
 		"HASH_TRACE version=%d seed=%d size=%d kingdoms=%d initial=%016x",
 		WORLD_STATE_VERSION,
@@ -96,6 +103,7 @@ HashTraceRun :: proc() -> bool {
 		if useCommands do HashTraceQueueScript(w, u64(tick+1))
 		WorldTick(w)
 		live[tick+1] = WorldStateHash(w)
+		liveSession[tick+1] = SessionHash(w)
 		fmt.printfln("HASH_TRACE tick=%d hash=%016x", tick+1, live[tick+1])
 	}
 
@@ -111,8 +119,8 @@ HashTraceRun :: proc() -> bool {
 		}
 		decoded, _, decodedOk := LoggedCommandDecode(buffer[:used])
 		if !decodedOk || decoded.tick != entry.tick || decoded.sequence != entry.sequence ||
-			decoded.kingdom != entry.kingdom || decoded.accepted != entry.accepted ||
-			decoded.source != entry.source ||
+			decoded.origin != entry.origin || decoded.kingdom != entry.kingdom ||
+			decoded.accepted != entry.accepted || decoded.source != entry.source ||
 			CommandHash(decoded.command) != CommandHash(entry.command) {
 			wireOk = false
 			break
@@ -130,12 +138,12 @@ HashTraceRun :: proc() -> bool {
 	if kingdoms >= 2 do KingdomMeet(replay, 0, 1)
 
 	log := w.commandLog[:]
-	matched := WorldStateHash(replay) == live[0]
+	matched := liveSession[0] == SessionHash(replay)
 	for tick in 0..<ticks {
 		WorldReplayCommands(replay, log, u64(tick+1))
 		WorldTick(replay)
 		if replay.gameOver != w.gameOver do matched = false
-		if WorldStateHash(replay) != live[tick+1] {
+		if SessionHash(replay) != liveSession[tick+1] {
 			fmt.printfln("REPLAY mismatch tick=%d", tick+1)
 			matched = false
 			break
@@ -147,16 +155,16 @@ HashTraceRun :: proc() -> bool {
 		fmt.printfln("REPLAY failed ticks=%d commands=%d", ticks, len(log))
 	}
 
-	SessionTraceNetwork(size, kingdoms, seed, live, log, ticks)
+	SessionTraceNetwork(size, kingdoms, seed, liveSession, log, ticks)
 	return true
 }
 
 // Loopback check for the packet format: config handshake, command batch, then
-// compare the peer's per-tick hashes with the live run.
+// compare the peer's per-tick session hashes with the live run.
 SessionTraceNetwork :: proc(
 	size, kingdoms: int,
 	seed: u64,
-	live: []u64,
+	liveSession: []u64,
 	log: []LoggedCommand,
 	ticks: int,
 ) {
@@ -185,11 +193,13 @@ SessionTraceNetwork :: proc(
 	}
 	humans := make([]LoggedCommand, humanCount)
 	defer delete(humans)
-	write := 0
+	// Filled backwards on purpose: the peer receives them out of order, so this
+	// only matches when both sides apply the canonical (tick, kingdom, origin) order.
+	write := humanCount-1
 	for entry in log {
 		if entry.source != .Human || !entry.accepted do continue
 		humans[write] = entry
-		write += 1
+		write -= 1
 	}
 
 	sizeNeeded := SessionCommandsPacketSize(humans)
@@ -202,7 +212,7 @@ SessionTraceNetwork :: proc(
 
 	for tick in 0..<ticks {
 		WorldTick(peer)
-		if WorldStateHash(peer) != live[tick+1] {
+		if SessionHash(peer) != liveSession[tick+1] {
 			networkOk = false
 			break
 		}
