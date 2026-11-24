@@ -3837,10 +3837,10 @@ UIOrderPanelLayout :: proc(w: ^World, count: int) -> (panel: rl.Rectangle, rows:
 UIOrderRailLayout :: proc(screenWidth, hudBottom, buttonTop: f32, count: int) -> (panel: rl.Rectangle, rows: int, buttonSize, gap: f32) {
 	if count <= 0 do return
 	y := hudBottom+8
-	available := buttonTop-8-y-UI_ORDER_TITLE_H-16
+	available := max(buttonTop-y-8-UI_ORDER_TITLE_H-16, 0)
 	rows = count
-	gap = UI_ORDER_GAP
-	buttonSize = clamp((available-f32(count-1)*gap)/f32(count), 36, UI_ORDER_BUTTON_SIZE)
+	gap = min(UI_ORDER_GAP, available/f32(max(count*2, 1)))
+	buttonSize = max(1, min(UI_ORDER_BUTTON_SIZE, (available-f32(count-1)*gap)/f32(count)))
 	height := f32(count)*buttonSize+f32(count-1)*gap+UI_ORDER_TITLE_H+16
 	width := buttonSize+16
 	panel = rl.Rectangle{screenWidth-UI_MARGIN-width, y, width, height}
@@ -4017,28 +4017,34 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 		if ui.command == .OrderAim && ui.orderKind == kind do border = UI_COLOR_ATTACK
 		rl.DrawRectangleLinesEx(rect, ui.command == .OrderAim && ui.orderKind == kind ? 2 : 1, border)
 
+		countText := fmt.ctprintf("%d/%d", ready, total)
+		statusSize := min(14, rect.height*0.22)
+		for statusSize > 8 && rl.MeasureTextEx(UIFont(), countText, statusSize, 1).x > rect.width-8 {
+			statusSize -= 1
+		}
+		statusHeight := rl.MeasureTextEx(UIFont(), countText, statusSize, 1).y
+		statusY := math.floor(rect.y+rect.height-statusHeight-4)
 		texture := renderer.sprites.building[FactionSpriteIndex(local)][sourceKind]
 		if texture.id != 0 {
 			source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
 			tint := rl.WHITE
+			iconTop := rect.y+rect.height*0.08
+			iconBottom := max(iconTop+1, statusY-2)
 			rl.DrawTexturePro(
 				texture,
 				source,
-				rl.Rectangle{rect.x+rect.width*0.14, rect.y+rect.height*0.10, rect.width*0.72, rect.height*0.62},
+				rl.Rectangle{rect.x+rect.width*0.14, iconTop, rect.width*0.72, iconBottom-iconTop},
 				rl.Vector2{0, 0},
 				0,
 				tint,
 			)
 		} else {
-			UIDrawOrderIcon(rect.x+rect.width*0.5, rect.y+rect.height*0.4, UI_COLOR_GOLD)
+			UIDrawOrderIcon(rect.x+rect.width*0.5, rect.y+rect.height*0.36, UI_COLOR_GOLD)
 		}
-
-		countText := fmt.ctprintf("%d/%d", ready, total)
-		statusSize := min(14, rect.height*0.22)
 		rl.DrawTextEx(
 			UIFont(),
 			countText,
-			rl.Vector2{rect.x+4, rect.y+rect.height-statusSize-3},
+			rl.Vector2{rect.x+4, statusY},
 			statusSize,
 			1,
 			ready > 0 ? UI_COLOR_TEXT : UI_COLOR_DIM,
@@ -4052,7 +4058,7 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			rl.DrawTextEx(
 				UIFont(),
 				warningText,
-				rl.Vector2{rect.x+rect.width-warningWidth-4, rect.y+rect.height-statusSize-3},
+				rl.Vector2{rect.x+rect.width-warningWidth-4, statusY},
 				statusSize,
 				1,
 				color,
@@ -4063,7 +4069,7 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			rl.DrawTextEx(
 				UIFont(),
 				activeText,
-				rl.Vector2{rect.x+rect.width-activeWidth-4, rect.y+rect.height-statusSize-3},
+				rl.Vector2{rect.x+rect.width-activeWidth-4, statusY},
 				statusSize,
 				1,
 				UI_COLOR_ATTACK,
@@ -4076,7 +4082,7 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 				rl.DrawTextEx(
 					UIFont(),
 					nextText,
-					rl.Vector2{rect.x+rect.width-nextWidth-4, rect.y+rect.height-statusSize-3},
+					rl.Vector2{rect.x+rect.width-nextWidth-4, statusY},
 					statusSize,
 					1,
 					UI_COLOR_DIM,
@@ -4100,6 +4106,16 @@ UIDrawHoveredOrderTooltip :: proc(w: ^World) {
 		UIDrawOrderTooltip(w, anchor, kinds[index])
 		return
 	}
+}
+
+UIOrderTooltipLine :: proc(text: cstring, x, y, maxWidth: f32, color: rl.Color) {
+	size := UI_TEXT_SIZE
+	for size > UI_DESC_TEXT_MIN_SIZE && rl.MeasureTextEx(UIFont(), text, size, 1).x > maxWidth {
+		size -= 1
+	}
+	rl.BeginScissorMode(i32(x), i32(y), i32(maxWidth), i32(UIHudLineHeight()))
+	rl.DrawTextEx(UIFont(), text, rl.Vector2{x, y}, size, 1, color)
+	rl.EndScissorMode()
 }
 
 UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
@@ -4136,9 +4152,12 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 		detail = fmt.ctprintf("Cooldown %ds.", int(PositionToF32(OrderCooldownSeconds(kind))))
 	}
 
+	screenWidth := f32(rl.GetScreenWidth())
+	tooltipWidth := min(UI_ORDER_TOOLTIP_W, max(1, screenWidth-2*UI_MARGIN))
+	contentWidth := max(1, tooltipWidth-2*UI_PAD)
 	desc := UIFitWrappedText(
 		OrderDescription(kind),
-		UI_ORDER_TOOLTIP_W-2*UI_PAD,
+		contentWidth,
 		UI_DESC_MAX_LINES,
 		UI_DESC_TEXT_SIZE,
 		UI_DESC_TEXT_MIN_SIZE,
@@ -4147,9 +4166,9 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 	bodyCount := 3
 	if OrderWardCost(kind) > 0 do bodyCount += 1
 	height := 34+desc.height+UI_DESC_GAP+f32(bodyCount)*lineHeight+8
-	x := clamp(rect.x-UI_ORDER_TOOLTIP_W-12, UI_MARGIN, f32(rl.GetScreenWidth())-UI_ORDER_TOOLTIP_W-UI_MARGIN)
-	y := clamp(rect.y, UI_MARGIN, f32(rl.GetScreenHeight())-height-UI_MARGIN)
-	box := rl.Rectangle{x, y, UI_ORDER_TOOLTIP_W, height}
+	x := clamp(rect.x-tooltipWidth-12, UI_MARGIN, max(UI_MARGIN, screenWidth-tooltipWidth-UI_MARGIN))
+	y := clamp(rect.y, UI_MARGIN, max(UI_MARGIN, f32(rl.GetScreenHeight())-height-UI_MARGIN))
+	box := rl.Rectangle{x, y, tooltipWidth, height}
 	rl.DrawRectangleRec(box, UI_COLOR_BG)
 	rl.DrawRectangleLinesEx(box, 2, UI_COLOR_BORDER)
 	rl.DrawRectangleLinesEx(
@@ -4160,20 +4179,22 @@ UIDrawOrderTooltip :: proc(w: ^World, rect: rl.Rectangle, kind: OrderKind) {
 	UIText(title, box.x+UI_PAD, box.y+8, UI_COLOR_GOLD)
 	UIDrawWrappedText(OrderDescription(kind), desc, box.x+UI_PAD, box.y+34, UI_COLOR_TEXT)
 	lineY := box.y+34+desc.height+UI_DESC_GAP
-	UIText(status, box.x+UI_PAD, lineY, warning > 0 ? UIOrderColor(kind) : active > 0 ? UI_COLOR_ATTACK : UI_COLOR_DIM)
+	lineWidth := box.width-2*UI_PAD
+	UIOrderTooltipLine(status, box.x+UI_PAD, lineY, lineWidth, warning > 0 ? UIOrderColor(kind) : active > 0 ? UI_COLOR_ATTACK : UI_COLOR_DIM)
 	lineY += lineHeight
-	UIText(detail, box.x+UI_PAD, lineY, UI_COLOR_DIM)
+	UIOrderTooltipLine(detail, box.x+UI_PAD, lineY, lineWidth, UI_COLOR_DIM)
 	lineY += lineHeight
-	UIText("Uses the nearest ready source.", box.x+UI_PAD, lineY, UI_COLOR_DIM)
+	UIOrderTooltipLine("Uses the nearest ready source.", box.x+UI_PAD, lineY, lineWidth, UI_COLOR_DIM)
 	lineY += lineHeight
 	if OrderWardCost(kind) > 0 {
-		UIText(
+		UIOrderTooltipLine(
 			fmt.ctprintf(
 				"Town Aegis absorbs up to %d%% of the strike.",
 				int(PositionToF32(TOWN_AEGIS_MAX_MITIGATION)*100+0.5),
 			),
 			box.x+UI_PAD,
 			lineY,
+			lineWidth,
 			UI_COLOR_DEFEND,
 		)
 	}
