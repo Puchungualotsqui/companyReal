@@ -407,19 +407,20 @@ WorldStateHash :: proc(w: ^World) -> u64 {
 	WorldHashValue(&hash, w.scarTiles)
 	WorldHashValue(&hash, w.terrainChunkRevisions)
 	for slot in 0..<KINGDOMS_CAPACITY {
-		controller := w.controllers[slot]
-		WorldHashValue(&hash, controller.kind)
-		if controller.kind == .AI {
-			brain := controller.ai
-			WorldHashValue(&hash, brain.decisionTimer)
-			WorldHashValue(&hash, brain.orderTimer)
-			WorldHashValue(&hash, brain.diplomacyTimer)
-			WorldHashValue(&hash, brain.expandTimer)
-			WorldHashValue(&hash, brain.aggression)
-			WorldHashValue(&hash, brain.expansion)
-			WorldHashValue(&hash, brain.warCommitUntilTick)
-			WorldHashValue(&hash, brain.truceUntilTick)
-			WorldHashValue(&hash, brain.truceKingdom)
+		switch controller in w.controllers[slot] {
+		case Human:
+			WorldHashValue(&hash, i64(0))
+		case AIBrain:
+			WorldHashValue(&hash, i64(1))
+			WorldHashValue(&hash, controller.decisionTimer)
+			WorldHashValue(&hash, controller.orderTimer)
+			WorldHashValue(&hash, controller.diplomacyTimer)
+			WorldHashValue(&hash, controller.expandTimer)
+			WorldHashValue(&hash, controller.aggression)
+			WorldHashValue(&hash, controller.expansion)
+			WorldHashValue(&hash, controller.warCommitUntilTick)
+			WorldHashValue(&hash, controller.truceUntilTick)
+			WorldHashValue(&hash, controller.truceKingdom)
 		}
 	}
 	for slot in 0..<UNIT_CAPACITY {

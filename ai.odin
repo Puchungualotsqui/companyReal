@@ -19,21 +19,10 @@ AI_ATTACK_GRACE_SECONDS :: 45
 AI_WAR_COMMIT_SECONDS :: 75
 AI_TRUCE_SECONDS :: 90
 
-AIBrain :: struct {
-	decisionTimer:      d32.Value,
-	orderTimer:         d32.Value,
-	diplomacyTimer:     d32.Value,
-	expandTimer:        d32.Value,
-	aggression:         u32,
-	expansion:          u32,
-	warCommitUntilTick: u64,
-	truceUntilTick:     u64,
-	truceKingdom:       int,
-}
 
 AIStateInit :: proc(w: ^World, kingdom: int) {
 	seed := w.seed+u64(kingdom+1)*0x9E3779B97F4A7C15
-	brain := &w.controllers[kingdom].ai
+	brain: AIBrain
 	brain.aggression = WorldNoiseHashInt(kingdom, 3, seed)
 	brain.expansion = WorldNoiseHashInt(kingdom, 11, seed)
 	brain.decisionTimer = d32.Add(
@@ -55,6 +44,7 @@ AIStateInit :: proc(w: ^World, kingdom: int) {
 	brain.warCommitUntilTick = 0
 	brain.truceUntilTick = 0
 	brain.truceKingdom = -1
+	w.controllers[kingdom] = brain
 }
 
 // Random values use a Q scale of one million, matching the original float rolls.
@@ -75,8 +65,8 @@ AIRandom :: proc(w: ^World, kingdom, salt: int) -> d32.Value {
 	return d32.FromRatio(i32(AIRandomQ(w, kingdom, salt)), i32(AI_RANDOM_Q))
 }
 
-AIControllerUpdate :: proc(w: ^World, kingdom: int, deltaTime: f32) {
-	brain := &w.controllers[kingdom].ai
+AIControllerUpdate :: proc(w: ^World, kingdom: int, deltaTime: f32, brain: ^AIBrain) {
+	if brain == nil do return
 
 	step := PositionFromF32(deltaTime)
 	brain.decisionTimer = max(d32.Sub(brain.decisionTimer, step), d32.ZERO)
@@ -89,7 +79,7 @@ AIControllerUpdate :: proc(w: ^World, kingdom: int, deltaTime: f32) {
 			AI_DECISION_MIN,
 			d32.Mul(AIRandom(w, kingdom, 31), d32.Sub(AI_DECISION_MAX, AI_DECISION_MIN)),
 		)
-		AIDecide(w, kingdom)
+		AIDecide(w, kingdom, brain)
 	}
 	if brain.orderTimer <= d32.ZERO {
 		brain.orderTimer = d32.Add(
@@ -103,18 +93,18 @@ AIControllerUpdate :: proc(w: ^World, kingdom: int, deltaTime: f32) {
 			AI_DIPLOMACY_MIN,
 			d32.Mul(AIRandom(w, kingdom, 37), d32.Sub(AI_DIPLOMACY_MAX, AI_DIPLOMACY_MIN)),
 		)
-		AIDiplomacy(w, kingdom)
+		AIDiplomacy(w, kingdom, brain)
 	}
 	if brain.expandTimer <= d32.ZERO {
 		brain.expandTimer = d32.Add(
 			AI_EXPAND_MIN,
 			d32.Mul(AIRandom(w, kingdom, 41), d32.Sub(AI_EXPAND_MAX, AI_EXPAND_MIN)),
 		)
-		AIExpand(w, kingdom)
+		AIExpand(w, kingdom, brain)
 	}
 }
 
-AIDecide :: proc(w: ^World, kingdom: int) {
+AIDecide :: proc(w: ^World, kingdom: int, brain: ^AIBrain) {
 	counts: [TOWN_CAPACITY][UnitKind]int
 	for unitSlot in 0 ..< UNIT_CAPACITY {
 		if !w.unitUsed[unitSlot] || w.units[unitSlot].type == nil do continue
@@ -124,7 +114,6 @@ AIDecide :: proc(w: ^World, kingdom: int) {
 		counts[townSlot][UnitKindOf(w.units[unitSlot].type)] += 1
 	}
 
-	brain := &w.controllers[kingdom].ai
 	for townSlot in 0 ..< TOWN_CAPACITY {
 		if !w.kingdoms[kingdom].townUsed[townSlot] do continue
 		town := &w.kingdoms[kingdom].towns[townSlot]
@@ -652,14 +641,13 @@ AIPickWarTarget :: proc(
 	return best
 }
 
-AIDiplomacy :: proc(w: ^World, kingdom: int) {
+AIDiplomacy :: proc(w: ^World, kingdom: int, brain: ^AIBrain) {
 	// Require whole-tick durations rather than silently truncating a deadline.
 	#assert(f64(u64(AI_TRUCE_SECONDS/TOWN_SIMULATION_STEP)) == AI_TRUCE_SECONDS/TOWN_SIMULATION_STEP)
 	#assert(f64(u64(AI_WAR_COMMIT_SECONDS/TOWN_SIMULATION_STEP)) == AI_WAR_COMMIT_SECONDS/TOWN_SIMULATION_STEP)
 	#assert(f64(u64(AI_ATTACK_GRACE_SECONDS/TOWN_SIMULATION_STEP)) == AI_ATTACK_GRACE_SECONDS/TOWN_SIMULATION_STEP)
 	if WorldCurrentTick(w) < u64(AI_ATTACK_GRACE_SECONDS/TOWN_SIMULATION_STEP) do return
 
-	brain := &w.controllers[kingdom].ai
 	ownMilitary := AIMilitaryCount(w, kingdom)
 	ownTowns := AITownCount(w, kingdom)
 	if ownTowns <= 0 do return
@@ -739,8 +727,7 @@ AIDiplomacy :: proc(w: ^World, kingdom: int) {
 	if attacked do brain.warCommitUntilTick = WorldCurrentTick(w)+u64(AI_WAR_COMMIT_SECONDS/TOWN_SIMULATION_STEP)
 }
 
-AIExpand :: proc(w: ^World, kingdom: int) {
-	brain := &w.controllers[kingdom].ai
+AIExpand :: proc(w: ^World, kingdom: int, brain: ^AIBrain) {
 	maxTowns := 6+int(u64(brain.expansion)*6/AI_RANDOM_Q)
 	if AITownCount(w, kingdom) >= maxTowns do return
 

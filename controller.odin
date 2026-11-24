@@ -7,14 +7,23 @@ import "d32"
 // Today there are two kinds: the local human (input arrives through the UI)
 // and an AI brain. Trained-RL or network controllers can be added as another
 // kind and fed through KingdomIssueCommand without touching the simulation.
-ControllerKind :: enum {
+ControllerKind :: union {
 	Human,
-	AI,
+	AIBrain,
 }
 
-KingdomController :: struct {
-	kind: ControllerKind,
-	ai:   AIBrain,
+Human :: struct {}
+
+AIBrain :: struct {
+	decisionTimer:      d32.Value,
+	orderTimer:         d32.Value,
+	diplomacyTimer:     d32.Value,
+	expandTimer:        d32.Value,
+	aggression:         u32,
+	expansion:          u32,
+	warCommitUntilTick: u64,
+	truceUntilTick:     u64,
+	truceKingdom:       int,
 }
 
 // All state-changing actions pass through this command layer. The UI emits
@@ -450,8 +459,12 @@ WorldConfigureGame :: proc(
 
 	for kingdom in 0 ..< KINGDOMS_CAPACITY {
 		human := kingdom in humanKingdoms && w.kingdomUsed[kingdom]
-		w.controllers[kingdom] = KingdomController{kind = human ? .Human : .AI}
-		if !human && w.kingdomUsed[kingdom] do AIStateInit(w, kingdom)
+		if human {
+			w.controllers[kingdom] = Human{}
+		} else {
+			w.controllers[kingdom] = AIBrain{}
+			if w.kingdomUsed[kingdom] do AIStateInit(w, kingdom)
+		}
 		if human do w.humanKingdoms += {kingdom}
 	}
 
@@ -463,8 +476,14 @@ WorldConfigureGame :: proc(
 }
 
 WorldKingdomHuman :: proc(w: ^World, kingdom: int) -> bool {
-	return kingdom >= 0 && kingdom < KINGDOMS_CAPACITY && w.kingdomUsed[kingdom] &&
-		w.controllers[kingdom].kind == .Human
+	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY || !w.kingdomUsed[kingdom] { return false }
+	switch _ in w.controllers[kingdom] {
+	case Human:
+		return true
+	case AIBrain:
+		return false
+	}
+	return false
 }
 
 // The local kingdom the UI is allowed to command. Spectators and eliminated
@@ -485,7 +504,7 @@ WorldEnterSpectator :: proc(w: ^World) {
 	local := w.playerKingdom
 	if local >= 0 && local < KINGDOMS_CAPACITY {
 		w.humanKingdoms -= {local}
-		w.controllers[local].kind = .AI
+		w.controllers[local] = AIBrain{}
 		if w.kingdomUsed[local] do AIStateInit(w, local)
 	}
 	w.playerKingdom = -1
@@ -497,11 +516,11 @@ WorldEnterSpectator :: proc(w: ^World) {
 WorldControllersUpdate :: proc(w: ^World, deltaTime: f32) {
 	for kingdom in 0 ..< KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdom] do continue
-		switch w.controllers[kingdom].kind {
-		case .Human:
+		switch &controller in w.controllers[kingdom] {
+		case Human:
 			// Local input is translated into KingdomCommands by the UI.
-		case .AI:
-			AIControllerUpdate(w, kingdom, deltaTime)
+		case AIBrain:
+			AIControllerUpdate(w, kingdom, deltaTime, &controller)
 		}
 	}
 }
