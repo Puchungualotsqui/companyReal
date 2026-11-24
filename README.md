@@ -1,7 +1,6 @@
 # Things to do
 - RL AI implementation
 - Menu improvement, more similar to the civ VI menu
-- UI revision, it is currently a mess when all the UI is unlocked
 - save and load
 - Multiplayer, ENet could be used
  
