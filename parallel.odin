@@ -162,15 +162,14 @@ RecursiveLockAcquire :: proc(l: ^RecursiveLock) {
 	spins := 0
 	backoff := time.Microsecond
 	for {
-		if intrinsics.atomic_compare_exchange_weak_explicit(
+		_, acquired := intrinsics.atomic_compare_exchange_weak_explicit(
 			&l.owner,
 			u32(0),
 			tid,
 			.Acquire,
 			.Relaxed,
-		) == 0 {
-			break
-		}
+		)
+		if acquired do break
 		if spins < 256 {
 			intrinsics.cpu_relax()
 			spins += 1
@@ -267,8 +266,8 @@ parallelRunJob :: proc(task: thread.Task) {
 	job.body(job.ctx, job.start, job.end, job.worker)
 }
 
-// Splits [0, count) into contiguous chunks. Ranges are cache friendly and every
-// body only writes inside its own chunk.
+// Splits [0, count) into contiguous chunks. Calls must not overlap or nest.
+// Each body only writes inside its own chunk.
 ParallelFor :: proc(count: int, ctx: rawptr, body: ParallelBody) {
 	if count <= 0 do return
 	if !ParallelAvailable() {
@@ -300,8 +299,14 @@ ParallelFor :: proc(count: int, ctx: rawptr, body: ParallelBody) {
 	}
 	// The caller keeps the first chunk, so the main thread is never idle.
 	for index in 1..<chunks {
-		thread.pool_add_task(&parallelPool, context.allocator, parallelRunJob, &jobs[index])
+		thread.pool_add_task(&parallelPool, context.allocator, parallelRunJob, rawptr(&jobs[index]))
 	}
 	body(ctx, jobs[0].start, jobs[0].end, 0)
-	for thread.pool_num_outstanding(&parallelPool) > 0 do thread.yield()
+	// Join every task before jobs and ctx can go out of scope.
+	completed := 0
+	for completed < chunks-1 {
+		_, done := thread.pool_pop_done(&parallelPool)
+		if done do completed += 1
+		else do thread.yield()
+	}
 }

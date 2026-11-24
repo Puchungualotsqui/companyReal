@@ -230,7 +230,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	town := &w.kingdoms[kingdomSlot].towns[townSlot]
 	// Builders gathering wood are still available to switch to a construction
 	// site, so the town plans with the whole awake builder workforce.
-	intrinsics.atomic_add(&town.buildersBySlice[UnitUpdateSlice(w)], 1)
+	intrinsics.atomic_add(&w.kingdoms[kingdomSlot].towns[townSlot].buildersBySlice[UnitUpdateSlice(w)], 1)
 	if state^ == .Roaming && builder.carriedResource > d32.ZERO {
 		if x, y, found := UnitFindTownReturnPoint(w, kingdomSlot, townSlot); found {
 			w.units[unitSlot].pathTargetX = x
