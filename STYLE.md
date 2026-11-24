@@ -36,4 +36,4 @@ S :: struct {
 ## Memory
 
 - Do not create heap allocations that outlive the proc scope.
-- Every `new`/`make` must have a matching `defer delete`/`free`, following that pattern.
+- Every `new`/`make` must have a matching `defer delete`/`free`, following that pattern. Or the `delete`/`free` should live in a deinit where the var belongs; so, the defer is a deinit proc that contains the `delete`/`free`.
