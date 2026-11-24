@@ -18,9 +18,8 @@ FLOW_QUEUE_MASK :: (1 << FLOW_QUEUE_SHIFT)-1
 // is shared by every unit marching to the same town, so spreading its build
 // over several ticks removes the world-sized one-frame stall.
 FLOW_FIELD_BUILD_BUDGET :: 262_144
-// Completed fields keep serving for a while even if the world revision moved.
-// This guarantees a build can finish and stops constant invalidation during
-// battles. Unit movement validates each step, so slightly stale fields are safe.
+// Completed fields serve briefly after changes; movement validates each step.
+// Mask scans restart on changes and may starve while the world stays busy.
 FLOW_FIELD_REFRESH_SECONDS :: 8.0
 FLOW_FIELD_REFRESH_TICKS :: u64(FLOW_FIELD_REFRESH_SECONDS/TOWN_SIMULATION_STEP)
 
@@ -71,7 +70,8 @@ FlowField :: struct {
 	seeded: bool,        // Source ring has been enqueued
 	maskKingdom: int,    // Kingdom the mask was built for
 	maskWater: bool,     // Mask includes deep water
-	maskRevision: u64,   // pathRevision the mask was built for
+	maskRevision: u64,   // navigationRevision at the start of the scan
+	maskComplete: bool,  // Entire mask was scanned without overwriting it
 	walkMask: []u8,      // 1 when a tile is walkable
 }
 
@@ -743,12 +743,14 @@ FlowFieldGet :: proc(
 	return field, false
 }
 
+// navigationRevision covers terrain, hazards, construction, buildings and wall ownership.
+// Water capability is keyed separately because technology can change without a revision.
 FlowFieldMaskReady :: proc(w: ^World, field: ^FlowField) -> bool {
 	nodeCount := int(w.maxX)*int(w.maxY)
-	return len(field.walkMask) == nodeCount &&
+	return field.maskComplete && len(field.walkMask) == nodeCount &&
 		field.maskKingdom == field.unitKingdom &&
 		field.maskWater == field.walkWater &&
-		field.maskRevision == w.pathRevision
+		field.maskRevision == w.navigationRevision
 }
 
 // Starts or restarts a field build. The mask and BFS are advanced later by
@@ -773,6 +775,8 @@ FlowFieldBegin :: proc(w: ^World, slot: int) {
 	field.buildTail = 0
 	field.buildMask = !FlowFieldMaskReady(w, field)
 	if field.buildMask {
+		field.maskComplete = false
+		field.maskRevision = 0
 		if len(field.walkMask) != nodeCount {
 			if field.walkMask != nil do delete(field.walkMask)
 			field.walkMask = make([]u8, nodeCount)
@@ -825,43 +829,55 @@ FlowFieldSeed :: proc(w: ^World, field: ^FlowField) -> bool {
 	return tail > 0
 }
 
-// Walk masks cover every tile and never overlap between rows, so they split
-// cleanly across cores.
+// Flow units share terrain rules once water capability is frozen.
+// Tiles never overlap between jobs, so the mask splits cleanly across cores.
 FlowMaskJob :: struct {
-	w:        ^World,
-	mask:     []u8,
-	walkType: UnitType,
-	kingdom:  int,
-	start:    int,
+	w:         ^World,
+	mask:      []u8,
+	kingdom:   int,
+	walkWater: bool,
+	start:     int,
 }
 
 FlowMaskBuildTiles :: proc(ctx: rawptr, startIndex, endIndex: int, worker: int) {
 	job := cast(^FlowMaskJob)ctx
 	for offset in startIndex..<endIndex {
 		index := job.start+offset
-		job.mask[index] = WorldTileWalkableAt(job.w, index, job.walkType, job.kingdom, true) ? 1 : 0
+		job.mask[index] = WorldTileWalkableAt(job.w, index, Knight{}, job.kingdom, true, true, job.walkWater) ? 1 : 0
 	}
 }
 
 // Advances the current build by at most budget tiles. Returns true once the
 // field is complete (reachable or provably unreachable).
-FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int) -> bool {
+FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int, restarted: ^bool = nil) -> bool {
+	if restarted != nil do restarted^ = false
 	worldWidth := int(w.maxX)
 	worldHeight := int(w.maxY)
 	if worldWidth <= 0 || worldHeight <= 0 do return true
 
+	// A cached mask may have become stale while waiting in the build queue.
+	if !field.buildMask && !field.seeded && !FlowFieldMaskReady(w, field) {
+		field.buildMask = true
+		field.maskComplete = false
+		field.maskIndex, field.maskX, field.maskY = 0, 0, 0
+		if restarted != nil do restarted^ = true
+	}
 	if field.buildMask {
+		if field.maskIndex > 0 && field.maskRevision != w.navigationRevision {
+			field.maskIndex, field.maskX, field.maskY = 0, 0, 0
+			if restarted != nil do restarted^ = true
+		}
+		if budget^ <= 0 do return false
+		if field.maskIndex == 0 do field.maskRevision = w.navigationRevision
 		stamp := ProfilerBegin("Nav:WalkMask")
 		mask := field.walkMask
-		walkType: UnitType = Knight{}
-		if field.walkWater do walkType = Turtle{}
 		count := min(max(budget^, 0), worldWidth*worldHeight-field.maskIndex)
 		job := FlowMaskJob {
-			w        = w,
-			mask     = mask,
-			walkType = walkType,
-			kingdom  = field.unitKingdom,
-			start    = field.maskIndex,
+			w         = w,
+			mask      = mask,
+			kingdom   = field.unitKingdom,
+			walkWater = field.walkWater,
+			start     = field.maskIndex,
 		}
 		ParallelFor(count, &job, FlowMaskBuildTiles)
 		budget^ -= count
@@ -869,10 +885,15 @@ FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int) -> bool {
 		field.maskX = field.maskIndex/worldHeight
 		field.maskY = field.maskIndex%worldHeight
 		ProfilerEnd(stamp)
+		if field.maskRevision != w.navigationRevision {
+			field.maskIndex, field.maskX, field.maskY = 0, 0, 0
+			if restarted != nil do restarted^ = true
+			return false
+		}
 		if field.maskX < worldWidth do return false
 		field.maskKingdom = field.unitKingdom
 		field.maskWater = field.walkWater
-		field.maskRevision = w.pathRevision
+		field.maskComplete = true
 		field.buildMask = false
 	}
 
@@ -944,7 +965,16 @@ WorldFlowFieldUpdate :: proc(w: ^World) {
 	field := &w.flowFields[slot]
 	if field.building {
 		budget := FLOW_FIELD_BUILD_BUDGET
-		if !FlowFieldBuildStep(w, field, &budget) do return
+		restarted := false
+		if !FlowFieldBuildStep(w, field, &budget, &restarted) {
+			// Only mask scans can yield: BFS owns the shared queue until done.
+			if restarted && field.buildMask && w.flowBuildCount > 1 {
+				w.flowBuildHead = (w.flowBuildHead+1)%FLOW_FIELD_CAPACITY
+				tail := (w.flowBuildHead+w.flowBuildCount-1)%FLOW_FIELD_CAPACITY
+				w.flowBuildQueue[tail] = slot
+			}
+			return
+		}
 	}
 	field.queued = false
 	w.flowBuildHead = (w.flowBuildHead+1)%FLOW_FIELD_CAPACITY
@@ -1259,6 +1289,8 @@ WorldTileWalkableAt :: proc(
 	unitType: UnitType,
 	unitKingdom: int,
 	checkConstruction: bool,
+	overrideWater: bool = false,
+	walkWater: bool = false,
 ) -> bool {
 	if checkConstruction && w.tileConstructionBlocked[index] do return false
 	if buildingSlot := w.tileBuilding[index]; buildingSlot >= 0 {
@@ -1274,14 +1306,14 @@ WorldTileWalkableAt :: proc(
 		case .Ice:
 			return true
 		case .Flood:
-			return UnitCanCrossWater(w, unitType, unitKingdom)
+			return walkWater if overrideWater else UnitCanCrossWater(w, unitType, unitKingdom)
 		case .None:
 		}
 	}
 	tile := w.groundStorage[index].type
 	if UnitValidTileType(unitType, tile) do return true
-	if TileIsDeepWater(tile) && UnitCanCrossWater(w, unitType, unitKingdom) {
-		return true
+	if TileIsDeepWater(tile) {
+		return walkWater if overrideWater else UnitCanCrossWater(w, unitType, unitKingdom)
 	}
 	return false
 }

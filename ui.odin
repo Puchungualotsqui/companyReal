@@ -1222,15 +1222,29 @@ UIBuildPaletteRects :: proc(w: ^World, kingdom, town: int) -> (rects: [len(UI_CO
 	}
 	if count == 0 do return
 
+	hud := UIHudRect(w)
+	rects = UIBuildPaletteLayout(UIRightContentEdge(w), hud.y+hud.height, UIBuildButtonRect().y, count)
+	return
+}
+
+UIBuildPaletteLayout :: proc(right, hudBottom, buttonTop: f32, count: int) -> (rects: [len(UI_COMBAT_BUILD_KINDS)]rl.Rectangle) {
+	if count <= 0 do return
 	width: f32 = 170
 	height: f32 = 54
 	gap: f32 = 6
-	button := UIBuildButtonRect()
-	total := f32(count)*height+f32(count-1)*gap
-	x := button.x+button.width-width
-	y := button.y-gap-total
+	// Reserve the maximum alert and banner height so transient notifications
+	// cannot move a build option underneath the pointer.
+	top := hudBottom+8+UI_ENVIRONMENT_BANNER_H+8+
+		UI_SIDE_HEADER_H+UI_ALERT_MAX_ROWS*UI_ALERT_ROW_H+8+gap
+	available := buttonTop-gap-top
+	rows := clamp(int((available+gap)/(height+gap)), 1, count)
+	columns := (count+rows-1)/rows
+	x := right-f32(columns)*width-f32(columns-1)*gap
+	y := buttonTop-gap-(f32(rows)*height+f32(rows-1)*gap)
 	for index in 0..<count {
-		rects[index] = rl.Rectangle{x, y+f32(index)*(height+gap), width, height}
+		column := index/rows
+		row := index%rows
+		rects[index] = rl.Rectangle{x+f32(column)*(width+gap), y+f32(row)*(height+gap), width, height}
 	}
 	return
 }
@@ -1890,7 +1904,11 @@ WorldUIDraw :: proc(w: ^World, renderer: ^WorldRenderer, camera: rl.Camera2D, ui
 		UIDrawTileInfo(w, ui, camera)
 		UIDrawSidePanel(w, ui)
 		UIDrawAlerts(w)
-		if ui.panel == .Crown do UIDrawCrownPanel(w, renderer, ui)
+		if ui.panel == .Crown {
+			UIDrawCrownPanel(w, renderer, ui)
+		} else {
+			UIDrawHoveredOrderTooltip(w)
+		}
 	}
 
 	if milestonePending {
@@ -3809,16 +3827,43 @@ UIOrderKindsForKingdom :: proc(w: ^World, kingdom: int) -> (kinds: [len(ALL_ORDE
 	return
 }
 
+// The order rail occupies the space between the top HUD and the build button.
+// Additional orders wrap left instead of extending behind either control.
+UIOrderPanelLayout :: proc(w: ^World, count: int) -> (panel: rl.Rectangle, rows: int) {
+	hud := UIHudRect(w)
+	return UIOrderRailLayout(f32(rl.GetScreenWidth()), hud.y+hud.height, UIBuildButtonRect().y, count)
+}
+
+UIOrderRailLayout :: proc(screenWidth, hudBottom, buttonTop: f32, count: int) -> (panel: rl.Rectangle, rows: int) {
+	if count <= 0 do return
+	y := hudBottom+8
+	available := buttonTop-8-y-UI_ORDER_TITLE_H-16
+	rows = clamp(int((available+UI_ORDER_GAP)/(UI_ORDER_BUTTON_SIZE+UI_ORDER_GAP)), 1, count)
+	columns := (count+rows-1)/rows
+	width := f32(columns)*UI_ORDER_BUTTON_SIZE+f32(columns-1)*UI_ORDER_GAP+16
+	height := f32(rows)*UI_ORDER_BUTTON_SIZE+f32(rows-1)*UI_ORDER_GAP+UI_ORDER_TITLE_H+16
+	panel = rl.Rectangle{screenWidth-UI_MARGIN-width, y, width, height}
+	return
+}
+
+UIRightContentEdge :: proc(w: ^World) -> f32 {
+	local := WorldLocalKingdom(w)
+	_, count := UIOrderKindsForKingdom(w, local)
+	if count > 0 {
+		panel, _ := UIOrderPanelLayout(w, count)
+		return panel.x-8
+	}
+	return f32(rl.GetScreenWidth())-UI_MARGIN
+}
+
 UIOrderPanelRects :: proc(w: ^World, kingdom: int) -> (rects: [len(ALL_ORDER_KINDS)]rl.Rectangle, kinds: [len(ALL_ORDER_KINDS)]OrderKind, count: int) {
 	kinds, count = UIOrderKindsForKingdom(w, kingdom)
 	if count <= 0 do return
-	total := f32(count)*UI_ORDER_BUTTON_SIZE+f32(count-1)*UI_ORDER_GAP
-	x := f32(rl.GetScreenWidth())-UI_MARGIN-UI_ORDER_BUTTON_SIZE
-	y := f32(rl.GetScreenHeight())*0.5-total*0.5
+	panel, rows := UIOrderPanelLayout(w, count)
 	for index in 0..<count {
 		rects[index] = rl.Rectangle{
-			x,
-			y+f32(index)*(UI_ORDER_BUTTON_SIZE+UI_ORDER_GAP),
+			panel.x+8+f32(index/rows)*(UI_ORDER_BUTTON_SIZE+UI_ORDER_GAP),
+			panel.y+UI_ORDER_TITLE_H+8+f32(index%rows)*(UI_ORDER_BUTTON_SIZE+UI_ORDER_GAP),
 			UI_ORDER_BUTTON_SIZE,
 			UI_ORDER_BUTTON_SIZE,
 		}
@@ -3832,12 +3877,7 @@ UIOrderPanelUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bo
 	ui := &view.ui
 	rects, kinds, count := UIOrderPanelRects(w, local)
 	if count > 0 {
-		panel := rl.Rectangle{
-			rects[0].x-8,
-			rects[0].y-UI_ORDER_TITLE_H-8,
-			UI_ORDER_BUTTON_SIZE+16,
-			f32(count)*UI_ORDER_BUTTON_SIZE+f32(count-1)*UI_ORDER_GAP+UI_ORDER_TITLE_H+16,
-		}
+		panel, _ := UIOrderPanelLayout(w, count)
 		if rl.CheckCollisionPointRec(mouse, panel) {
 			ui.hover = {}
 			if rl.IsMouseButtonPressed(.LEFT) {
@@ -3946,12 +3986,7 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 	rects, kinds, count := UIOrderPanelRects(w, local)
 	if count <= 0 do return
 
-	panel := rl.Rectangle{
-		rects[0].x-8,
-		rects[0].y-UI_ORDER_TITLE_H-8,
-		UI_ORDER_BUTTON_SIZE+16,
-		f32(count)*UI_ORDER_BUTTON_SIZE+f32(count-1)*UI_ORDER_GAP+UI_ORDER_TITLE_H+16,
-	}
+	panel, _ := UIOrderPanelLayout(w, count)
 	rl.DrawRectangleRec(panel, UI_COLOR_BG)
 	rl.DrawRectangleLinesEx(panel, 2, UI_COLOR_BORDER)
 	rl.DrawRectangleLinesEx(
@@ -4046,8 +4081,22 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 				)
 			}
 		}
+	}
+}
 
-		if hovered do UIDrawOrderTooltip(w, rect, kind)
+UIDrawHoveredOrderTooltip :: proc(w: ^World) {
+	local := WorldLocalKingdom(w)
+	if local < 0 do return
+	rects, kinds, count := UIOrderPanelRects(w, local)
+	if count <= 0 do return
+	panel, _ := UIOrderPanelLayout(w, count)
+	mouse := rl.GetMousePosition()
+	for index in 0..<count {
+		if !rl.CheckCollisionPointRec(mouse, rects[index]) do continue
+		anchor := rects[index]
+		anchor.x = panel.x
+		UIDrawOrderTooltip(w, anchor, kinds[index])
+		return
 	}
 }
 
@@ -5129,9 +5178,15 @@ UI_ENVIRONMENT_BANNER_H : f32 : 58
 
 UIEnvironmentBannerRect :: proc(w: ^World) -> rl.Rectangle {
 	if w.environment.phase == .None || !EnvironmentEventRevealed(w) do return {}
+	hud := UIHudRect(w)
+	left := UI_MARGIN+max(UI_PANEL_WIDTH, f32(UI_SIDE_PANEL_W))+8
+	right := hud.x-8
+	if right-left >= UI_ENVIRONMENT_BANNER_W {
+		return rl.Rectangle{left+(right-left-UI_ENVIRONMENT_BANNER_W)*0.5, UI_MARGIN, UI_ENVIRONMENT_BANNER_W, UI_ENVIRONMENT_BANNER_H}
+	}
 	return rl.Rectangle{
 		(f32(rl.GetScreenWidth())-UI_ENVIRONMENT_BANNER_W)*0.5,
-		UI_MARGIN,
+		hud.y+hud.height+8,
 		UI_ENVIRONMENT_BANNER_W,
 		UI_ENVIRONMENT_BANNER_H,
 	}
@@ -5607,12 +5662,17 @@ UIAlertPanelRect :: proc(w: ^World) -> rl.Rectangle {
 	if rows <= 0 do return {}
 	height := UI_SIDE_HEADER_H+f32(rows)*UI_ALERT_ROW_H+8
 	hud := UIHudRect(w)
-	return rl.Rectangle{
-		f32(rl.GetScreenWidth())-UI_MARGIN-UI_ALERT_W,
+	panel := rl.Rectangle{
+		UIRightContentEdge(w)-UI_ALERT_W,
 		hud.y+hud.height+8,
 		UI_ALERT_W,
 		height,
 	}
+	banner := UIEnvironmentBannerRect(w)
+	if banner.width > 0 && rl.CheckCollisionRecs(panel, banner) {
+		panel.y = banner.y+banner.height+8
+	}
+	return panel
 }
 
 UITownPageButtonRects :: proc(panel: rl.Rectangle) -> (prev, next: rl.Rectangle) {
@@ -5768,11 +5828,6 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 	// The Crown window is a full-screen modal; it owns its own clicks.
 	if ui.panel == .Crown do return false
 
-	if rect := UIEnvironmentBannerRect(w); rect.width > 0 &&
-		rl.CheckCollisionPointRec(mouse, rect) {
-		return true
-	}
-
 	if ui.panel != .None {
 		panel := UISidePanelRect(w, ui)
 		if rl.CheckCollisionPointRec(mouse, panel) {
@@ -5827,11 +5882,16 @@ UIHudUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bool {
 		}
 	}
 
+	if rect := UIEnvironmentBannerRect(w); rect.width > 0 &&
+		rl.CheckCollisionPointRec(mouse, rect) {
+		return true
+	}
+
 	if w.alerts.count > 0 {
 		panel := UIAlertPanelRect(w)
 		if rl.CheckCollisionPointRec(mouse, panel) {
 			row := int((mouse.y-(panel.y+UI_SIDE_HEADER_H))/UI_ALERT_ROW_H)
-			validRow := row >= 0 && row < min(w.alerts.count, UI_ALERT_MAX_ROWS)
+			validRow := mouse.y >= panel.y+UI_SIDE_HEADER_H && row >= 0 && row < min(w.alerts.count, UI_ALERT_MAX_ROWS)
 			if rl.IsMouseButtonPressed(.RIGHT) {
 				if validRow do WorldAlertDismiss(w, row)
 				return true
@@ -6021,6 +6081,13 @@ UIDrawAlerts :: proc(w: ^World) {
 			rl.Rectangle{rowRect.x+2, rowRect.y+4, 3, rowRect.height-8},
 			UIAlertColor(alert.kind, alert.amount),
 		)
-		UIText(UIAlertText(w, &alert), rowRect.x+12, rowRect.y+4, UI_COLOR_TEXT)
+		text := UIAlertText(w, &alert)
+		size := UI_TEXT_SIZE
+		for size > UI_DESC_TEXT_MIN_SIZE && rl.MeasureTextEx(UIFont(), text, size, 1).x > rowRect.width-20 {
+			size -= 1
+		}
+		rl.BeginScissorMode(i32(rowRect.x+12), i32(rowRect.y), i32(rowRect.width-20), i32(rowRect.height))
+		rl.DrawTextEx(UIFont(), text, rl.Vector2{rowRect.x+12, rowRect.y+4}, size, 1, UI_COLOR_TEXT)
+		rl.EndScissorMode()
 	}
 }

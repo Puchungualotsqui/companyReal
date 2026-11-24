@@ -7,6 +7,8 @@ import "d32"
 SPATIAL_CHUNK_SIZE :: 16
 SPATIAL_UNIT_HINT_COUNT :: 256
 
+#assert(KINGDOM_SLOTS <= 8)
+
 SpatialIndex :: struct {
 	chunkSize:        int,
 	chunksX, chunksY: int,
@@ -31,7 +33,7 @@ SpatialIndex :: struct {
 	buildingKingdoms: []u8, // Kingdom bitmask with buildings per chunk
 	buildingStamp:    []u32, // Tick the building bitmask was computed for
 	presentRevision:  u32,
-	enemyMask:        [KINGDOMS_CAPACITY]u8,
+	enemyMask:        [KINGDOM_SLOTS]u8,
 	enemyMaskRevision: u32,
 }
 
@@ -180,6 +182,7 @@ SpatialCacheBeginTick :: proc(w: ^World) {
 	w.spatial.presentRevision += 1
 	if w.spatial.presentRevision == 0 {
 		for &stamp in w.spatial.presentStamp do stamp = 0
+		for &stamp in w.spatial.buildingStamp do stamp = 0
 		w.spatial.presentRevision = 1
 	}
 	w.spatial.enemyMaskRevision = 0
@@ -195,7 +198,7 @@ SpatialChunkPresent :: proc(w: ^World, chunk: int) -> u8 {
 		if !w.unitUsed[slot] || w.units.health[slot] <= d32.ZERO do continue
 		if UnitHiddenInside(w, slot) do continue
 		kingdom := w.units.kingdome[slot]
-		if kingdom >= 0 && kingdom < KINGDOMS_CAPACITY do mask |= u8(1)<<u8(kingdom)
+		if kingdom >= 0 && kingdom < KINGDOM_SLOTS do mask |= u8(1)<<u8(kingdom)
 	}
 	w.spatial.presentKingdoms[chunk] = mask
 	w.spatial.presentStamp[chunk] = w.spatial.presentRevision
@@ -203,12 +206,12 @@ SpatialChunkPresent :: proc(w: ^World, chunk: int) -> u8 {
 }
 
 SpatialEnemyMask :: proc(w: ^World, kingdom: int) -> u8 {
-	if kingdom < 0 || kingdom >= KINGDOMS_CAPACITY do return 0
+	if kingdom < 0 || kingdom >= KINGDOM_SLOTS do return 0
 	if w.spatial.enemyMaskRevision != w.spatial.presentRevision {
-		for k in 0..<KINGDOMS_CAPACITY {
+		for k in 0..<KINGDOM_SLOTS {
 			mask: u8
 			if w.kingdomUsed[k] {
-				for other in 0..<KINGDOMS_CAPACITY {
+				for other in 0..<KINGDOM_SLOTS {
 					if other != k && w.kingdomUsed[other] && KingdomAtWar(w, k, other) {
 						mask |= u8(1)<<u8(other)
 					}
@@ -268,7 +271,7 @@ SpatialChunkBuildingPresent :: proc(w: ^World, chunk: int) -> u8 {
 	for slot := w.spatial.buildingHead[chunk]; slot >= 0; slot = w.spatial.buildingNext[slot] {
 		if !w.buildingUsed[slot] do continue
 		kingdom := w.buildings.kingdom[slot]
-		if kingdom >= 0 && kingdom < KINGDOMS_CAPACITY do mask |= u8(1)<<u8(kingdom)
+		if kingdom >= 0 && kingdom < KINGDOM_SLOTS do mask |= u8(1)<<u8(kingdom)
 	}
 	w.spatial.buildingKingdoms[chunk] = mask
 	w.spatial.buildingStamp[chunk] = w.spatial.presentRevision

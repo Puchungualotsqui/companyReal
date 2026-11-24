@@ -68,11 +68,12 @@ HashTraceRun :: proc() -> bool {
 		return true
 	}
 
-	if CommandLineFlagPresent("-hash_parallel") {
-		ParallelInit()
-		defer ParallelDeinit()
+	useParallel := CommandLineFlagPresent("-hash_parallel")
+	if useParallel do ParallelInit()
+	defer {
+		if useParallel do ParallelDeinit()
+		else do AStarScratchDeinit()
 	}
-	defer AStarScratchDeinit()
 
 	w, ok := HashTraceInit(size, kingdoms, seed)
 	if !ok {

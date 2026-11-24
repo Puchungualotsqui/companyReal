@@ -4,7 +4,7 @@ import "base:intrinsics"
 import "d32"
 
 // Bump when authoritative numeric, generation, command or hash rules change.
-WORLD_STATE_VERSION :: u32(4)
+WORLD_STATE_VERSION :: u32(5)
 
 // One multiply per 64-bit word keeps per-tile state cheap while staying exactly
 // reproducible: each step is a bijection, so any changed value changes the hash.
@@ -542,6 +542,7 @@ WorldStateHash :: proc(w: ^World) -> u64 {
 		WorldHashValue(&hash, field.maskKingdom)
 		WorldHashValue(&hash, field.maskWater)
 		WorldHashValue(&hash, field.maskRevision)
+		WorldHashValue(&hash, field.maskComplete)
 		if field.valid || field.building do WorldHashValue(&hash, field.direction)
 		if field.building && field.buildMask {
 			WorldHashBytes(&hash, field.walkMask[:field.maskIndex])
