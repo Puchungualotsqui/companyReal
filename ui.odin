@@ -4018,12 +4018,14 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 		rl.DrawRectangleLinesEx(rect, ui.command == .OrderAim && ui.orderKind == kind ? 2 : 1, border)
 
 		countText := fmt.ctprintf("%d/%d", ready, total)
-		statusSize := min(14, rect.height*0.22)
-		for statusSize > 8 && rl.MeasureTextEx(UIFont(), countText, statusSize, 1).x > rect.width-8 {
+		// Use the dedicated native-size pixel font so counters stay crisp and fully visible.
+		statusFont := UISmallFont()
+		statusSize: f32 = 12
+		for statusSize > 8 && rl.MeasureTextEx(statusFont, countText, statusSize, 1).x > rect.width-8 {
 			statusSize -= 1
 		}
-		statusHeight := rl.MeasureTextEx(UIFont(), countText, statusSize, 1).y
-		statusY := math.floor(rect.y+rect.height-statusHeight-4)
+		statusHeight := rl.MeasureTextEx(statusFont, countText, statusSize, 1).y
+		statusY := math.floor(rect.y+rect.height-statusHeight-3)
 		texture := renderer.sprites.building[FactionSpriteIndex(local)][sourceKind]
 		if texture.id != 0 {
 			source := rl.Rectangle{0, 0, f32(texture.width), f32(texture.height)}
@@ -4042,7 +4044,7 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			UIDrawOrderIcon(rect.x+rect.width*0.5, rect.y+rect.height*0.36, UI_COLOR_GOLD)
 		}
 		rl.DrawTextEx(
-			UIFont(),
+			statusFont,
 			countText,
 			rl.Vector2{rect.x+4, statusY},
 			statusSize,
@@ -4051,12 +4053,12 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 		)
 		if warning > 0 {
 			warningText := fmt.ctprintf("%ds", int(math.ceil(warning)))
-			warningWidth := rl.MeasureTextEx(UIFont(), warningText, statusSize, 1).x
+			warningWidth := rl.MeasureTextEx(statusFont, warningText, statusSize, 1).x
 			pulse := 0.6+0.4*math.sin(w.simulationTime*9)
 			color := UIOrderColor(kind)
 			color.a = u8(150+100*pulse)
 			rl.DrawTextEx(
-				UIFont(),
+				statusFont,
 				warningText,
 				rl.Vector2{rect.x+rect.width-warningWidth-4, statusY},
 				statusSize,
@@ -4065,9 +4067,9 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			)
 		} else if active > 0 {
 			activeText := fmt.ctprintf("%ds", int(math.ceil(OrderActiveRemaining(w, local, kind))))
-			activeWidth := rl.MeasureTextEx(UIFont(), activeText, statusSize, 1).x
+			activeWidth := rl.MeasureTextEx(statusFont, activeText, statusSize, 1).x
 			rl.DrawTextEx(
-				UIFont(),
+				statusFont,
 				activeText,
 				rl.Vector2{rect.x+rect.width-activeWidth-4, statusY},
 				statusSize,
@@ -4078,9 +4080,9 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			next := OrderNextCooldown(w, local, kind)
 			if next > 0 {
 				nextText := fmt.ctprintf("%ds", int(math.ceil(next)))
-				nextWidth := rl.MeasureTextEx(UIFont(), nextText, statusSize, 1).x
+				nextWidth := rl.MeasureTextEx(statusFont, nextText, statusSize, 1).x
 				rl.DrawTextEx(
-					UIFont(),
+					statusFont,
 					nextText,
 					rl.Vector2{rect.x+rect.width-nextWidth-4, statusY},
 					statusSize,
