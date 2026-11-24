@@ -59,7 +59,7 @@ World :: struct {
 	kingdoms: #soa [KINGDOM_SLOTS]Kingdom,
 	kingdomUsed: [KINGDOM_SLOTS]bool,
 	kingdomColors: [KINGDOMS_CAPACITY]rl.Color,
-	controllers: [KINGDOMS_CAPACITY]ControllerKind,
+	controllers: [KINGDOMS_CAPACITY]Controller,
 	humanKingdoms: bit_set[0..<KINGDOMS_CAPACITY], // Shared ownership; peers must agree on it
 	playerKingdom: int, // Local player, never part of the simulation
 	observerKingdom: int, // Local camera/fog owner, never part of the simulation

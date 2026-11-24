@@ -7,7 +7,7 @@ import "d32"
 // Today there are two kinds: the local human (input arrives through the UI)
 // and an AI brain. Trained-RL or network controllers can be added as another
 // kind and fed through KingdomIssueCommand without touching the simulation.
-ControllerKind :: union {
+Controller :: union {
 	Human,
 	AIBrain,
 }
