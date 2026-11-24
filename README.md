@@ -19,4 +19,4 @@
 
 ## Clarifications and reminders
 - With 2 slices, AI decisions happen every 0.5 s and rendering lags the simulation by up to one slice window. If that feels sluggish, changing UNIT_UPDATE_SLICES is the single knob; 1 restores old responsiveness, 3+ scales further.
-- Profiling is compile-time: `odin build . -define:PROFILING=false` removes all instrumentation, `profiler.log` and the periodic `WORLD HASH` (which costs a few ms on a large map). Turn it off for release builds.
+- Profiling is opt-in at compile time: `odin build . -define:PROFILING=true` enables instrumentation, `profiler.log` and the periodic `WORLD HASH` (which costs a few ms on a large map). It is disabled by default.

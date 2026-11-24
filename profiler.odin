@@ -6,9 +6,9 @@ import "core:strings"
 import "core:sync"
 import rl "vendor:raylib"
 
-// Compile-time switch. Build with -define:PROFILING=false to remove all
-// instrumentation, timing calls, log writes and the periodic state hash.
-PROFILING_ENABLED :: #config(PROFILING, true)
+// Compile-time switch. Profiling is opt-in with -define:PROFILING=true.
+// The default build omits instrumentation, timing calls, log writes and hashing.
+PROFILING_ENABLED :: #config(PROFILING, false)
 
 // Lightweight frame profiler. Instrument sections with ProfilerBegin/ProfilerEnd.
 // Results are printed to the console and written to profiler.log.
