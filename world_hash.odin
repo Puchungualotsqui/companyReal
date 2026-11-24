@@ -4,7 +4,7 @@ import "base:intrinsics"
 import "d32"
 
 // Bump when authoritative numeric, generation, command or hash rules change.
-WORLD_STATE_VERSION :: u32(6)
+WORLD_STATE_VERSION :: u32(7)
 
 // One multiply per 64-bit word keeps per-tile state cheap while staying exactly
 // reproducible: each step is a bijection, so any changed value changes the hash.

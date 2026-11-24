@@ -1256,6 +1256,13 @@ TownFuse :: proc(
 			w.buildings[buildingSlot].health = BuildingDefaultHealth(DistrictHall{})
 			w.buildings[buildingSlot].cooldown = d32.ZERO
 			w.buildings[buildingSlot].homeResident = 0
+			width, height := BuildingTileSize(w.buildings[buildingSlot].type)
+			worldHeight := int(w.maxY)
+			for tileX in w.buildings.x[buildingSlot]..<w.buildings.x[buildingSlot]+width {
+				for tileY in w.buildings.y[buildingSlot]..<w.buildings.y[buildingSlot]+height {
+					FlowMaskRepairTile(w, tileX*worldHeight+tileY)
+				}
+			}
 		}
 	}
 
@@ -1859,6 +1866,15 @@ KingdomAbsorb :: proc(w: ^World, defeated, destroyer, capitalTown, capitalBuildi
 			w.buildings[buildingSlot].town = townMapping[oldTown]
 		} else {
 			w.buildings[buildingSlot].town = -1
+		}
+		if BuildingKindOf(w.buildings[buildingSlot].type) == .Wall {
+			width, height := BuildingTileSize(w.buildings[buildingSlot].type)
+			worldHeight := int(w.maxY)
+			for tileX in w.buildings.x[buildingSlot]..<w.buildings.x[buildingSlot]+width {
+				for tileY in w.buildings.y[buildingSlot]..<w.buildings.y[buildingSlot]+height {
+					FlowMaskRepairTile(w, tileX*worldHeight+tileY)
+				}
+			}
 		}
 	}
 

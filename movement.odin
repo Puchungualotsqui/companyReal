@@ -19,7 +19,6 @@ FLOW_QUEUE_MASK :: (1 << FLOW_QUEUE_SHIFT)-1
 // over several ticks removes the world-sized one-frame stall.
 FLOW_FIELD_BUILD_BUDGET :: 262_144
 // Completed fields serve briefly after changes; movement validates each step.
-// Mask scans restart on changes and may starve while the world stays busy.
 FLOW_FIELD_REFRESH_SECONDS :: 8.0
 FLOW_FIELD_REFRESH_TICKS :: u64(FLOW_FIELD_REFRESH_SECONDS/TOWN_SIMULATION_STEP)
 
@@ -70,7 +69,7 @@ FlowField :: struct {
 	seeded: bool,        // Source ring has been enqueued
 	maskKingdom: int,    // Kingdom the mask was built for
 	maskWater: bool,     // Mask includes deep water
-	maskRevision: u64,   // navigationRevision at the start of the scan
+	maskRevision: u64,   // navigationRevision when the mask was scanned
 	maskComplete: bool,  // Entire mask was scanned without overwriting it
 	walkMask: []u8,      // 1 when a tile is walkable
 }
@@ -117,8 +116,7 @@ AStarNodeState :: enum u8 {
 	Closed,
 }
 
-// A* arrays are indexed by world tile, so each worker needs its own copy to run
-// searches in parallel. One set is about 25 MB on the largest map.
+// A* arrays are indexed by world tile; each worker owns its scratch.
 AStarScratch :: struct {
 	distance:  []i32, // gScore
 	priority:  []i32, // gScore + heuristic
@@ -839,6 +837,18 @@ FlowMaskJob :: struct {
 	start:     int,
 }
 
+// Call for every affected tile after mutation, before the next flow build.
+// Mutations and repairs must not overlap parallel mask builds or each other.
+FlowMaskRepairTile :: proc(w: ^World, index: int) {
+	if w.flowBuildCount <= 0 || index < 0 || index >= int(w.maxX)*int(w.maxY) do return
+	for &field in w.flowFields {
+		if !field.building || !field.buildMask || index >= field.maskIndex do continue
+		field.walkMask[index] = WorldTileWalkableAt(
+			w, index, Knight{}, field.unitKingdom, true, true, field.walkWater,
+		) ? 1 : 0
+	}
+}
+
 FlowMaskBuildTiles :: proc(ctx: rawptr, startIndex, endIndex: int, worker: int) {
 	job := cast(^FlowMaskJob)ctx
 	for offset in startIndex..<endIndex {
@@ -863,10 +873,6 @@ FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int, restarted
 		if restarted != nil do restarted^ = true
 	}
 	if field.buildMask {
-		if field.maskIndex > 0 && field.maskRevision != w.navigationRevision {
-			field.maskIndex, field.maskX, field.maskY = 0, 0, 0
-			if restarted != nil do restarted^ = true
-		}
 		if budget^ <= 0 do return false
 		if field.maskIndex == 0 do field.maskRevision = w.navigationRevision
 		stamp := ProfilerBegin("Nav:WalkMask")
@@ -885,14 +891,10 @@ FlowFieldBuildStep :: proc(w: ^World, field: ^FlowField, budget: ^int, restarted
 		field.maskX = field.maskIndex/worldHeight
 		field.maskY = field.maskIndex%worldHeight
 		ProfilerEnd(stamp)
-		if field.maskRevision != w.navigationRevision {
-			field.maskIndex, field.maskX, field.maskY = 0, 0, 0
-			if restarted != nil do restarted^ = true
-			return false
-		}
 		if field.maskX < worldWidth do return false
 		field.maskKingdom = field.unitKingdom
 		field.maskWater = field.walkWater
+		field.maskRevision = w.navigationRevision
 		field.maskComplete = true
 		field.buildMask = false
 	}

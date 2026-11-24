@@ -646,6 +646,7 @@ WorldHazardSpawnCell :: proc(
 	w.hazardUsed[slot] = true
 	w.hazardCursor = (slot+1)%HAZARD_CAPACITY
 	w.hazardTile[index] = i32(slot)
+	FlowMaskRepairTile(w, index)
 	return slot
 }
 
@@ -695,6 +696,7 @@ WorldHazardDespawn :: proc(w: ^World, slot: int) {
 		})
 	}
 	w.hazardUsed[slot] = false
+	if index >= 0 && index < len(w.hazardTile) do FlowMaskRepairTile(w, index)
 }
 
 WorldHazardSpawnCircle :: proc(

@@ -98,7 +98,10 @@ WorldBuildingUpdate :: proc(w: ^World, deltaTime: f32) {
 WorldConstructionChanged :: proc(w: ^World) {
 	// Only combat-site footprints are reserved, so clearing the whole map here
 	// made every construction start cost a full-map pass.
-	for index in w.constructionBlockedTiles do w.tileConstructionBlocked[index] = false
+	for index in w.constructionBlockedTiles {
+		w.tileConstructionBlocked[index] = false
+		FlowMaskRepairTile(w, index)
+	}
 	clear(&w.constructionBlockedTiles)
 	for slot in 0..<COMBAT_SITE_CAPACITY {
 		if !w.combatSiteUsed[slot] do continue
@@ -117,6 +120,7 @@ BuildingReserveFootprint :: proc(w: ^World, x, y: int, buildingType: BuildingTyp
 			index := tileX*worldHeight+tileY
 			if w.tileConstructionBlocked[index] do continue
 			w.tileConstructionBlocked[index] = true
+			FlowMaskRepairTile(w, index)
 			append(&w.constructionBlockedTiles, index)
 		}
 	}

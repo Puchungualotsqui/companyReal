@@ -279,6 +279,7 @@ WorldTileSet :: proc(w: ^World, x, y: int, tileType: TileType) -> bool {
 		w.navigationRevision += 1
 		w.pathRevision += 1
 		w.terrainRevision += 1
+		FlowMaskRepairTile(w, wrappedX*worldHeight+wrappedY)
 		if len(w.terrainChunkRevisions) > 0 {
 			chunkIndex := (wrappedX/TERRAIN_CHUNK_TILES)*w.terrainChunkCountY+
 				wrappedY/TERRAIN_CHUNK_TILES
@@ -469,6 +470,11 @@ BuildingSpawn :: proc(w: ^World, x, y: int, type: BuildingType, kingdomSlot, tow
 	// here would invalidate every unit path in the world on each completion;
 	// UnitMove validates its next waypoint instead and replans locally.
 	w.navigationRevision += 1
+	for tileX in x..<x+width {
+		for tileY in y..<y+height {
+			FlowMaskRepairTile(w, tileX*worldHeight+tileY)
+		}
+	}
 	if BuildingKindOf(type) == .Path do WorldSpawnStreetLamp(w, x, y)
 	return i, true
 }
@@ -564,6 +570,11 @@ BuildingDespawn :: proc(w: ^World, slot: int, destroyerKingdom: int) -> bool {
 	if slot < w.buildingFreeHint do w.buildingFreeHint = slot
 	w.navigationRevision += 1
 	w.pathRevision += 1
+	for tileX in w.buildings.x[slot]..<w.buildings.x[slot]+width {
+		for tileY in w.buildings.y[slot]..<w.buildings.y[slot]+height {
+			FlowMaskRepairTile(w, tileX*worldHeight+tileY)
+		}
+	}
 	return true
 }
 
