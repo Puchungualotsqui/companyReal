@@ -887,7 +887,7 @@ BuildingHitBurst :: proc(w: ^World, buildingSlot: int, impactX, impactY: f32) {
 	if buildingSlot < 0 || buildingSlot >= BUILDING_CAPACITY || !w.buildingUsed[buildingSlot] do return
 	kind := BuildingKindOf(w.buildings[buildingSlot].type)
 	stone := BuildingStoneMaterial(kind)
-	for _ in 0 ..< 1+int(PRandom(w)*2) {
+	for _ in 0 ..< 3+int(PRandom(w)*3) {
 		angle := PRandom(w)*6.2831853
 		ParticleSpawn(w, Particle{
 			x = impactX,
@@ -917,7 +917,7 @@ BuildingDestroyedBurst :: proc(w: ^World, buildingSlot: int) {
 	centerX := f32(w.buildings[buildingSlot].x)+f32(width)*0.5
 	centerY := f32(w.buildings[buildingSlot].y)+f32(height)*0.5
 
-	for _ in 0 ..< 16+int(PRandom(w)*12) {
+	for _ in 0 ..< 28+int(PRandom(w)*16) {
 		angle := PRandom(w)*6.2831853
 		ParticleSpawn(w, Particle{
 			x = centerX+(PRandom(w)-0.5)*f32(width)*0.7,
@@ -937,7 +937,7 @@ BuildingDestroyedBurst :: proc(w: ^World, buildingSlot: int) {
 			tint = rl.Color{255, 255, 255, 255},
 		})
 	}
-	for _ in 0 ..< 8+int(PRandom(w)*8) {
+	for _ in 0 ..< 16+int(PRandom(w)*12) {
 		ParticleSpawn(w, Particle{
 			x = centerX+(PRandom(w)-0.5)*f32(width)*0.8,
 			y = centerY+(PRandom(w)-0.5)*f32(height)*0.7,
@@ -956,7 +956,7 @@ BuildingDestroyedBurst :: proc(w: ^World, buildingSlot: int) {
 }
 
 MachineDebrisBurst :: proc(w: ^World, x, y: f32) {
-	for _ in 0 ..< 12+int(PRandom(w)*10) {
+	for _ in 0 ..< 24+int(PRandom(w)*16) {
 		angle := PRandom(w)*6.2831853
 		ParticleSpawn(w, Particle{
 			x = x,
@@ -1016,7 +1016,7 @@ DecorationDebris :: proc(w: ^World, x, y: f32, kind: DecorationKind) {
 		chips = 3
 	}
 
-	for _ in 0 ..< chips+int(PRandom(w)*3) {
+	for _ in 0 ..< chips*2+int(PRandom(w)*3) {
 		angle := PRandom(w)*6.2831853
 		ParticleSpawn(w, Particle{
 			x = x,
@@ -1036,7 +1036,7 @@ DecorationDebris :: proc(w: ^World, x, y: f32, kind: DecorationKind) {
 			tint = rl.Color{255, 255, 255, 255},
 		})
 	}
-	for _ in 0 ..< leaves+int(PRandom(w)*4) {
+	for _ in 0 ..< leaves*2+int(PRandom(w)*4) {
 		angle := PRandom(w)*6.2831853
 		ParticleSpawn(w, Particle{
 			x = x,
@@ -1057,7 +1057,7 @@ DecorationDebris :: proc(w: ^World, x, y: f32, kind: DecorationKind) {
 		})
 	}
 	if sparks {
-		for _ in 0 ..< 4 {
+		for _ in 0 ..< 8 {
 			ParticleSpawn(w, Particle{
 				x = x,
 				y = y,
@@ -1078,7 +1078,7 @@ DecorationDebris :: proc(w: ^World, x, y: f32, kind: DecorationKind) {
 
 // The ward flares where the strike lands, not at the town hall.
 TownAegisAbsorbBurst :: proc(w: ^World, x, y: f32) {
-	for _ in 0..<12 {
+	for _ in 0..<24 {
 		angle := PRandom(w)*6.2831853
 		distance := 0.35+PRandom(w)*1.0
 		ParticleSpawn(w, Particle{
@@ -1101,8 +1101,8 @@ TownAegisAbsorbBurst :: proc(w: ^World, x, y: f32) {
 TownAegisShatterBurst :: proc(w: ^World, kingdom: int, x, y, radius: f32) {
 	accent := rl.Color{176, 226, 255, 255}
 	if kingdom >= 0 && kingdom < KINGDOMS_CAPACITY do accent = w.kingdomColors[kingdom]
-	for i in 0..<24 {
-		angle := f32(i)/24*6.2831853+PRandom(w)*0.12
+	for i in 0..<36 {
+		angle := f32(i)/36*6.2831853+PRandom(w)*0.12
 		distance := radius*(0.75+PRandom(w)*0.3)
 		ParticleSpawn(w, Particle{
 			x = WorldWrapPosition(x+math.cos(angle)*distance, f32(w.maxX)),
@@ -1144,7 +1144,7 @@ DecorationBlastBurst :: proc(w: ^World, x, y, radius: f32) {
 	centerX := WorldWrapPosition(x, worldWidth)
 	centerY := WorldWrapPosition(y, worldHeight)
 
-	for _ in 0 ..< 4+int(radius*2) {
+	for _ in 0 ..< 8+int(radius*3) {
 		angle := PRandom(w)*6.2831853
 		distance := radius*(0.2+PRandom(w)*0.8)
 		ParticleSpawn(w, Particle{
@@ -1162,7 +1162,7 @@ DecorationBlastBurst :: proc(w: ^World, x, y, radius: f32) {
 			tint = rl.Color{196, 180, 150, 220},
 		})
 	}
-	for _ in 0 ..< 3+int(radius) {
+	for _ in 0 ..< 6+int(radius*2) {
 		angle := PRandom(w)*6.2831853
 		distance := radius*(0.3+PRandom(w)*0.7)
 		ParticleSpawn(w, Particle{
@@ -1192,7 +1192,7 @@ FireParticleTick :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 	x := PositionToF32(w.fires.x[fireSlot])
 	y := PositionToF32(w.fires.y[fireSlot])
 
-	if PRandom(w) < 0.42*deltaTime*intensity {
+	if PRandom(w) < 1.2*deltaTime*intensity {
 		ParticleSpawn(w, Particle{
 			x = x+(PRandom(w)-0.5)*0.4,
 			y = y+(PRandom(w)-0.5)*0.4,
@@ -1208,7 +1208,7 @@ FireParticleTick :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 			tint = rl.Color{86, 82, 84, 190},
 		})
 	}
-	if PRandom(w) < 0.30*deltaTime*intensity {
+	if PRandom(w) < 0.9*deltaTime*intensity {
 		ParticleSpawn(w, Particle{
 			x = x+(PRandom(w)-0.5)*0.35,
 			y = y+(PRandom(w)-0.5)*0.35,
@@ -1227,7 +1227,7 @@ FireParticleTick :: proc(w: ^World, fireSlot: int, deltaTime: f32) {
 }
 
 FireIgniteBurst :: proc(w: ^World, x, y: f32, intensity: f32) {
-	for _ in 0 ..< 2+int(PRandom(w)*3) {
+	for _ in 0 ..< 5+int(PRandom(w)*4) {
 		ParticleSpawn(w, Particle{
 			x = x,
 			y = y,
@@ -1244,20 +1244,22 @@ FireIgniteBurst :: proc(w: ^World, x, y: f32, intensity: f32) {
 		})
 	}
 	if intensity > 0.6 {
-		ParticleSpawn(w, Particle{
-			x = x,
-			y = y,
-			z = 0.6,
-			vx = 0,
-			vy = 0,
-			vz = PRandomRange(w, 0.8, 1.6),
-			life = PRandomRange(w, 1.2, 2.4),
-			size = PRandomRange(w, 0.6, 1.2),
-			drag = 0.4,
-			gravity = -0.25,
-			kind = .Smoke,
-			tint = rl.Color{74, 70, 72, 180},
-		})
+		for _ in 0..<2 {
+			ParticleSpawn(w, Particle{
+				x = x,
+				y = y,
+				z = 0.6,
+				vx = 0,
+				vy = 0,
+				vz = PRandomRange(w, 0.8, 1.6),
+				life = PRandomRange(w, 1.2, 2.4),
+				size = PRandomRange(w, 0.6, 1.2),
+				drag = 0.4,
+				gravity = -0.25,
+				kind = .Smoke,
+				tint = rl.Color{74, 70, 72, 180},
+			})
+		}
 	}
 }
 

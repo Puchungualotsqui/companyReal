@@ -554,7 +554,7 @@ WorldGasCloudUpdate :: proc(w: ^World, deltaTime: f32) {
 		radiusF32 := PositionToF32(radius)
 		cloudF32X := PositionToF32(cloudX)
 		cloudF32Y := PositionToF32(cloudY)
-		for _ in 0..<2 {
+		for _ in 0..<4 {
 			angle := PRandom(w)*6.2831853
 			distance := radiusF32*math.sqrt(PRandom(w))
 			ParticleSpawn(w, Particle{

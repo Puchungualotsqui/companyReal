@@ -260,7 +260,7 @@ UnitFootstepDust :: proc(w: ^World, unitSlot: int, kind: UnitKind, x, y: f32) {
 	tint := UnitFootstepTint(w, x, y)
 	water := kind == .Turtle && UnitTileIsWater(w, x, y)
 	tick := int((w.simulationTime+w.simulationAccumulator)*24)
-	count := kind == .Giant ? 2 : 1
+	count := kind == .Giant ? 3 : 2
 	for i in 0..<count {
 		offset := u64(i)
 		ParticleSpawn(w, Particle{
@@ -284,7 +284,7 @@ UnitWorkBurst :: proc(w: ^World, unitSlot: int, kind: UnitKind, x, y: f32) {
 	tick := int((w.simulationTime+w.simulationAccumulator)*24)
 	switch kind {
 	case .Builder, .CombatBuilder:
-		for i in 0..<2 {
+		for i in 0..<3 {
 			offset := u64(i)
 			stone := WorldNoiseHash(unitSlot, tick, 0xB001+offset) < 0.3
 			ParticleSpawn(w, Particle{
@@ -303,7 +303,7 @@ UnitWorkBurst :: proc(w: ^World, unitSlot: int, kind: UnitKind, x, y: f32) {
 			})
 		}
 	case .Farmer:
-		for i in 0..<2 {
+		for i in 0..<3 {
 			offset := u64(i)
 			ParticleSpawn(w, Particle{
 				x = x+(WorldNoiseHash(unitSlot, tick, 0xB101+offset)-0.5)*0.45,
@@ -321,7 +321,7 @@ UnitWorkBurst :: proc(w: ^World, unitSlot: int, kind: UnitKind, x, y: f32) {
 			})
 		}
 	case .WaterCollector:
-		for i in 0..<2 {
+		for i in 0..<3 {
 			offset := u64(i)
 			ParticleSpawn(w, Particle{
 				x = x+(WorldNoiseHash(unitSlot, tick, 0xB201+offset)-0.5)*0.35,
@@ -342,19 +342,22 @@ UnitWorkBurst :: proc(w: ^World, unitSlot: int, kind: UnitKind, x, y: f32) {
 }
 
 UnitAmbientMote :: proc(w: ^World, unitSlot: int, x, y: f32, tick: int) {
-	ParticleSpawn(w, Particle{
-		x = x+(WorldNoiseHash(unitSlot, tick, 0xC101)-0.5)*0.35,
-		y = y+(WorldNoiseHash(unitSlot, tick, 0xC111)-0.5)*0.25,
-		z = 0.55+WorldNoiseHash(unitSlot, tick, 0xC121)*0.35,
-		vx = (WorldNoiseHash(unitSlot, tick, 0xC131)-0.5)*0.25,
-		vy = (WorldNoiseHash(unitSlot, tick, 0xC141)-0.5)*0.25,
-		vz = 0.25+WorldNoiseHash(unitSlot, tick, 0xC151)*0.35,
-		life = 0.7+WorldNoiseHash(unitSlot, tick, 0xC161)*0.6,
-		size = 0.09+WorldNoiseHash(unitSlot, tick, 0xC171)*0.06,
-		drag = 1.2,
-		kind = .MagicMote,
-		tint = rl.WHITE,
-	})
+	for i in 0..<2 {
+		offset := u64(i)
+		ParticleSpawn(w, Particle{
+			x = x+(WorldNoiseHash(unitSlot, tick, 0xC101+offset)-0.5)*0.35,
+			y = y+(WorldNoiseHash(unitSlot, tick, 0xC111+offset)-0.5)*0.25,
+			z = 0.55+WorldNoiseHash(unitSlot, tick, 0xC121+offset)*0.35,
+			vx = (WorldNoiseHash(unitSlot, tick, 0xC131+offset)-0.5)*0.25,
+			vy = (WorldNoiseHash(unitSlot, tick, 0xC141+offset)-0.5)*0.25,
+			vz = 0.25+WorldNoiseHash(unitSlot, tick, 0xC151+offset)*0.35,
+			life = 0.7+WorldNoiseHash(unitSlot, tick, 0xC161+offset)*0.6,
+			size = 0.09+WorldNoiseHash(unitSlot, tick, 0xC171+offset)*0.06,
+			drag = 1.2,
+			kind = .MagicMote,
+			tint = rl.WHITE,
+		})
+	}
 }
 
 // Sets the attack animation and emits the matching projectile or impact burst.
@@ -444,7 +447,7 @@ WorldProjectileBurst :: proc(
 
 UnitClashBurst :: proc(w: ^World, unitSlot: int, x, y: f32) {
 	tick := int((w.simulationTime+w.simulationAccumulator)*24)
-	for i in 0..<3 {
+	for i in 0..<6 {
 		offset := u64(i)
 		ParticleSpawn(w, Particle{
 			x = x+(WorldNoiseHash(unitSlot, tick, 0xD101+offset)-0.5)*0.25,
@@ -466,7 +469,7 @@ UnitClashBurst :: proc(w: ^World, unitSlot: int, x, y: f32) {
 UnitHeavyImpact :: proc(w: ^World, unitSlot: int, x, y: f32) {
 	tint := UnitFootstepTint(w, x, y)
 	tick := int((w.simulationTime+w.simulationAccumulator)*24)
-	for i in 0..<4 {
+	for i in 0..<8 {
 		offset := u64(i)
 		ParticleSpawn(w, Particle{
 			x = x+(WorldNoiseHash(unitSlot, tick, 0xD201+offset)-0.5)*0.35,

@@ -874,7 +874,7 @@ OrderMortarFireShell :: proc(w: ^World, slot, sequence: int) {
 
 @(private = "file")
 OrderImpactBurst :: proc(w: ^World, x, y: f32) {
-	for _ in 0..<2 {
+	for _ in 0..<6 {
 		ParticleSpawn(w, Particle{
 			x = x+(PRandom(w)-0.5)*0.5,
 			y = y+(PRandom(w)-0.5)*0.5,
@@ -890,20 +890,22 @@ OrderImpactBurst :: proc(w: ^World, x, y: f32) {
 			tint = rl.Color{188, 172, 146, 255},
 		})
 	}
-	ParticleSpawn(w, Particle{
-		x = x,
-		y = y,
-		z = 0.4,
-		vx = (PRandom(w)-0.5)*0.4,
-		vy = (PRandom(w)-0.5)*0.4,
-		vz = 1.4,
-		life = PRandomRange(w, 0.7, 1.2),
-		size = PRandomRange(w, 0.8, 1.2),
-		drag = 1.5,
-		gravity = -1,
-		kind = .Smoke,
-		tint = rl.Color{82, 76, 74, 220},
-	})
+	for _ in 0..<2 {
+		ParticleSpawn(w, Particle{
+			x = x+(PRandom(w)-0.5)*0.2,
+			y = y+(PRandom(w)-0.5)*0.2,
+			z = 0.4,
+			vx = (PRandom(w)-0.5)*0.4,
+			vy = (PRandom(w)-0.5)*0.4,
+			vz = 1.4,
+			life = PRandomRange(w, 0.7, 1.2),
+			size = PRandomRange(w, 0.8, 1.2),
+			drag = 1.5,
+			gravity = -1,
+			kind = .Smoke,
+			tint = rl.Color{82, 76, 74, 220},
+		})
+	}
 }
 
 @(private = "file")

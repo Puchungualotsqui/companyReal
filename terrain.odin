@@ -662,7 +662,7 @@ WorldHazardDespawn :: proc(w: ^World, slot: int) {
 	}
 
 	if w.hazardCells.kind[slot] == .Ice {
-		for _ in 0..<2 {
+		for _ in 0..<4 {
 			ParticleSpawn(w, Particle{
 				x = f32(x)+PRandom(w),
 				y = f32(y)+PRandom(w),
@@ -746,7 +746,7 @@ WorldHazardSpawnCircle :: proc(
 	effectX := PositionToF32(centerX)
 	effectY := PositionToF32(centerY)
 	effectRadius := PositionToF32(radius)
-	for _ in 0..<10 {
+	for _ in 0..<20 {
 		angle := PRandom(w)*6.2831853
 		distance := effectRadius*math.sqrt(PRandom(w))*0.8
 		x := effectX+math.cos(angle)*distance
@@ -839,7 +839,7 @@ WorldHazardUpdate :: proc(w: ^World, deltaTime: f32) {
 					kind = .StoneChip,
 					tint = rl.Color{214, 244, 255, 255},
 				})
-				for _ in 0..<2 {
+				for _ in 0..<4 {
 					ParticleSpawn(w, Particle{
 						x = f32(tileX)+PRandom(w),
 						y = f32(tileY)+PRandom(w),
@@ -856,7 +856,7 @@ WorldHazardUpdate :: proc(w: ^World, deltaTime: f32) {
 					})
 				}
 			}
-		} else if WorldNoiseHash(slot, int(WorldCurrentTick(w)/2*3+WorldCurrentTick(w)%2), 0xA31D) < 0.05 {
+		} else if WorldNoiseHash(slot, int(WorldCurrentTick(w)/2*3+WorldCurrentTick(w)%2), 0xA31D) < 0.12 {
 			ParticleSpawn(w, Particle{
 				x = f32(tileX)+PRandom(w),
 				y = f32(tileY)+PRandom(w),
@@ -1062,17 +1062,17 @@ TerrainScarBurst :: proc(w: ^World, x, y: int, scar: TerrainScar) {
 	count := 3
 	switch scar {
 	case .Scorched:
-		count = 4
+		count = 8
 	case .Enriched:
-		count = 3
-	case .Parched:
-		count = 3
-	case .Frozen:
-		count = 4
-	case .Volcanic:
 		count = 6
+	case .Parched:
+		count = 6
+	case .Frozen:
+		count = 8
+	case .Volcanic:
+		count = 10
 	case .Cleft:
-		count = 4
+		count = 8
 	case .None:
 		return
 	}
@@ -1149,11 +1149,11 @@ TerrainScarParticles :: proc(w: ^World, index, x, y: int, scar: TerrainScar) {
 	chance: f32 = 0
 	switch scar {
 	case .Volcanic:
-		chance = 0.06
+		chance = 0.15
 	case .Scorched:
-		chance = 0.012
+		chance = 0.04
 	case .Cleft:
-		chance = 0.008
+		chance = 0.025
 	case .Enriched, .Parched, .Frozen, .None:
 		return
 	}

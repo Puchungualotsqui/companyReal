@@ -86,27 +86,29 @@ PRandomRange :: proc(w: ^World, low, high: f32) -> f32 {
 FishingFlotillaFx :: proc(w: ^World, kingdom, townSlot: int) {
 	if !KingdomHasTech(w, kingdom, .FishingFlotillas) do return
 	if !TownIsCoastal(w, kingdom, townSlot) do return
-	if PRandom(w) > 0.025 do return
+	if PRandom(w) > 0.06 do return
 	town := &w.kingdoms[kingdom].towns[townSlot]
 	for _ in 0..<8 {
 		x := WorldWrapCoordinate(town.x+int((PRandom(w)-0.5)*28), int(w.maxX))
 		y := WorldWrapCoordinate(town.y+int((PRandom(w)-0.5)*28), int(w.maxY))
 		tile := WorldTileAt(w, x, y).type
 		if !TileIsDeepWater(tile) do continue
-		ParticleSpawn(w, Particle{
-			x = f32(x)+PRandom(w),
-			y = f32(y)+PRandom(w),
-			z = 0.05,
-			vx = (PRandom(w)-0.5)*0.5,
-			vy = (PRandom(w)-0.5)*0.5,
-			vz = PRandomRange(w, 0.8, 1.8),
-			life = PRandomRange(w, 0.4, 0.8),
-			size = PRandomRange(w, 0.12, 0.28),
-			drag = 1,
-			gravity = 4,
-			kind = .Splash,
-			tint = rl.Color{206, 232, 242, 255},
-		})
+		for _ in 0..<3 {
+			ParticleSpawn(w, Particle{
+				x = f32(x)+PRandom(w),
+				y = f32(y)+PRandom(w),
+				z = 0.05,
+				vx = (PRandom(w)-0.5)*0.5,
+				vy = (PRandom(w)-0.5)*0.5,
+				vz = PRandomRange(w, 0.8, 1.8),
+				life = PRandomRange(w, 0.4, 0.8),
+				size = PRandomRange(w, 0.12, 0.28),
+				drag = 1,
+				gravity = 4,
+				kind = .Splash,
+				tint = rl.Color{206, 232, 242, 255},
+			})
+		}
 		return
 	}
 }
@@ -116,21 +118,23 @@ UnitWaterWake :: proc(w: ^World, unitSlot: int) {
 	if UnitKindOf(w.units.type[unitSlot]) == .Turtle do return
 	if !UnitOnWaterTile(w, unitSlot) do return
 	if !UnitCanCrossWater(w, w.units.type[unitSlot], w.units.kingdome[unitSlot]) do return
-	if PRandom(w) > 0.18 do return
-	ParticleSpawn(w, Particle{
-		x = UnitPrevX(w, unitSlot)+(PRandom(w)-0.5)*0.35,
-		y = UnitPrevY(w, unitSlot)+(PRandom(w)-0.5)*0.35,
-		z = 0.05,
-		vx = (PRandom(w)-0.5)*0.9,
-		vy = (PRandom(w)-0.5)*0.9,
-		vz = PRandomRange(w, 0.4, 1.1),
-		life = PRandomRange(w, 0.25, 0.5),
-		size = PRandomRange(w, 0.12, 0.24),
-		drag = 1.5,
-		gravity = 4,
-		kind = .Splash,
-		tint = rl.Color{196, 226, 240, 255},
-	})
+	if PRandom(w) > 0.32 do return
+	for _ in 0..<2 {
+		ParticleSpawn(w, Particle{
+			x = UnitPrevX(w, unitSlot)+(PRandom(w)-0.5)*0.35,
+			y = UnitPrevY(w, unitSlot)+(PRandom(w)-0.5)*0.35,
+			z = 0.05,
+			vx = (PRandom(w)-0.5)*0.9,
+			vy = (PRandom(w)-0.5)*0.9,
+			vz = PRandomRange(w, 0.4, 1.1),
+			life = PRandomRange(w, 0.25, 0.5),
+			size = PRandomRange(w, 0.12, 0.24),
+			drag = 1.5,
+			gravity = 4,
+			kind = .Splash,
+			tint = rl.Color{196, 226, 240, 255},
+		})
+	}
 }
 
 ParticleSpawn :: proc(w: ^World, p: Particle) -> int {
