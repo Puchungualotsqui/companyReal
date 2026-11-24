@@ -1641,7 +1641,15 @@ UnitLoopChunk :: proc(ctx: rawptr, start, end, worker: int) {
 		}
 		if UnitUpdateSliceOf(unitSlot) != job.slice do continue
 		stride := int(w.units.updateStride[unitSlot])
-		if stride > 1 && (job.tick/UNIT_UPDATE_SLICES)%u64(stride) != 0 do continue
+		if stride > 1 && (job.tick/UNIT_UPDATE_SLICES)%u64(stride) != 0 {
+			unit := &w.units[unitSlot]
+			_, converting := unit.state.(StateConverting)
+			if UnitKindOf(unit.type) == .Villager && !converting &&
+				WorldTownExists(w, unit.kingdome, unit.town) {
+				intrinsics.atomic_add(&w.kingdoms[unit.kingdome].towns[unit.town].villagersBySlice[job.slice], 1)
+			}
+			continue
+		}
 		unitDelta := job.deltaTime*f32(UNIT_UPDATE_SLICES*stride)
 		w.units.previousX[unitSlot] = w.units.x[unitSlot]
 		w.units.previousY[unitSlot] = w.units.y[unitSlot]
@@ -1801,8 +1809,7 @@ WorldUnitUpdate :: proc(w: ^World, deltaTime: f32) {
 		}
 	}
 
-	// Combine the latest worker sample from every slice. Each slice refreshes
-	// its own entry when it runs, so a skipped unit keeps its last count.
+	// Combine the latest worker sample from every slice.
 	for kingdomSlot in 0..<KINGDOMS_CAPACITY {
 		if !w.kingdomUsed[kingdomSlot] do continue
 		for townSlot in 0..<TOWN_CAPACITY {

@@ -256,7 +256,6 @@ Town :: struct {
 	constructionFailUntilTick: u64, // Skip all site searches until this tick
 	siteFailUntilTick: [BuildingKind]u64, // Per-kind retry tick after a failed search
 	pathSearchFailUntilTick: u64, // Street extension search retry tick
-	woodSearchFailUntilTick: u64, // Tree search retry tick when the town is bare
 	// Water collectors share one shore and one hall entrance until the terrain
 	// changes, so their searches run once per town instead of once per unit.
 	waterSourceX, waterSourceY: int,

@@ -3827,21 +3827,22 @@ UIOrderKindsForKingdom :: proc(w: ^World, kingdom: int) -> (kinds: [len(ALL_ORDE
 	return
 }
 
-// The order rail occupies the space between the top HUD and the build button.
-// Additional orders wrap left instead of extending behind either control.
-UIOrderPanelLayout :: proc(w: ^World, count: int) -> (panel: rl.Rectangle, rows: int) {
+// Keep orders in one column and shrink the buttons to fit between the HUD and
+// build button, rather than leaving a mostly empty second column.
+UIOrderPanelLayout :: proc(w: ^World, count: int) -> (panel: rl.Rectangle, rows: int, buttonSize, gap: f32) {
 	hud := UIHudRect(w)
 	return UIOrderRailLayout(f32(rl.GetScreenWidth()), hud.y+hud.height, UIBuildButtonRect().y, count)
 }
 
-UIOrderRailLayout :: proc(screenWidth, hudBottom, buttonTop: f32, count: int) -> (panel: rl.Rectangle, rows: int) {
+UIOrderRailLayout :: proc(screenWidth, hudBottom, buttonTop: f32, count: int) -> (panel: rl.Rectangle, rows: int, buttonSize, gap: f32) {
 	if count <= 0 do return
 	y := hudBottom+8
 	available := buttonTop-8-y-UI_ORDER_TITLE_H-16
-	rows = clamp(int((available+UI_ORDER_GAP)/(UI_ORDER_BUTTON_SIZE+UI_ORDER_GAP)), 1, count)
-	columns := (count+rows-1)/rows
-	width := f32(columns)*UI_ORDER_BUTTON_SIZE+f32(columns-1)*UI_ORDER_GAP+16
-	height := f32(rows)*UI_ORDER_BUTTON_SIZE+f32(rows-1)*UI_ORDER_GAP+UI_ORDER_TITLE_H+16
+	rows = count
+	gap = UI_ORDER_GAP
+	buttonSize = clamp((available-f32(count-1)*gap)/f32(count), 36, UI_ORDER_BUTTON_SIZE)
+	height := f32(count)*buttonSize+f32(count-1)*gap+UI_ORDER_TITLE_H+16
+	width := buttonSize+16
 	panel = rl.Rectangle{screenWidth-UI_MARGIN-width, y, width, height}
 	return
 }
@@ -3850,7 +3851,7 @@ UIRightContentEdge :: proc(w: ^World) -> f32 {
 	local := WorldLocalKingdom(w)
 	_, count := UIOrderKindsForKingdom(w, local)
 	if count > 0 {
-		panel, _ := UIOrderPanelLayout(w, count)
+		panel, _, _, _ := UIOrderPanelLayout(w, count)
 		return panel.x-8
 	}
 	return f32(rl.GetScreenWidth())-UI_MARGIN
@@ -3859,13 +3860,13 @@ UIRightContentEdge :: proc(w: ^World) -> f32 {
 UIOrderPanelRects :: proc(w: ^World, kingdom: int) -> (rects: [len(ALL_ORDER_KINDS)]rl.Rectangle, kinds: [len(ALL_ORDER_KINDS)]OrderKind, count: int) {
 	kinds, count = UIOrderKindsForKingdom(w, kingdom)
 	if count <= 0 do return
-	panel, rows := UIOrderPanelLayout(w, count)
+	panel, _, buttonSize, gap := UIOrderPanelLayout(w, count)
 	for index in 0..<count {
 		rects[index] = rl.Rectangle{
-			panel.x+8+f32(index/rows)*(UI_ORDER_BUTTON_SIZE+UI_ORDER_GAP),
-			panel.y+UI_ORDER_TITLE_H+8+f32(index%rows)*(UI_ORDER_BUTTON_SIZE+UI_ORDER_GAP),
-			UI_ORDER_BUTTON_SIZE,
-			UI_ORDER_BUTTON_SIZE,
+			panel.x+8,
+			panel.y+UI_ORDER_TITLE_H+8+f32(index)*(buttonSize+gap),
+			buttonSize,
+			buttonSize,
 		}
 	}
 	return
@@ -3877,7 +3878,7 @@ UIOrderPanelUpdate :: proc(w: ^World, view: ^WorldView, mouse: rl.Vector2) -> bo
 	ui := &view.ui
 	rects, kinds, count := UIOrderPanelRects(w, local)
 	if count > 0 {
-		panel, _ := UIOrderPanelLayout(w, count)
+		panel, _, _, _ := UIOrderPanelLayout(w, count)
 		if rl.CheckCollisionPointRec(mouse, panel) {
 			ui.hover = {}
 			if rl.IsMouseButtonPressed(.LEFT) {
@@ -3986,7 +3987,7 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 	rects, kinds, count := UIOrderPanelRects(w, local)
 	if count <= 0 do return
 
-	panel, _ := UIOrderPanelLayout(w, count)
+	panel, _, _, _ := UIOrderPanelLayout(w, count)
 	rl.DrawRectangleRec(panel, UI_COLOR_BG)
 	rl.DrawRectangleLinesEx(panel, 2, UI_COLOR_BORDER)
 	rl.DrawRectangleLinesEx(
@@ -4023,46 +4024,47 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			rl.DrawTexturePro(
 				texture,
 				source,
-				rl.Rectangle{rect.x+10, rect.y+8, rect.width-20, rect.height-22},
+				rl.Rectangle{rect.x+rect.width*0.14, rect.y+rect.height*0.10, rect.width*0.72, rect.height*0.62},
 				rl.Vector2{0, 0},
 				0,
 				tint,
 			)
 		} else {
-			UIDrawOrderIcon(rect.x+rect.width*0.5, rect.y+28, UI_COLOR_GOLD)
+			UIDrawOrderIcon(rect.x+rect.width*0.5, rect.y+rect.height*0.4, UI_COLOR_GOLD)
 		}
 
 		countText := fmt.ctprintf("%d/%d", ready, total)
+		statusSize := min(14, rect.height*0.22)
 		rl.DrawTextEx(
 			UIFont(),
 			countText,
-			rl.Vector2{rect.x+5, rect.y+rect.height-20},
-			14,
+			rl.Vector2{rect.x+4, rect.y+rect.height-statusSize-3},
+			statusSize,
 			1,
 			ready > 0 ? UI_COLOR_TEXT : UI_COLOR_DIM,
 		)
 		if warning > 0 {
 			warningText := fmt.ctprintf("%ds", int(math.ceil(warning)))
-			warningWidth := rl.MeasureTextEx(UIFont(), warningText, 14, 1).x
+			warningWidth := rl.MeasureTextEx(UIFont(), warningText, statusSize, 1).x
 			pulse := 0.6+0.4*math.sin(w.simulationTime*9)
 			color := UIOrderColor(kind)
 			color.a = u8(150+100*pulse)
 			rl.DrawTextEx(
 				UIFont(),
 				warningText,
-				rl.Vector2{rect.x+rect.width-warningWidth-4, rect.y+rect.height-20},
-				14,
+				rl.Vector2{rect.x+rect.width-warningWidth-4, rect.y+rect.height-statusSize-3},
+				statusSize,
 				1,
 				color,
 			)
 		} else if active > 0 {
 			activeText := fmt.ctprintf("%ds", int(math.ceil(OrderActiveRemaining(w, local, kind))))
-			activeWidth := rl.MeasureTextEx(UIFont(), activeText, 14, 1).x
+			activeWidth := rl.MeasureTextEx(UIFont(), activeText, statusSize, 1).x
 			rl.DrawTextEx(
 				UIFont(),
 				activeText,
-				rl.Vector2{rect.x+rect.width-activeWidth-4, rect.y+rect.height-20},
-				14,
+				rl.Vector2{rect.x+rect.width-activeWidth-4, rect.y+rect.height-statusSize-3},
+				statusSize,
 				1,
 				UI_COLOR_ATTACK,
 			)
@@ -4070,12 +4072,12 @@ UIDrawOrderPanel :: proc(w: ^World, renderer: ^WorldRenderer, ui: ^UIState) {
 			next := OrderNextCooldown(w, local, kind)
 			if next > 0 {
 				nextText := fmt.ctprintf("%ds", int(math.ceil(next)))
-				nextWidth := rl.MeasureTextEx(UIFont(), nextText, 14, 1).x
+				nextWidth := rl.MeasureTextEx(UIFont(), nextText, statusSize, 1).x
 				rl.DrawTextEx(
 					UIFont(),
 					nextText,
-					rl.Vector2{rect.x+rect.width-nextWidth-4, rect.y+rect.height-20},
-					14,
+					rl.Vector2{rect.x+rect.width-nextWidth-4, rect.y+rect.height-statusSize-3},
+					statusSize,
 					1,
 					UI_COLOR_DIM,
 				)
@@ -4089,7 +4091,7 @@ UIDrawHoveredOrderTooltip :: proc(w: ^World) {
 	if local < 0 do return
 	rects, kinds, count := UIOrderPanelRects(w, local)
 	if count <= 0 do return
-	panel, _ := UIOrderPanelLayout(w, count)
+	panel, _, _, _ := UIOrderPanelLayout(w, count)
 	mouse := rl.GetMousePosition()
 	for index in 0..<count {
 		if !rl.CheckCollisionPointRec(mouse, rects[index]) do continue

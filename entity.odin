@@ -649,11 +649,12 @@ StateConverting :: struct {
 
 Villager :: struct {}
 Builder :: struct {
-	carriedResource:    d32.Value,
-	taskSequence:       int,
-	targetDecoration:   int,
-	constructionSite:   int, // active town construction slot, or -1
-	failedConstruction: int, // unreachable slot to avoid for one assignment
+	carriedResource:        d32.Value,
+	taskSequence:           int,
+	woodSearchFailUntilTick: u64, // Retry tick after a local search fails
+	targetDecoration:       int,
+	constructionSite:       int, // active town construction slot, or -1
+	failedConstruction:     int, // unreachable slot to avoid for one assignment
 }
 CombatBuilder :: struct {
 	order:           WarriorOrder,

@@ -256,7 +256,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 	}
 	if state^ == .Roaming && w.units[unitSlot].decisionReady &&
 		town.wood < TownWoodGatherTarget(w, kingdomSlot, townSlot) &&
-		WorldCurrentTick(w) >= town.woodSearchFailUntilTick {
+		WorldCurrentTick(w) >= builder.woodSearchFailUntilTick {
 		if x, y, decoration, found := UnitFindResourceTarget(w, unitSlot, builder.taskSequence); found {
 			builder.targetDecoration = decoration
 			w.units[unitSlot].pathTargetX = x
@@ -264,7 +264,7 @@ UnitUpdateBuilder :: proc(w: ^World, unitSlot: int, deltaTime: f32) {
 			w.units[unitSlot].pathReady = false
 			state^ = .Traveling
 		} else {
-			town.woodSearchFailUntilTick = WorldCurrentTick(w)+WOOD_SEARCH_RETRY_TICKS
+			builder.woodSearchFailUntilTick = WorldCurrentTick(w)+WOOD_SEARCH_RETRY_TICKS
 		}
 	}
 
@@ -1238,8 +1238,7 @@ CIVILIAN_DECISION_INTERVAL :: d32.ONE
 // Idle villagers in peaceful towns update every second instead of every half
 // second. Alarms, damage, sleep and conversions wake them immediately.
 UNIT_LOD_DORMANT_STRIDE :: 2
-// A town with no choppable tree around it shares one retry timer instead of
-// every builder rescanning the neighbourhood every decision.
+// Builders retry failed local searches after a delay.
 WOOD_SEARCH_RETRY_SECONDS :: 5
 WOOD_SEARCH_RETRY_TICKS :: u64(WOOD_SEARCH_RETRY_SECONDS/TOWN_SIMULATION_STEP)
 #assert(f64(WOOD_SEARCH_RETRY_TICKS) == WOOD_SEARCH_RETRY_SECONDS/TOWN_SIMULATION_STEP)

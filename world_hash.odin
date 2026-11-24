@@ -4,7 +4,7 @@ import "base:intrinsics"
 import "d32"
 
 // Bump when authoritative numeric, generation, command or hash rules change.
-WORLD_STATE_VERSION :: u32(5)
+WORLD_STATE_VERSION :: u32(6)
 
 // One multiply per 64-bit word keeps per-tile state cheap while staying exactly
 // reproducible: each step is a bijection, so any changed value changes the hash.
@@ -98,6 +98,7 @@ WorldHashUnit :: proc(hash: ^u64, unit: ^Unit) {
 		WorldHashValue(hash, 2)
 		WorldHashValue(hash, value.carriedResource)
 		WorldHashValue(hash, value.taskSequence)
+		WorldHashValue(hash, value.woodSearchFailUntilTick)
 		WorldHashValue(hash, value.targetDecoration)
 		WorldHashValue(hash, value.constructionSite)
 		WorldHashValue(hash, value.failedConstruction)
@@ -226,7 +227,6 @@ WorldHashTown :: proc(hash: ^u64, town: ^Town) {
 	WorldHashValue(hash, town.constructionFailUntilTick)
 	WorldHashValue(hash, town.siteFailUntilTick)
 	WorldHashValue(hash, town.pathSearchFailUntilTick)
-	WorldHashValue(hash, town.woodSearchFailUntilTick)
 	WorldHashValue(hash, town.waterSourceX)
 	WorldHashValue(hash, town.waterSourceY)
 	WorldHashValue(hash, town.waterSourceRevision)
