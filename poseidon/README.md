@@ -26,6 +26,7 @@ odin test rl
 Runnable examples include:
 
 ```sh
+odin run example/compiled_regression.odin -file
 odin run example/ppo_navigation.odin -file
 odin run example/ppo_batched_navigation.odin -file
 odin run example/partial_observation_history.odin -file
@@ -46,6 +47,20 @@ odin run example/running_normalization.odin -file
 Initialize models **in their final location** with `SequentialInit` or `SequentialInitSpatial`. Initialized and restored models contain self-references into their own storage; do not copy or move them. Keep caller-owned optimizer state, checkpoint buffers, rollout arrays, normalization arrays, and PPO scratch alive and unmoved for as long as their owning objects refer to them.
 
 Models, optimizer state, inputs, outputs, scratch, and statistics must satisfy each API's non-overlap rules. Checkpoint and training APIs reject many common overlaps, but callers must still obey documented lifetimes and avoid concurrent mutation.
+
+## Supervised compile / fit / evaluate / predict
+
+`example/compiled_regression.odin` shows a complete workflow: initialize a `Sequential` model in place, add layers, inspect it with `SequentialSummary`, initialize Adam with `SequentialAdamInit`, bind a loss and optimizer with `SequentialCompile`, and fit, evaluate, and predict. The compiled handle is non-owning: the model, Adam (if used), and its parameter and moment arrays must outlive it. Compilation binds configuration; data and optimizer compatibility are checked when operations run.
+
+For Adam, `SequentialAdamRequirements` reports the number of parameter pointers and the number of elements needed in **each** moment array. `SequentialAdamInit` binds the model's parameters and resets the optimizer step and moments; it borrows the required prefixes of the supplied arrays. Keep the model and those arrays alive and unmoved. Rebind after architecture changes or model reinitialization. `CheckpointRead` with an Adam destination already restores the optimizer binding and moments: do not initialize it again if you want to preserve that state. Recompile the handle after changing or restoring the model.
+
+`SequentialSummary` writes one `SequentialLayerSummary` per layer to caller-provided storage, returning input/output shapes and parameter counts. Shapes omit the batch dimension; spatial shapes are HWC. The returned layer slice borrows that storage. Counts are per parameter node and do not deduplicate manually shared buffers.
+
+`CompiledSequentialFitWithOptions` groups settings in `SequentialFitOptions`. Start with `SequentialFitOptionsDefault()` (200 epochs, shuffle enabled, batch size set by model capacity), then override the fields you need. An explicitly zero-valued options struct means **zero epochs** and evaluates without training. Fit uses caller-owned indices, shuffle state, and optional history/validation/snapshot storage. It supports minibatches, validation, L2, early stopping, and SGD or Adam through the existing `SequentialFitBatches` implementation. A late training failure can leave partial updates.
+
+`CompiledSequentialEvaluate` reports data loss, not the L2 penalty; `CompiledSequentialEvaluateMetrics` returns data loss plus one explicitly selected MAE, MSE, binary-logits accuracy, or categorical-logits accuracy metric, aggregated over the dataset, including a partial final batch. Binary accuracy requires 0/1 targets; categorical accuracy requires distribution targets. Logits accuracy requires raw logits, not a final sigmoid/softmax. Metrics are evaluated on demand, not automatically logged per epoch. `CompiledSequentialPredict` writes into caller-owned output.
+
+These helpers do not allocate, split data, or serialize the compiled configuration. Adam setup uses stack scratch proportional to the layer capacity; see the API comments for storage, aliasing, and mutation contracts. The underlying `Sequential` APIs remain available for finer control.
 
 ## PPO workflow
 
@@ -97,6 +112,8 @@ Use `PPOCheckpointWriteNormalized` / `PPOCheckpointReadNormalized` to include op
 | API family | Allocates? | Main mutation |
 |---|---:|---|
 | `core` tensor/layer operations | No | Caller-provided output, gradient, and graph storage |
+| `SequentialSummary` / `SequentialAdamInit` | No | Caller-provided summary or Adam parameter/moment storage; Adam initialization resets optimizer state |
+| Compiled fit / evaluate / predict | No | Fit mutates model/optimizer and supplied scratch; evaluation/prediction use model scratch, and prediction writes output |
 | `SequentialPredict` / `SequentialPolicyAction(s)` | No | Model input/output activation scratch; stochastic action selection also advances the supplied RNG |
 | Rollout, return, and observation-history utilities | No | Caller-owned rollout arrays, environment IDs, history storage, and supplied per-environment scratch |
 | `SequentialPPOFit` | No | Model parameters/gradients, optimizer, supplied shuffle RNG, PPO scratch, epoch metrics |

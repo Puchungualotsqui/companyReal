@@ -81,8 +81,10 @@ This roadmap focuses first on making Poseidon usable for training and evaluating
    - Observation histories are adapter/environment state, not part of PPO learner checkpoints. Mid-episode resume requires the adapter to persist history contents and cursor with its environment; otherwise reset at an episode boundary.
    - Fog of War motivates an initial partial-observation experiment. Compare feed-forward policies over several history depths first; add recurrent layers and backpropagation through time only if a finite history window demonstrably fails.
 
-4. **General DL expansion (not required for the first RL milestone)**
-   - Broaden differentiable tensor operations and model composition as real use cases require them.
+4. **General DL expansion and cohesive API — in progress**
+   - Added a non-owning supervised compile/fit/evaluate/predict facade over `Sequential`, with grouped fit options and a runnable regression example. Existing lower-level APIs remain available.
+   - `SequentialAdamRequirements` / `SequentialAdamInit` simplify caller-owned Adam setup; `SequentialSummary` reports per-layer shapes and parameter counts. `CompiledSequentialEvaluateMetrics` computes dataset-level MAE, MSE, or logits accuracy alongside loss.
+   - Future work: simplify storage management further, support automatic per-epoch metrics and richer summaries, and broaden differentiable operations and composition for demonstrated use cases. The facade does not yet offer Keras-like automatic allocation or metric logging.
    - Consider additional optimizers, regularizers, and layer families based on demonstrated needs.
    - Consider GPU or other compute backends only after profiling shows CPU execution is a bottleneck and the maintenance cost is justified.
 
