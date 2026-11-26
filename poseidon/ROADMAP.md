@@ -12,6 +12,10 @@ This roadmap focuses first on making Poseidon usable for training and evaluating
 - Bounded rollout storage for one ordered environment stream, discounted returns, GAE, advantage normalization, and reward scaling.
 - PPO minibatch epochs with deterministic shuffling, joint actor-critic global gradient clipping, an optional linear learning-rate schedule, and epoch/fit diagnostics.
 - A one-step bandit example and a reproducible multi-step PPO navigation example with rollout collection and greedy evaluation.
+- Resumable paired actor-critic PPO checkpoints at successful-fit boundaries, including shared optimizer state, configs, learner counters, and separate policy/shuffle RNG streams.
+- Caller-driven greedy/stochastic policy actions and allocation-free episode evaluation aggregation with return variability, lengths, success rates, and custom metric means.
+- Welford running standardizers with explicit update/freeze/unfreeze lifecycle for observations or rewards, included in normalized PPO checkpoints and observation-normalized inference exports.
+- A Poseidon overview in `README.md` documenting scope, ownership, capacities, mutation/allocation, adapter boundaries, validation commands, and examples.
 
 ## Priority 1 — RL training foundations
 
@@ -43,24 +47,23 @@ This roadmap focuses first on making Poseidon usable for training and evaluating
 
 ## Priority 2 — Reproducible training and evaluation
 
-1. **Complete RL checkpoint state**
-   - Preserve learner/update counters, optimizer state, RNG state, schedules, and any observation/reward normalization statistics.
-   - Define checkpoint boundaries clearly (for example, after an update) rather than serializing arbitrary in-progress environment state by accident.
-   - Keep inference-only policy export separate from resumable training checkpoints if their requirements differ.
+1. **Complete RL checkpoint state — implemented for discrete PPO at fit boundaries**
+   - Serialize policy and value models, shared Adam or SGD state, PPO/fit configs, cumulative update and rollout counters, and separate action-sampling/minibatch-shuffle RNG streams.
+   - Checkpoint only after a successful fit. Rollout and game-environment state are not serialized; the game adapter must save its environment state or reset it after resume.
+   - Optional observation/reward running moments are saved by the normalized checkpoint API. Inference-only policy export remains separate from resumable learner checkpoints.
 
-2. **Evaluation utilities**
-   - Run policies without exploration/training side effects, while allowing stochastic evaluation from an explicit seed.
-   - Aggregate episode return, length, win/outcome rates, and user-supplied metrics over multiple episodes.
-   - Keep training and evaluation RNG streams separate for repeatability.
+2. **Evaluation utilities — implemented as caller-driven primitives**
+   - Select greedy or explicitly seeded stochastic actions in inference mode without changing parameters, gradients, or optimizer state.
+   - Aggregate episode return and population variability, length, caller-defined success rate, and caller-defined custom metric means without allocation.
+   - Evaluation RNG is supplied independently, so callers can keep it separate from training RNG state.
 
-3. **Policy and observation normalization**
-   - Provide reusable running statistics with a defined update/freeze lifecycle if policies need normalized observations or rewards.
-   - Include those statistics in inference exports and training checkpoints.
+3. **Policy and observation normalization — implemented**
+   - `data.RunningStandardizer` provides caller-owned Welford moments with explicit update, freeze, and unfreeze operations; it can normalize observations or scalar rewards.
+   - Normalized PPO checkpoints preserve observation and reward statistics. Inference-only policy exports can include observation statistics without optimizer or learner state.
 
-4. **API and usage documentation**
-   - Add a Poseidon overview with supported features, limitations, test/build instructions, and small end-to-end examples.
-   - Document buffer ownership, model in-place initialization/copy restrictions, capacities, and whether each API allocates or mutates its inputs.
-   - Document that the game adapter supplies observations, legal actions, rewards, and episode boundaries; Poseidon should not depend on game types.
+4. **API and usage documentation — implemented**
+   - `README.md` documents supported features, limitations, package tests, and end-to-end examples.
+   - Documents model capacities and in-place initialization/copy restrictions, caller-owned storage/lifetimes, mutation/allocation expectations, and the adapter's responsibility for environment observations/actions/rewards/boundaries.
 
 ## Priority 3 — Scale and broader model support
 

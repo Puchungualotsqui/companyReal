@@ -13,33 +13,35 @@ BATCH_SIZE :: 8
 MAX_EPISODE_STEPS :: 8
 
 PPOExampleEvaluate :: proc(policy: ^nn.Sequential(3, 8, 8)) -> (meanReturn: f64, successRate: f64, ok: bool) {
-	totalReturn: f64
-	successes := 0
+	accumulator: rl.EvaluationAccumulator
+	if !rl.EvaluationAccumulatorInit(&accumulator, nil) do return 0, 0, false
+	legal := [ACTION_COUNT]bool{true, true}
 	for startPosition in 0..<5 {
 		position := startPosition
 		episodeReturn: f64
+		episodeLength: u64
+		success := false
 		for _ in 0..<MAX_EPISODE_STEPS {
 			observation := [OBSERVATION_WIDTH]f32{f32(position)/4, 1}
-			logits, predictOk := nn.SequentialPredict(policy, observation[:])
-			if !predictOk do return 0, 0, false
+			action, _, actionOk := nn.SequentialPolicyAction(policy, observation[:], legal[:], .Greedy)
+			if !actionOk do return 0, 0, false
 			previousPosition := position
-			if logits[1] >= logits[0] {
-				position = min(position+1, 4)
-			} else {
-				position = max(position-1, 0)
-			}
-			reward := f64(-0.02 + 0.1*f32(position-previousPosition))
+			if action == 1 { position = min(position+1, 4) } else { position = max(position-1, 0) }
+			episodeLength += 1
+			episodeReturn += f64(-0.02 + 0.1*f32(position-previousPosition))
 			if position == 4 {
-				reward += 1
-				successes += 1
-				episodeReturn += reward
+				episodeReturn += 1
+				success = true
 				break
 			}
-			episodeReturn += reward
 		}
-		totalReturn += episodeReturn
+		if !rl.EvaluationRecordEpisode(&accumulator, episodeReturn, episodeLength, success) {
+			return 0, 0, false
+		}
 	}
-	return totalReturn/5, f64(successes)/5, true
+	summary, summaryOk := rl.EvaluationAccumulatorSummary(&accumulator, nil)
+	if !summaryOk do return 0, 0, false
+	return summary.meanReturn, summary.successRate, true
 }
 
 main :: proc() {
@@ -101,8 +103,8 @@ main :: proc() {
 	}
 	ppoConfig := nn.PPOConfig{clipRange = 0.2, entropyCoefficient = 0.01, valueCoefficient = 0.5, valueHuberDelta = 1}
 	fitConfig := nn.PPOFitConfig{epochs = len(epochMetrics), batchSize = BATCH_SIZE, maxGradientNorm = 0.5}
-	policyRandomState: u64 = 12345
-	shuffleRandomState: u64 = 67890
+	trainingState: nn.PPOTrainingState
+	assert(nn.PPOTrainingStateInit(&trainingState, 12345, 67890))
 	position, episodeSteps := 0, 0
 	completedEpisodes, successfulEpisodes := 0, 0
 	rolloutRewardTotal: f64
@@ -115,18 +117,15 @@ main :: proc() {
 		legal := [ACTION_COUNT]bool{true, true}
 		for buffer.count < buffer.capacity {
 			observation := [OBSERVATION_WIDTH]f32{f32(position)/4, 1}
-			_, policyOk := nn.SequentialPredict(&policy, observation[:])
 			predictions, valueOk := nn.SequentialPredict(&value, observation[:])
-			assert(policyOk && valueOk)
-			action: [1]int
-			assert(nn.CategoricalPolicySample(policy.layers[2].output.value, legal[:], &policyRandomState, action[:]))
-			logProbability: [1]f64
-			assert(nn.CategoricalPolicyLogProbs(
-				policy.layers[2].output.value, legal[:], action[:], logProbability[:],
-			))
+			assert(valueOk)
+			action, logProbability, actionOk := nn.SequentialPolicyAction(
+				&policy, observation[:], legal[:], .Stochastic, &trainingState.policyRandomState,
+			)
+			assert(actionOk)
 
 			previousPosition := position
-			if action[0] == 1 { position = min(position+1, 4) } else { position = max(position-1, 0) }
+			if action == 1 { position = min(position+1, 4) } else { position = max(position-1, 0) }
 			episodeSteps += 1
 			terminated := position == 4
 			truncated := !terminated && episodeSteps >= MAX_EPISODE_STEPS
@@ -140,9 +139,9 @@ main :: proc() {
 				nextValue = nextPredictions[0]
 			}
 			assert(rl.RolloutBufferAppend(&buffer, rl.RolloutTransition{
-				observation = observation[:], action = action[0], reward = reward,
+				observation = observation[:], action = action, reward = reward,
 				value = predictions[0], nextValue = nextValue,
-				oldLogProbability = logProbability[0], legalActions = legal[:],
+				oldLogProbability = logProbability, legalActions = legal[:],
 				terminated = terminated, truncated = truncated,
 			}))
 			rolloutRewardTotal += f64(reward)
@@ -155,8 +154,9 @@ main :: proc() {
 		}
 		assert(rl.RolloutComputeGAE(&buffer, 0.99, 0.95))
 		assert(rl.RolloutNormalizeAdvantages(&buffer))
-		stats, fitOk := nn.SequentialPPOFit(
-			&policy, &value, &buffer, &shuffleRandomState, ppoConfig, fitConfig, &adam, fitStorage,
+		assert(nn.PPOTrainingStateRecordRollout(&trainingState))
+		stats, fitOk := nn.SequentialPPOFitStateful(
+			&policy, &value, &buffer, &trainingState, ppoConfig, fitConfig, &adam, fitStorage,
 		)
 		assert(fitOk)
 		evaluationReturn, successRate, evalOk := PPOExampleEvaluate(&policy)

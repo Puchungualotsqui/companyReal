@@ -250,6 +250,12 @@ PPOFitConfig :: struct {
 	finalLearningRate:  f32, // Zero keeps the optimizer's initial rate; otherwise linearly anneal to this rate.
 }
 
+PPOFitConfigValid :: proc(config: PPOFitConfig) -> bool {
+	return config.epochs > 0 && config.batchSize >= 0 &&
+		PPOFiniteF64(f64(config.maxGradientNorm)) && config.maxGradientNorm >= 0 &&
+		PPOFiniteF64(f64(config.finalLearningRate)) && config.finalLearningRate >= 0
+}
+
 PPOEpochStats :: struct {
 	epoch:                    int,
 	policyLoss, valueLoss:    f64,
@@ -541,9 +547,7 @@ SequentialPPOFit :: proc(
 ) -> (PPOFitStats, bool) {
 	if policy == nil || value == nil || rawptr(policy) == rawptr(value) || randomState == nil ||
 		!rl.RolloutBufferValid(buffer) || buffer.count <= 0 || !PPOConfigValid(config) ||
-		fitConfig.epochs <= 0 || fitConfig.batchSize < 0 ||
-		!PPOFiniteF64(f64(fitConfig.maxGradientNorm)) || fitConfig.maxGradientNorm < 0 ||
-		!PPOFiniteF64(f64(fitConfig.finalLearningRate)) || fitConfig.finalLearningRate < 0 ||
+		!PPOFitConfigValid(fitConfig) ||
 		policy.inputWidth != buffer.observationWidth || value.inputWidth != buffer.observationWidth ||
 		buffer.actionCount > policyMaxWidth || len(storage.indices) < buffer.count ||
 		len(storage.epochMetrics) < fitConfig.epochs || !PPOFitStorageAndRolloutDisjoint(storage, buffer) {
