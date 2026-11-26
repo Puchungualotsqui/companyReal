@@ -639,11 +639,18 @@ SequentialEvaluateBatches :: proc(model: ^Sequential($maxLayers, $maxWidth, $bat
 // Checkpoints omit transient activations and gradients and do not store fit
 // configuration such as l2; supply the desired configuration when resuming.
 // Training forwards sample dropout; all reported and validation losses use inference.
+// Optional metricTracking computes the selected metric on the complete training
+// and validation datasets after each update epoch. Its history needs at least
+// epochs entries and, like loss history, records the actual run rather than the
+// restored best checkpoint. Metric validation runs inference before training;
+// zero epochs records no entries. Metrics use the same logits and target rules as
+// CompiledSequentialEvaluateMetrics. Metric history and metadata must be disjoint
+// from all other buffers, model/optimizer storage, and the shuffle state.
 // All caller buffers, model storage, Adam storage and state must not overlap.
 // Invalid arguments leave the result untouched; snapshot prevalidation may write
 // its buffer. Later failure can leave partial updates, completed history/result
 // entries, modified indices, state, snapshot, or scratch; no rollback is promised.
-SequentialFitBatches :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity), inputs, targets: []f32, indices: []int, state: ^u64, batchSize: int = 0, loss: SequentialLoss = MSE{}, epochs: int = 200, optimizer: SequentialOptimizer = SequentialSGD{0.1}, shuffle: bool = true, validationInputs: []f32 = nil, validationTargets: []f32 = nil, history: []EpochMetrics = nil, l2: f32 = 0, earlyStopping: ^SequentialEarlyStopping = nil, bestSnapshot: []u8 = nil) -> (f32, bool) {
+SequentialFitBatches :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity), inputs, targets: []f32, indices: []int, state: ^u64, batchSize: int = 0, loss: SequentialLoss = MSE{}, epochs: int = 200, optimizer: SequentialOptimizer = SequentialSGD{0.1}, shuffle: bool = true, validationInputs: []f32 = nil, validationTargets: []f32 = nil, history: []EpochMetrics = nil, l2: f32 = 0, earlyStopping: ^SequentialEarlyStopping = nil, bestSnapshot: []u8 = nil, metricTracking: ^SequentialFitMetricTracking = nil) -> (f32, bool) {
 	actualBatchSize := batchSize
 	if actualBatchSize == 0 { actualBatchSize = batchCapacity }
 	if model == nil || model.self != rawptr(model) || model.layerCount <= 0 || model.layerCount > maxLayers ||
@@ -659,6 +666,7 @@ SequentialFitBatches :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCap
 	if earlyStopping != nil && (!hasValidation || earlyStopping.result == nil || earlyStopping.patience < 0 ||
 		!(earlyStopping.minDelta >= 0) || math.is_inf(earlyStopping.minDelta)) { return 0, false }
 	if history != nil && len(history) < epochs { return 0, false }
+	if metricTracking != nil && len(metricTracking.history) < epochs { return 0, false }
 	if hasValidation && (len(validationInputs) == 0 || len(validationTargets) == 0 ||
 		len(validationInputs) % model.inputWidth != 0 || len(validationTargets) % outputWidth != 0 ||
 		len(validationInputs) / model.inputWidth != len(validationTargets) / outputWidth) { return 0, false }
@@ -725,6 +733,17 @@ SequentialFitBatches :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCap
 	for x in validationTargets {
 		if math.is_nan(x) || math.is_inf(x) { return 0, false }
 		if _, isBCE := loss.(BCEWithLogits); isBCE && (x < 0 || x > 1) { return 0, false }
+	}
+	metricModel := CompiledSequential(maxLayers, maxWidth, batchCapacity){model, loss, optimizer}
+	if metricTracking != nil {
+		_, metricOk := CompiledSequentialEvaluateMetrics(&metricModel, inputs, targets, metricTracking.metric, actualBatchSize)
+		if !metricOk { return 0, false }
+		if hasValidation {
+			_, validationMetricOk := CompiledSequentialEvaluateMetrics(
+				&metricModel, validationInputs, validationTargets, metricTracking.metric, actualBatchSize,
+			)
+			if !validationMetricOk { return 0, false }
+		}
 	}
 	snapshotEnabled := bestSnapshot != nil && epochs > 0
 	snapshotAdam: ^Adam
@@ -848,16 +867,34 @@ SequentialFitBatches :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCap
 			start += count
 		}
 		if !training { return f32(total), true }
-		if history != nil || hasValidation {
-			trainingLoss, ok := SequentialEvaluateBatches(model, inputs, targets, actualBatchSize, loss)
-			if !ok { return 0, false }
-			validationLoss: f32
-			if hasValidation {
-				validationLoss, ok = SequentialEvaluateBatches(model, validationInputs, validationTargets, actualBatchSize, loss)
+		if history != nil || hasValidation || metricTracking != nil {
+			trainingLoss, validationLoss: f32
+			trainingMetric, validationMetric: f64
+			ok: bool
+			if metricTracking != nil {
+				trainingEvaluation: SupervisedEvaluation
+				trainingEvaluation, ok = CompiledSequentialEvaluateMetrics(&metricModel, inputs, targets, metricTracking.metric, actualBatchSize)
 				if !ok { return 0, false }
+				trainingLoss, trainingMetric = f32(trainingEvaluation.dataLoss), trainingEvaluation.metric
+				if hasValidation {
+					validationEvaluation: SupervisedEvaluation
+					validationEvaluation, ok = CompiledSequentialEvaluateMetrics(&metricModel, validationInputs, validationTargets, metricTracking.metric, actualBatchSize)
+					if !ok { return 0, false }
+					validationLoss, validationMetric = f32(validationEvaluation.dataLoss), validationEvaluation.metric
+				}
+			} else {
+				trainingLoss, ok = SequentialEvaluateBatches(model, inputs, targets, actualBatchSize, loss)
+				if !ok { return 0, false }
+				if hasValidation {
+					validationLoss, ok = SequentialEvaluateBatches(model, validationInputs, validationTargets, actualBatchSize, loss)
+					if !ok { return 0, false }
+				}
 			}
 			if history != nil {
 				history[epoch] = EpochMetrics{epoch + 1, trainingLoss, validationLoss, hasValidation}
+			}
+			if metricTracking != nil {
+				metricTracking.history[epoch] = SupervisedEpochMetric{epoch + 1, trainingMetric, validationMetric, hasValidation}
 			}
 			if earlyStopping != nil {
 				result := earlyStopping.result

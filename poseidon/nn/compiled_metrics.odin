@@ -14,6 +14,22 @@ SupervisedEvaluation :: struct {
 	dataLoss, metric: f64,
 }
 
+// One post-update, inference-mode metric per completed epoch. If validation
+// data is absent, hasValidation is false and validationMetric is zero.
+SupervisedEpochMetric :: struct {
+	epoch:                       int,
+	trainingMetric, validationMetric: f64,
+	hasValidation:               bool,
+}
+
+// Optional fit metric and caller-owned per-epoch output. History needs at least
+// the requested number of epochs. It records the actual run even when early
+// stopping restores an earlier best checkpoint.
+SequentialFitMetricTracking :: struct {
+	metric:  SupervisedMetric,
+	history: []SupervisedEpochMetric,
+}
+
 // Evaluates the compiled data loss and an explicitly selected metric over all
 // row-major samples. batchSize zero uses model capacity; otherwise it must be
 // in [1, batchCapacity]. No prediction buffer or heap allocation is needed.

@@ -29,6 +29,7 @@ SequentialFitOptions :: struct {
 	validationInputs:  []f32,
 	validationTargets: []f32,
 	history:           []EpochMetrics,
+	metrics:           ^SequentialFitMetricTracking,
 	l2:                f32,
 	earlyStopping:     ^SequentialEarlyStopping,
 	bestSnapshot:      []u8,
@@ -51,7 +52,7 @@ CompiledSequentialFitWithOptions :: proc(
 	return SequentialFitBatches(
 		compiled.model, inputs, targets, indices, state, options.batchSize, compiled.loss,
 		options.epochs, compiled.optimizer, options.shuffle, options.validationInputs,
-		options.validationTargets, options.history, options.l2, options.earlyStopping, options.bestSnapshot,
+		options.validationTargets, options.history, options.l2, options.earlyStopping, options.bestSnapshot, options.metrics,
 	)
 }
 
