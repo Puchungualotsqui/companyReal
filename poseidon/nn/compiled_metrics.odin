@@ -30,6 +30,16 @@ SequentialFitMetricTracking :: struct {
 	history: []SupervisedEpochMetric,
 }
 
+// Tracks several distinct metrics. History is epoch-major: for M metrics,
+// history[epoch*M+metricIndex] corresponds to metrics[metricIndex]. Both slices
+// are borrowed for the fit call; history must have at least epochs*M entries.
+SequentialFitMetricsTracking :: struct {
+	metrics: []SupervisedMetric,
+	history: []SupervisedEpochMetric,
+}
+
+SUPERVISED_METRIC_COUNT :: 4
+
 // Evaluates the compiled data loss and an explicitly selected metric over all
 // row-major samples. batchSize zero uses model capacity; otherwise it must be
 // in [1, batchCapacity]. No prediction buffer or heap allocation is needed.
@@ -60,14 +70,34 @@ CompiledSequentialEvaluateMetrics :: proc(
 	metric: SupervisedMetric,
 	batchSize: int = 0,
 ) -> (SupervisedEvaluation, bool) {
-	if compiled == nil || compiled.model == nil { return {}, false }
+	metrics := [1]SupervisedMetric{metric}
+	values: [1]f64
+	loss, ok := CompiledSequentialEvaluateMany(compiled, inputs, targets, metrics[:], values[:], batchSize)
+	if !ok { return {}, false }
+	return SupervisedEvaluation{loss, values[0]}, true
+}
+
+// Evaluates one or more distinct metrics in the given order using one model
+// forward pass per minibatch. values must have exactly one entry per metric;
+// on failure it is unchanged, although model scratch may have been overwritten.
+// Its storage must be disjoint from the model, handle, inputs, targets and metric
+// list. All other shape, target, logits, numerical and lifetime rules are the
+// same as CompiledSequentialEvaluateMetrics. No heap allocation is performed.
+CompiledSequentialEvaluateMany :: proc(
+	compiled: ^CompiledSequential($maxLayers, $maxWidth, $batchCapacity),
+	inputs, targets: []f32,
+	metrics: []SupervisedMetric,
+	values: []f64,
+	batchSize: int = 0,
+) -> (dataLoss: f64, ok: bool) {
+	if compiled == nil || compiled.model == nil { return 0, false }
 	model := compiled.model
 	actualBatchSize := batchSize
 	if actualBatchSize == 0 { actualBatchSize = batchCapacity }
 	if model.self != rawptr(model) || model.layerCount <= 0 || model.layerCount > maxLayers ||
 		model.inputWidth <= 0 || model.inputWidth > maxWidth || actualBatchSize <= 0 || actualBatchSize > batchCapacity ||
 		len(inputs) == 0 || len(inputs) % model.inputWidth != 0 || raw_data(inputs) == nil || raw_data(targets) == nil {
-		return {}, false
+		return 0, false
 	}
 	rows := len(inputs) / model.inputWidth
 	output := &model.layers[model.layerCount-1]
@@ -85,25 +115,38 @@ CompiledSequentialEvaluateMetrics :: proc(
 		}
 	}
 
-	// Only the two read-only data slices may overlap each other.
-	ranges: [4]PPOFitMemoryRange
-	ok: bool
-	ranges[0], ok = PPOFitMemoryRangeOf(rawptr(model), 1, size_of(model^)); if !ok { return {}, false }
-	ranges[1], ok = PPOFitMemoryRangeOf(rawptr(compiled), 1, size_of(compiled^)); if !ok { return {}, false }
-	ranges[2], ok = PPOFitMemoryRangeOf(rawptr(raw_data(inputs)), len(inputs), size_of(f32)); if !ok { return {}, false }
-	ranges[3], ok = PPOFitMemoryRangeOf(rawptr(raw_data(targets)), len(targets), size_of(f32)); if !ok { return {}, false }
-	if PPOFitMemoryRangesOverlap(ranges[0], ranges[1]) { return {}, false }
-	for i in 2..<len(ranges) {
-		if PPOFitMemoryRangesOverlap(ranges[i], ranges[0]) || PPOFitMemoryRangesOverlap(ranges[i], ranges[1]) { return {}, false }
+	if len(metrics) == 0 || len(metrics) > SUPERVISED_METRIC_COUNT || len(values) != len(metrics) ||
+		raw_data(metrics) == nil || raw_data(values) == nil { return 0, false }
+	// Inputs, targets and metric selectors are read-only. The destination cannot
+	// alias any of them, the model, or its compiled handle.
+	ranges: [6]PPOFitMemoryRange
+	rangeOk: bool
+	ranges[0], rangeOk = PPOFitMemoryRangeOf(rawptr(model), 1, size_of(model^)); if !rangeOk { return 0, false }
+	ranges[1], rangeOk = PPOFitMemoryRangeOf(rawptr(compiled), 1, size_of(compiled^)); if !rangeOk { return 0, false }
+	ranges[2], rangeOk = PPOFitMemoryRangeOf(rawptr(raw_data(inputs)), len(inputs), size_of(f32)); if !rangeOk { return 0, false }
+	ranges[3], rangeOk = PPOFitMemoryRangeOf(rawptr(raw_data(targets)), len(targets), size_of(f32)); if !rangeOk { return 0, false }
+	ranges[4], rangeOk = PPOFitMemoryRangeOf(rawptr(raw_data(metrics)), len(metrics), size_of(SupervisedMetric)); if !rangeOk { return 0, false }
+	ranges[5], rangeOk = PPOFitMemoryRangeOf(rawptr(raw_data(values)), len(values), size_of(f64)); if !rangeOk { return 0, false }
+	if PPOFitMemoryRangesOverlap(ranges[0], ranges[1]) { return 0, false }
+	for i in 2..<5 {
+		if PPOFitMemoryRangesOverlap(ranges[i], ranges[0]) || PPOFitMemoryRangesOverlap(ranges[i], ranges[1]) { return 0, false }
+	}
+	for i in 0..<5 {
+		if PPOFitMemoryRangesOverlap(ranges[5], ranges[i]) { return 0, false }
 	}
 
-	binaryMetric, categoricalMetric := false, false
-	switch metric {
-	case .MeanAbsoluteError, .MeanSquaredError:
-	case .BinaryAccuracyWithLogits: binaryMetric = true
-	case .CategoricalAccuracyWithLogits: categoricalMetric = true
-	case: return {}, false
+	selected: [SUPERVISED_METRIC_COUNT]bool
+	for metric in metrics {
+		switch metric {
+		case .MeanAbsoluteError, .MeanSquaredError, .BinaryAccuracyWithLogits, .CategoricalAccuracyWithLogits:
+		case: return 0, false
+		}
+		index := int(metric)
+		if selected[index] { return 0, false }
+		selected[index] = true
 	}
+	binaryMetric := selected[int(SupervisedMetric.BinaryAccuracyWithLogits)]
+	categoricalMetric := selected[int(SupervisedMetric.CategoricalAccuracyWithLogits)]
 	binaryLoss, categoricalLoss := false, false
 	switch value in compiled.loss {
 	case nil: return {}, false
@@ -134,8 +177,9 @@ CompiledSequentialEvaluateMetrics :: proc(
 			(binaryLoss && (value < 0 || value > 1)) { return {}, false }
 	}
 
-	dataLoss, metricSum: f64
-	correct := 0
+	dataLoss = 0
+	absoluteSum, squaredSum: f64
+	binaryCorrect, categoricalCorrect := 0, 0
 	for start := 0; start < rows; {
 		count := min(actualBatchSize, rows-start)
 		prediction, predicted := SequentialPredict(model, inputs[start*model.inputWidth:(start+count)*model.inputWidth])
@@ -155,15 +199,17 @@ CompiledSequentialEvaluateMetrics :: proc(
 		}
 		if !ok || math.is_nan(batchLoss) || math.is_inf(batchLoss) { return {}, false }
 		dataLoss += f64(batchLoss) * f64(count) / f64(rows)
-		switch metric {
-		case .MeanAbsoluteError, .MeanSquaredError:
+		if selected[int(SupervisedMetric.MeanAbsoluteError)] || selected[int(SupervisedMetric.MeanSquaredError)] {
 			for value, i in prediction {
 				difference := f64(value) - f64(labels[i])
-				if metric == .MeanAbsoluteError { metricSum += math.abs(difference) } else { metricSum += difference * difference }
+				if selected[int(SupervisedMetric.MeanAbsoluteError)] { absoluteSum += math.abs(difference) }
+				if selected[int(SupervisedMetric.MeanSquaredError)] { squaredSum += difference*difference }
 			}
-		case .BinaryAccuracyWithLogits:
-			for value, i in prediction { if (value >= 0) == (labels[i] == 1) { correct += 1 } }
-		case .CategoricalAccuracyWithLogits:
+		}
+		if binaryMetric {
+			for value, i in prediction { if (value >= 0) == (labels[i] == 1) { binaryCorrect += 1 } }
+		}
+		if categoricalMetric {
 			for row in 0..<count {
 				first := row*width
 				predictedClass, targetClass := first, first
@@ -171,19 +217,22 @@ CompiledSequentialEvaluateMetrics :: proc(
 					if prediction[i] > prediction[predictedClass] { predictedClass = i }
 					if labels[i] > labels[targetClass] { targetClass = i }
 				}
-				if predictedClass == targetClass { correct += 1 }
+				if predictedClass == targetClass { categoricalCorrect += 1 }
 			}
-		case: return {}, false
 		}
 		start += count
 	}
-	if categoricalMetric { metricSum = f64(correct) / f64(rows) } else if binaryMetric {
-		metricSum = f64(correct) / f64(len(targets))
-	} else {
-		metricSum /= f64(len(targets))
+	results := [SUPERVISED_METRIC_COUNT]f64{
+		absoluteSum/f64(len(targets)), squaredSum/f64(len(targets)),
+		f64(binaryCorrect)/f64(len(targets)), f64(categoricalCorrect)/f64(rows),
 	}
-	if math.is_nan(dataLoss) || math.is_inf(dataLoss) || math.is_nan(metricSum) || math.is_inf(metricSum) { return {}, false }
-	return SupervisedEvaluation{dataLoss, metricSum}, true
+	if math.is_nan(dataLoss) || math.is_inf(dataLoss) { return 0, false }
+	for metric in metrics {
+		result := results[int(metric)]
+		if math.is_nan(result) || math.is_inf(result) { return 0, false }
+	}
+	for metric, index in metrics { values[index] = results[int(metric)] }
+	return dataLoss, true
 }
 
 // SequentialPredict updates these inline nodes in place on every batch.
