@@ -39,3 +39,47 @@ SequentialPolicyActionGreedyAndSeededSampling :: proc(t: ^testing.T) {
 	action, _, maskedOk := SequentialPolicyAction(&policy, observation[:], onlyFirstLegal[:], .Greedy)
 	testing.expect(t, maskedOk && action == 0)
 }
+
+@(test)
+SequentialPolicyActionsBatchedGreedyAndSeededSampling :: proc(t: ^testing.T) {
+	policy: Sequential(1, 2, 3)
+	initialized := SequentialInit(&policy, 1, 17) && SequentialAddDense(&policy, 2)
+	testing.expect(t, initialized)
+	if !initialized { return }
+	storage := &policy.layers[0].storage.(DenseStorage(2))
+	storage.weightData[0], storage.weightData[1] = 0, 0
+	storage.biasData[0], storage.biasData[1] = -1, 1
+	observations := [3]f32{0, 1, 2}
+	legal := [6]bool{true, true, true, false, false, true}
+	actions: [3]int
+	logProbabilities: [3]f64
+	greedyRng: u64 = 81
+	greedyOk := SequentialPolicyActions(
+		&policy, observations[:], legal[:], .Greedy, actions[:], logProbabilities[:], &greedyRng,
+	)
+	testing.expect(t, greedyOk && actions == [3]int{1, 0, 1} && greedyRng == 81)
+	testing.expect(t, greedyOk && logProbabilities[0] < 0 && logProbabilities[1] == 0 && logProbabilities[2] == 0)
+
+	firstActions, secondActions: [3]int
+	firstLogProbabilities, secondLogProbabilities: [3]f64
+	firstRng, secondRng: u64 = 9123, 9123
+	firstOk := SequentialPolicyActions(
+		&policy, observations[:], legal[:], .Stochastic, firstActions[:], firstLogProbabilities[:], &firstRng,
+	)
+	secondOk := SequentialPolicyActions(
+		&policy, observations[:], legal[:], .Stochastic, secondActions[:], secondLogProbabilities[:], &secondRng,
+	)
+	testing.expect(t,
+		firstOk && secondOk && firstActions == secondActions && firstLogProbabilities == secondLogProbabilities &&
+		firstRng == secondRng && firstRng != 9123,
+	)
+	for action, row in firstActions { testing.expect(t, legal[row*2+action]) }
+
+	invalidLegal := [6]bool{true, true, false, false, false, true}
+	beforeActions, beforeLogs, beforeRng := firstActions, firstLogProbabilities, firstRng
+	invalidOk := SequentialPolicyActions(
+		&policy, observations[:], invalidLegal[:], .Stochastic,
+		firstActions[:], firstLogProbabilities[:], &firstRng,
+	)
+	testing.expect(t, !invalidOk && firstActions == beforeActions && firstLogProbabilities == beforeLogs && firstRng == beforeRng)
+}

@@ -9,11 +9,12 @@ This roadmap focuses first on making Poseidon usable for training and evaluating
 - Full-batch and minibatch supervised training, SGD/Adam, common regression/classification losses, validation metrics, early stopping, and checkpoint save/load.
 - Data standardization and seeded dataset splitting/gathering.
 - Discrete categorical policy probabilities, sampling, log probabilities, entropy, legal-action masks, and policy-gradient/PPO updates.
-- Bounded rollout storage for one ordered environment stream, discounted returns, GAE, advantage normalization, and reward scaling.
+- Bounded single-stream and caller-driven interleaved multi-environment rollout storage, per-environment discounted returns/GAE, advantage normalization, and reward scaling.
+- Caller-owned fixed-window observation histories for feed-forward frame stacking, with explicit zero-padding and episode-reset semantics.
 - PPO minibatch epochs with deterministic shuffling, joint actor-critic global gradient clipping, an optional linear learning-rate schedule, and epoch/fit diagnostics.
-- A one-step bandit example and a reproducible multi-step PPO navigation example with rollout collection and greedy evaluation.
+- One-step bandit, single-environment PPO navigation, and multi-environment PPO profiling examples.
 - Resumable paired actor-critic PPO checkpoints at successful-fit boundaries, including shared optimizer state, configs, learner counters, and separate policy/shuffle RNG streams.
-- Caller-driven greedy/stochastic policy actions and allocation-free episode evaluation aggregation with return variability, lengths, success rates, and custom metric means.
+- Caller-driven greedy/stochastic single and batched policy actions, plus allocation-free episode evaluation aggregation with return variability, lengths, success rates, and custom metric means.
 - Welford running standardizers with explicit update/freeze/unfreeze lifecycle for observations or rewards, included in normalized PPO checkpoints and observation-normalized inference exports.
 - A Poseidon overview in `README.md` documenting scope, ownership, capacities, mutation/allocation, adapter boundaries, validation commands, and examples.
 
@@ -22,7 +23,7 @@ This roadmap focuses first on making Poseidon usable for training and evaluating
 1. **Trajectory and rollout storage — implemented for one ordered environment stream**
    - Caller-owned, bounded storage for observations, actions, rewards, values, old log probabilities, legal-action masks, and episode-boundary flags.
    - Full-buffer rejection, reset, and support for incomplete episodes at rollout boundaries through per-transition next-value estimates.
-   - Distinguishes true termination from truncation. Multiple interleaved environments are deferred to Priority 3.
+   - Distinguishes true termination from truncation. The multi-environment extension is tracked in Priority 3 and uses a separate batched buffer/view.
 
 2. **Return and advantage calculations — implemented**
    - Discounted returns with a configurable discount factor and correct terminal/truncation bootstrapping.
@@ -67,15 +68,18 @@ This roadmap focuses first on making Poseidon usable for training and evaluating
 
 ## Priority 3 — Scale and broader model support
 
-1. **Batched environment integration points**
-   - Support collecting from multiple independent environments through a generic caller-driven interface; do not embed a specific game or transport in Poseidon.
-   - Profile rollout collection, inference, and training separately before adding parallelism.
+1. **Batched environment integration points — implemented (synchronous and caller-driven)**
+   - `BatchedRolloutBuffer` stores interleaved transitions with environment IDs; batched return/GAE routines keep each independent stream and episode boundary separate.
+   - `SequentialPolicyActions` batches inference/action selection, and `ppo_batched_navigation.odin` profiles collection, inference, and GAE/PPO training separately. Poseidon does not step environments or add parallel execution.
 
-2. **Policy distribution coverage**
-   - Decide whether Poseidon needs continuous-action policies, parameterized actions, or multiple action heads. Add only the distributions required by intended users, with sampling, log-probability, entropy, and gradient tests.
+2. **Policy distribution coverage — initial scope decision recorded**
+   - Keep the masked categorical distribution as the only supported policy for the first game experiment. The game adapter can enumerate legal command candidates, mask unavailable candidates, and map a selected index to a command and its parameters.
+   - Defer continuous, parameterized, and multiple-head policies until the adapter demonstrates that candidate enumeration or categorical precision is a real limitation. This avoids adding unused distribution/training APIs or allowing invalid combinations between independent heads. Existing categorical tests cover sampling, log probabilities, entropy, and policy/PPO gradients.
 
-3. **Partial-observation support**
-   - Consider recurrent layers/stateful policy inference if experiments show that feed-forward policies cannot handle relevant hidden state. Define reset and checkpoint semantics for recurrent state first.
+3. **Partial-observation support — fixed-window baseline implemented; recurrent training deferred**
+   - `rl.ObservationHistory` provides caller-owned, zero-padded frame stacking for feed-forward policies. Reset it at episode boundaries and keep a separate history per environment.
+   - Observation histories are adapter/environment state, not part of PPO learner checkpoints. Mid-episode resume requires the adapter to persist history contents and cursor with its environment; otherwise reset at an episode boundary.
+   - Fog of War motivates an initial partial-observation experiment. Compare feed-forward policies over several history depths first; add recurrent layers and backpropagation through time only if a finite history window demonstrably fails.
 
 4. **General DL expansion (not required for the first RL milestone)**
    - Broaden differentiable tensor operations and model composition as real use cases require them.
