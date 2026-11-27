@@ -35,13 +35,14 @@ Runnable examples include:
 ```sh
 odin run example/compiled_regression.odin -file
 odin run example/ppo_navigation.odin -file
+odin run example/ppo_agent/ppo_agent_navigation.odin -file
 odin run example/ppo_batched_navigation.odin -file
 odin run example/partial_observation_history.odin -file
 odin run example/policy_gradient.odin -file
 odin run example/running_normalization.odin -file
 ```
 
-`ppo_navigation.odin` is a seeded single-stream task that collects a rollout, computes GAE, trains minibatch PPO, and prints greedy evaluation results. `ppo_batched_navigation.odin` demonstrates independent caller-stepped environments, grouped GAE, batched policy inference, PPO fitting, and separate timings for rollout collection, inference, and GAE/training. `partial_observation_history.odin` demonstrates zero-padded frame stacking and episode reset semantics. The policy-gradient example is a smaller one-step bandit. `running_normalization.odin` demonstrates updating and freezing observation/reward statistics and transforming evaluation inputs. The profile numbers are illustrative for that small example, not a performance baseline.
+`ppo_navigation.odin` is a seeded single-stream task that collects a rollout, computes GAE, trains minibatch PPO, and prints greedy evaluation results. `ppo_agent/ppo_agent_navigation.odin` shows the defaults-first `PPOAgent` workflow and exports its policy for `PolicyRuntime`. `ppo_batched_navigation.odin` demonstrates independent caller-stepped environments, grouped GAE, batched policy inference, PPO fitting, and separate timings for rollout collection, inference, and GAE/training. `partial_observation_history.odin` demonstrates zero-padded frame stacking and episode reset semantics. The policy-gradient example is a smaller one-step bandit. `running_normalization.odin` demonstrates updating and freezing observation/reward statistics and transforming evaluation inputs. The profile numbers are illustrative for that small example, not a performance baseline.
 
 ## Model capacities and lifetime
 
@@ -126,6 +127,55 @@ Use `&state.policyRandomState` for `SequentialPolicyAction(s)`, collect a rollou
 
 Keep both models and their parameter storage alive and unmoved, and destroy the trainer before them. Do not copy/move a live trainer or use its borrows once destruction begins. The captured allocator must support individual frees and remain valid. A `.CleanupFailed` leaves the trainer in a destroying state: retry `PPOTrainingContextDestroy` only if a failed free retains the allocation. Initialization rollback now retains any allocation whose free reports an error, rather than losing it; destroy the failed or destroying trainer to retry. The optional `PPOOwnedAdam` and `PPOOwnedFitStorage` expose the same two ownership pieces separately for lower-level use.
 
+### Defaults-first PPO agent
+
+`PPOAgent` removes the model/rollout/optimizer/scratch wiring for the common case. It owns heap-allocated actor and critic models, one rollout, pending-step storage, and a `PPOTrainingContext`; capacities remain compile-time parameters. Layer specs describe complete actor/critic stacks:
+
+```odin
+options := nn.PPOAgentOptionsDefault(OBSERVATION_WIDTH, ACTION_COUNT, ROLLOUT_CAPACITY)
+options.policySpecs = []nn.SequentialLayerSpec{
+	nn.SequentialDenseSpec{8}, nn.SequentialActivationSpec{.Tanh}, nn.SequentialDenseSpec{ACTION_COUNT},
+}
+options.valueSpecs = []nn.SequentialLayerSpec{
+	nn.SequentialDenseSpec{8}, nn.SequentialActivationSpec{.Tanh}, nn.SequentialDenseSpec{1},
+}
+agent: nn.PPOAgent(3, 8, 8, 3, 8, 8)
+assert(nn.PPOAgentInit(&agent, options) == .None)
+defer assert(nn.PPOAgentDestroy(&agent) == .None)
+```
+
+Collection is two-phase so the reward can be computed after the environment advances:
+
+```odin
+act := nn.PPOAgentAct(&agent, observation, legal, .Stochastic)
+assert(act.error == .None)
+step_environment(act.action)
+assert(nn.PPOAgentObserve(&agent, reward, terminated, truncated, nextObservation) == .None)
+```
+
+`PPOAgentStep` is a convenience for synthetic loops where the reward is already known. `PPOAgentTrain` computes GAE, optionally normalizes advantages, records and fits the rollout, then resets it on success. `PPOAgentCheckpointMeasure` / `Write` / `Read` and `PPOAgentPolicyExportMeasure` / `Write` wrap the checkpoint APIs. Agent observation normalization and history management remain the adapter's responsibility in this first facade; use the lower-level APIs or `PolicyRuntime` for those preprocessing paths.
+
+### Inference policy runtime
+
+`PolicyRuntime` is the deployment-side facade for controllers and multiplayer. It owns one heap-allocated policy, optional observation moments, optional fixed-window history, and reusable scratch. Steady-state action selection allocates nothing. Export the policy from an agent, then initialize one runtime per controller/player:
+
+```odin
+size, scratchSize, measureError := nn.PPOAgentPolicyExportMeasure(&agent)
+// Allocate output/scratch from the measured sizes, then:
+assert(nn.PPOAgentPolicyExportWrite(&agent, output, scratch) > 0)
+
+runtime: nn.PolicyRuntime(3, 8, 8)
+options := nn.PolicyRuntimeOptionsDefault(SENSOR_WIDTH)
+options.historyDepth = HISTORY_DEPTH
+assert(nn.PolicyRuntimeInit(&runtime, output[:size], options) == .None)
+defer assert(nn.PolicyRuntimeDestroy(&runtime) == .None)
+
+action, logProbability, actionError := nn.PolicyRuntimeAction(&runtime, observation, legal, .Greedy)
+assert(actionError == .None && nn.PolicyRuntimeResetEpisode(&runtime))
+```
+
+An export does not record sensor width or history depth, so runtime options supply them; policy input width is `sensorWidth * max(1, historyDepth)`. Observation normalization, when present, applies to the flattened window. Runtime's public surface contains no critic, optimizer, rollout, or training state. A model's inference mutates inline scratch, so do not share a runtime or model across threads; export bytes may be shared read-only, but each controller needs its own runtime. Handoff between threads requires external synchronization.
+
 ### PPO checkpoint inspection and restore
 
 `PPOCheckpointInspect(bytes, limits)` validates an entire **base** PPO checkpoint without allocating or constructing models. It reports actor/critic capacities, shapes and combined parameter/moment counts, optimizer kind, fit configuration, counters and RNG state. `PPOCheckpointInspectNormalized` additionally reports normalizer presence, width, count, epsilon and frozen state; it validates all saved moments. Both return a zero info value and a `CheckpointError` with an input-relative byte offset on failure. Limits cover input sizes, model capacities, optimizer requirements and epochs; normalized limits also cover observation width. Zero means unlimited, so set limits for untrusted data. Inspection is not authentication and does not guarantee that the application has compiled a matching `Sequential` type or can allocate it. Input must remain valid and unchanged through restore.
@@ -178,12 +228,16 @@ Use `PPOCheckpointWriteNormalized` / `PPOCheckpointReadNormalized` to include op
 | `OwnedSequentialInit` / `SequentialOwnedAdamInit` | Yes | Allocator-owned model or Adam buffers; destroy the owners explicitly |
 | `PPOTrainingContextInit` / `PPOOwnedAdamInit` / `PPOOwnedFitStorageInit` | Yes | Shared optimizer, PPO scratch and/or learner state; destroy the owners explicitly |
 | `OwnedRolloutBufferInit` / `OwnedBatchedRolloutBufferInit` | Yes | Rollout transitions, environment IDs and batched return scratch; destroy the owners explicitly |
+| `PPOAgentInit` | Yes | Models, rollout, pending step, optimizer and fit scratch; destroy the agent explicitly |
+| `PolicyRuntimeInit` | Yes | Inference policy, optional observation moments/history and scratch; destroy the runtime explicitly |
 | `SequentialAdamInit` / `SequentialAdamWorkspaceInit` | No | Adam parameter/moment storage; initialization resets optimizer state |
 | Compiled fit / evaluate / predict | No, except `CompiledSequentialFitAuto` allocates temporary indices | Fit mutates model/optimizer and supplied scratch; evaluation/prediction use model scratch, and prediction writes output |
 | `SequentialPredict` / `SequentialPredictScalar` / `SequentialPredictBatches` / `SequentialPolicyAction(s)` | No | Model input/output activation scratch; batch prediction writes caller output; stochastic action selection also advances the supplied RNG |
 | Rollout, return, and observation-history utilities | No | Caller-owned rollout arrays, environment IDs, history storage, and supplied per-environment scratch |
 | `CheckpointMeasure` / `PPOCheckpointMeasure` / `PPOCheckpointMeasureNormalized` | No | None; returns exact writer buffer capacities |
 | `CheckpointOwnedBufferSave` | Yes | Allocator-owned checkpoint bytes; destroy the owner explicitly |
+| `PPOAgentAct` / `PPOAgentObserve` / `PPOAgentTrain` | No | Pending transition, rollout, models/optimizer, learner RNG and metrics |
+| `PolicyRuntimeAction` / `ResetEpisode` | No | Policy activation scratch, history ring, optional normalizer transform output, runtime RNG |
 | `SequentialPPOFit` | No | Model parameters/gradients, optimizer, supplied shuffle RNG, PPO scratch, epoch metrics |
 | `RunningStandardizerUpdate` / `Transform` | No | Moment arrays or caller-provided transform output |
 | `PPOCheckpointWrite` / `PPOCheckpointWriteNormalized` | No | Checkpoint/scratch byte buffers; model and optimizer are read-only |

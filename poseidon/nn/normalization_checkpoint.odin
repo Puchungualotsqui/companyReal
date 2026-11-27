@@ -577,6 +577,76 @@ PPOPolicyExportModelValid :: proc(model: ^Sequential($maxLayers, $maxWidth, $bat
 	return true
 }
 
+PPOPolicyExportInfo :: struct {
+	model:                         CheckpointInfo,
+	hasObservationNormalizer:      bool,
+	observation:                   PPOCheckpointNormalizerInfo,
+}
+
+// Zero disables a limit; negative limits are invalid. model limits apply to the
+// embedded supervised payload.
+PPOPolicyExportInspectLimits :: struct {
+	maxBytes: int,
+	model:    CheckpointInspectLimits,
+}
+
+// Validates an inference policy export without allocating or constructing a model.
+// Success reports the encoded model capacities and optional observation-normalizer
+// metadata. The export does not record sensor width or history depth. This is not
+// authentication and does not guarantee a matching compiled model type exists.
+// On failure info is zero and offsets are absolute within input.
+PPOPolicyExportInspect :: proc(input: []u8, limits: PPOPolicyExportInspectLimits = {}) -> (PPOPolicyExportInfo, CheckpointError) {
+	if limits.maxBytes < 0 { return {}, {.InvalidLimits, 0} }
+	if limits.maxBytes > 0 && len(input) > limits.maxBytes { return {}, {.LimitExceeded, 0} }
+	offset := 0
+	magic, magicOk := CheckpointGet64(input, &offset)
+	if !magicOk { return {}, {.Truncated, len(input)} }
+	if magic != POLICY_EXPORT_MAGIC { return {}, {.InvalidMagic, 0} }
+	version, versionOk := CheckpointGet64(input, &offset)
+	if !versionOk { return {}, {.Truncated, len(input)} }
+	if version != POLICY_EXPORT_VERSION { return {}, {.UnsupportedVersion, 8} }
+	modelSizeOffset := offset
+	modelSize64, modelSizeOk := CheckpointGet64(input, &offset)
+	if !modelSizeOk { return {}, {.Truncated, len(input)} }
+	if modelSize64 > u64(max(int)) { return {}, {.Overflow, modelSizeOffset} }
+	descriptor, descriptorError := ppoCheckpointParseNormalizer(input, &offset, limits.model.maxWidth, 0)
+	if descriptorError.code != .None { return {}, descriptorError }
+	remaining := len(input)-offset
+	if modelSize64 > u64(remaining) { return {}, {.Truncated, len(input)} }
+	if modelSize64 < u64(remaining) { return {}, {.TrailingData, offset+int(modelSize64)} }
+	modelOffset := offset
+	info, details, modelError := CheckpointInspectWithDetails(input[offset:], limits.model)
+	if modelError.code != .None { modelError.offset += modelOffset; return {}, modelError }
+	if info.hasAdam || info.parameterPointers == 0 || info.outputRank != 2 || info.outputWidth <= 0 ||
+		details.effectiveOutputIsSoftmax {
+		return {}, {.InvalidArchitecture, modelOffset}
+	}
+	if descriptor.present && descriptor.width != info.inputWidth {
+		return {}, {.InvalidArchitecture, descriptor.meanOffset-24}
+	}
+	return {
+		model = info,
+		hasObservationNormalizer = descriptor.present,
+		observation = ppoCheckpointNormalizerInfo(descriptor),
+	}, {}
+}
+
+// Returns exact PPOPolicyExportWrite output and model-staging sizes. Validation
+// matches the writer; no allocation or mutation occurs.
+PPOPolicyExportMeasure :: proc(
+	policy: ^Sequential($maxLayers, $maxWidth, $batchCapacity),
+	observationNormalizer: ^data.RunningStandardizer,
+) -> (int, int, bool) {
+	if !PPOPolicyExportModelValid(policy) || observationNormalizer != nil &&
+		(!data.RunningStandardizerValid(observationNormalizer) || len(observationNormalizer.mean) != policy.inputWidth) {
+		return 0, 0, false
+	}
+	normalizerBytes, normalizerOk := PPOCheckpointNormalizerByteSize(observationNormalizer)
+	modelSize, modelOk := CheckpointMeasure(policy, nil, 0)
+	if !normalizerOk || !modelOk || modelSize > max(int)-24-normalizerBytes { return 0, 0, false }
+	return 24+normalizerBytes+modelSize, modelSize, true
+}
+
 // Inference-only export contains one categorical policy and optional observation
 // normalization state, but no critic, optimizer, counters or training RNG. Action
 // sampling still takes a caller-owned evaluation RNG through SequentialPolicyAction.
