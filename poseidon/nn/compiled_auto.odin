@@ -29,7 +29,11 @@ CompiledSequentialFitAuto :: proc(
 	rows := len(inputs)/compiled.model.inputWidth
 	if rows > max(int)/size_of(int) { return 0, false }
 	storage, err := mem.alloc(rows*size_of(int), align_of(int), allocator)
-	if err != nil || storage == nil { return 0, false }
+	if storage == nil { return 0, false }
+	if err != nil {
+		_ = mem.free(storage, allocator)
+		return 0, false
+	}
 	defer mem.free(storage, allocator)
 	indices := mem.slice_ptr(cast(^int)storage, rows)
 	localState: u64

@@ -6,6 +6,7 @@ import "core:testing"
 AutoFitCountingAllocator :: struct {
 	backing: mem.Allocator,
 	allocations, frees: int,
+	returnPointerAndError: bool,
 }
 
 AutoFitCountingAllocatorProc :: proc(
@@ -13,7 +14,12 @@ AutoFitCountingAllocatorProc :: proc(
 	oldMemory: rawptr, oldSize: int, loc := #caller_location,
 ) -> ([]byte, mem.Allocator_Error) {
 	state := (^AutoFitCountingAllocator)(data)
-	if mode == .Alloc { state.allocations += 1 }
+	if mode == .Alloc {
+		state.allocations += 1
+		memory, err := state.backing.procedure(state.backing.data, mode, size, alignment, oldMemory, oldSize, loc)
+		if state.returnPointerAndError && raw_data(memory) != nil { return memory, .Out_Of_Memory }
+		return memory, err
+	}
 	if mode == .Free { state.frees += 1 }
 	return state.backing.procedure(state.backing.data, mode, size, alignment, oldMemory, oldSize, loc)
 }
@@ -100,9 +106,13 @@ CompiledFitAutoAllocationAndValidationFailures :: proc(t: ^testing.T) {
 	testing.expect(t, TestDenseStorage(&model.layers[0]).weightData == weights && TestDenseStorage(&model.layers[0]).biasData == bias)
 	_, ok = CompiledSequentialFitAuto(&compiled, nil, targets[:], &state, allocator = allocator)
 	testing.expect(t, !ok && allocatorState.allocations == 1 && allocatorState.frees == 1 && state == 9)
+	allocatorState.returnPointerAndError = true
+	_, ok = CompiledSequentialFitAuto(&compiled, inputs[:], targets[:], &state, allocator = allocator)
+	testing.expect(t, !ok && allocatorState.allocations == 2 && allocatorState.frees == 2 && state == 9)
+	allocatorState.returnPointerAndError = false
 	// Even a failure after an earlier minibatch has updated the model frees scratch.
 	lateTargets := [3]f32{0, 1, 3.4e38}
 	options.epochs, options.shuffle = 1, false
 	_, ok = CompiledSequentialFitAuto(&compiled, inputs[:], lateTargets[:], &state, options, allocator)
-	testing.expect(t, !ok && allocatorState.allocations == 2 && allocatorState.frees == 2 && state == 9)
+	testing.expect(t, !ok && allocatorState.allocations == 3 && allocatorState.frees == 3 && state == 9)
 }

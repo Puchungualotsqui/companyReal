@@ -83,9 +83,9 @@ This roadmap focuses first on making Poseidon usable for training and evaluating
 
 4. **General DL expansion and cohesive API — in progress**
    - Added a non-owning supervised compile/fit/evaluate/predict facade over `Sequential`, with declarative layer specs, grouped fit options, and a runnable regression example. Existing lower-level APIs remain available. `CompiledSequentialFitAuto` optionally allocates temporary index scratch.
-   - `SequentialAdamRequirements` and `SequentialAdamWorkspace` simplify caller-owned Adam setup; `SequentialSummary` reports per-layer shapes and parameter counts. Multiple dataset-level MAE, MSE, RMSE, or logits accuracy metrics can be evaluated together or recorded once per training/validation epoch.
+   - `OwnedSequential` and `SequentialOwnedAdam` provide opt-in allocator-owned model and optimizer storage, with explicit destruction; caller-owned alternatives remain available. `SequentialDetails` reports layer configuration, shapes, parameters, and model/Adam storage requirements. Multiple dataset-level MAE, MSE, RMSE, or logits accuracy metrics can be evaluated together or recorded once per training/validation epoch.
    - Matrix multiplication uses a compile-time-selected SIMD column-blocked path with scalar fallback; a reproducible microbenchmark compares it to the prior kernel. Full-game bottlenecks remain to be profiled.
-   - Future work: simplify model/optimizer storage management further, offer richer summaries and metric families, and broaden differentiable operations and composition for demonstrated use cases. The facade does not yet offer full Keras feature coverage or automatic model allocation.
+   - Future work: offer additional metric families and broaden differentiable operations and composition for demonstrated use cases. The facade does not yet offer full Keras feature coverage or runtime-variable model capacities.
    - Consider additional optimizers, regularizers, and layer families based on demonstrated needs; SGD, Adam, L2, and dropout are already supported.
    - Consider GPU or other compute backends only after profiling shows CPU execution is a bottleneck and the maintenance cost is justified.
 
