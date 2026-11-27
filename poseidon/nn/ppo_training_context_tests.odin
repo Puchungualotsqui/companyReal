@@ -6,12 +6,12 @@ import "core:math"
 import "core:mem"
 import "core:testing"
 
-// A failed free leaves the block live, as required for a destruction retry.
+// By default a failed free leaves the block live, as required for a retry.
 PPOContextTestAllocator :: struct {
 	backing: mem.Allocator,
 	attempts, allocations, freeCalls, frees, badFrees: int,
-	failAt, pointerAndErrorAt, failFreeAt: int,
-	failWithNil: bool,
+	failAt, pointerAndErrorAt, failFreeAt, failFreeAt2: int,
+	failWithNil, failFreeReleases: bool,
 	allocated: [32]rawptr,
 	sizes: [32]int,
 	live: [32]bool,
@@ -47,7 +47,13 @@ PPOContextTestAllocatorProc :: proc(
 			if pointer == oldMemory && state.live[i] { index = i; break }
 		}
 		if index < 0 { state.badFrees += 1; return nil, .Invalid_Pointer }
-		if state.freeCalls == state.failFreeAt { return nil, .Invalid_Argument }
+		if state.freeCalls == state.failFreeAt || state.freeCalls == state.failFreeAt2 {
+			if state.failFreeReleases {
+				_, err := state.backing.procedure(state.backing.data, mode, size, alignment, oldMemory, oldSize, loc)
+				if err == nil { state.live[index] = false; state.frees += 1 }
+			}
+			return nil, .Invalid_Argument
+		}
 		memory, err := state.backing.procedure(state.backing.data, mode, size, alignment, oldMemory, oldSize, loc)
 		if err == nil { state.live[index] = false; state.frees += 1 }
 		return memory, err
@@ -474,25 +480,62 @@ PPOTrainingContextUnderlyingRollbackFailure :: proc(t: ^testing.T) {
 	testing.expect(t, setup)
 	if !setup { return }
 	options := PPOTrainingContextOptionsDefault(5)
-	for scratchFailure in ([2]bool{true, false}) {
-		trainer: PPOTrainingContext(1, 2, 2, 1, 2, 2)
-		state := PPOContextTestAllocator{backing = context.allocator, failFreeAt = 1}
-		if scratchFailure { state.pointerAndErrorAt = 1 } else { state.failAt = 4 }
-		allocator := mem.Allocator{procedure = PPOContextTestAllocatorProc, data = &state}
-		result := PPOTrainingContextInit(&trainer, &policy, &value, options, allocator)
-		if scratchFailure {
-			testing.expect(t, result == .ScratchSetupFailed && state.allocations == 1 && state.live[0])
-		} else {
-			testing.expect(t, result == .OptimizerSetupFailed && state.allocations == 3 &&
-				!state.live[0] && !state.live[1] && state.live[2])
+	policyBytes, valueBytes: [size_of(policy)]u8
+	copy(policyBytes[:], mem.slice_ptr((^u8)(rawptr(&policy)), len(policyBytes)))
+	copy(valueBytes[:], mem.slice_ptr((^u8)(rawptr(&value)), len(valueBytes)))
+	for position in 1..=4 {
+		for mode in 0..<3 {
+			count := position-1
+			if mode == 2 { count += 1 }
+			if count == 0 { continue }
+			for failedFree in 1..=count {
+				trainer: PPOTrainingContext(1, 2, 2, 1, 2, 2)
+				emptyBytes: [size_of(trainer)]u8
+				copy(emptyBytes[:], mem.slice_ptr((^u8)(rawptr(&trainer)), len(emptyBytes)))
+				state := PPOContextTestAllocator{backing = context.allocator, failFreeAt = failedFree}
+				if mode == 2 { state.pointerAndErrorAt = position } else { state.failAt = position; state.failWithNil = mode == 1 }
+				allocator := mem.Allocator{procedure = PPOContextTestAllocatorProc, data = &state}
+				result := PPOTrainingContextInit(&trainer, &policy, &value, options, allocator)
+				retained := count-failedFree
+				testing.expectf(t, result == .CleanupFailed && state.attempts == position && state.allocations == count &&
+					state.freeCalls == count && state.frees == count-1 && state.badFrees == 0,
+					"position=%d mode=%d free=%d result=%v allocations=%d frees=%d", position, mode, failedFree, result, state.allocations, state.frees)
+				for i in 0..<count {
+					testing.expect(t, state.freeOrder[i] == state.allocated[count-1-i] && state.live[i] == (i == retained) &&
+						(trainer.pending.blocks[i] != nil) == (i == retained))
+				}
+				expected: PPOTrainingContext(1, 2, 2, 1, 2, 2)
+				expected.self, expected.phase = rawptr(&trainer), .Destroying
+				expected.pending.allocator, expected.pending.blocks[retained] = allocator, state.allocated[retained]
+				expectedBytes := mem.slice_ptr((^u8)(rawptr(&expected)), size_of(expected))
+				testing.expect(t, PPOContextTestBytesEqual(rawptr(&trainer), expectedBytes) &&
+					PPOContextTestBytesEqual(rawptr(&policy), policyBytes[:]) && PPOContextTestBytesEqual(rawptr(&value), valueBytes[:]))
+				copied := trainer
+				copyBytes: [size_of(copied)]u8
+				copy(copyBytes[:], mem.slice_ptr((^u8)(rawptr(&copied)), len(copyBytes)))
+				nilTrainer := (^PPOTrainingContext(1, 2, 2, 1, 2, 2))(nil)
+				testing.expect(t, PPOTrainingContextDestroy(nilTrainer) == .InvalidHandle && PPOTrainingContextDestroy(&copied) == .InvalidHandle &&
+					PPOTrainingContextInit(&copied, &policy, &value, options, allocator) == .InvalidHandle &&
+					PPOTrainingContextState(&copied) == nil && PPOTrainingContextOptimizer(&copied) == nil &&
+					len(PPOTrainingContextEpochMetrics(&copied)) == 0 && PPOTrainingContextRecordRollout(&copied) == .InvalidHandle &&
+					PPOTrainingContextInit(&trainer, &policy, &value, options, allocator) == .InvalidHandle &&
+					PPOTrainingContextState(&trainer) == nil && PPOTrainingContextOptimizer(&trainer) == nil &&
+					len(PPOTrainingContextEpochMetrics(&trainer)) == 0 && PPOTrainingContextRecordRollout(&trainer) == .InvalidHandle &&
+					PPOContextTestBytesEqual(rawptr(&copied), copyBytes[:]) && state.freeCalls == count)
+				_, fitError := PPOTrainingContextFit(&trainer, nil)
+				testing.expect(t, fitError == .InvalidHandle)
+				state.failFreeAt = state.freeCalls+1
+				testing.expect(t, PPOTrainingContextDestroy(&trainer) == .CleanupFailed && state.freeCalls == count+1 &&
+					state.freeOrder[count] == state.allocated[retained] && PPOContextTestBytesEqual(rawptr(&trainer), expectedBytes))
+				state.failFreeAt = 0
+				testing.expect(t, PPOTrainingContextDestroy(&trainer) == .None && state.freeCalls == count+2 &&
+					state.freeOrder[count+1] == state.allocated[retained] && state.frees == count && state.badFrees == 0 &&
+					PPOContextTestBytesEqual(rawptr(&trainer), emptyBytes[:]))
+				testing.expect(t, PPOTrainingContextDestroy(&trainer) == .None && PPOTrainingContextDestroy(&copied) == .InvalidHandle &&
+					state.freeCalls == count+2 && PPOContextTestBytesEqual(rawptr(&policy), policyBytes[:]) &&
+					PPOContextTestBytesEqual(rawptr(&value), valueBytes[:]))
+			}
 		}
-		// Internal rollback does not expose a retained block through the context.
-		testing.expect(t, PPOTrainingContextState(&trainer) == nil && PPOTrainingContextDestroy(&trainer) == .None &&
-			state.frees == state.allocations-1 && state.badFrees == 0)
-		for pointer, index in state.allocated[:state.allocations] {
-			if state.live[index] { testing.expect(t, mem.free(pointer, allocator) == nil) }
-		}
-		testing.expect(t, state.frees == state.allocations && state.badFrees == 0)
 	}
 }
 

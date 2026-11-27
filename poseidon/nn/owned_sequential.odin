@@ -28,22 +28,27 @@ import "core:mem"
 // of the requested size and alignment, disjoint from the handle and other live
 // objects, and support individual .Free calls that actually free allocations.
 // Do not externally free/reset its storage. If an allocator returns
-// both a pointer and an error, that pointer must be independently freeable. A
-// rollback free must succeed for failed initialization to be leak-free. A failed
-// destroy leaves the handle intact, so a failed .Free must leave its allocation
-// intact if the caller will continue using it or retry. Panicking, invalid, or
-// nonconforming allocators are outside this contract.
+// both a pointer and an error, that pointer must be independently freeable. If a
+// failed initialization's rollback free reports an error, the allocation is
+// retained in a cleanup-only state and Destroy must be retried. A failed destroy
+// keeps its allocation for retry, so a failed .Free must leave it intact if the
+// caller will continue using it. Panicking, invalid, or nonconforming allocators
+// are outside this contract.
 OwnedSequential :: struct($maxLayers, $maxWidth, $batchCapacity: int) {
 	model: ^Sequential(maxLayers, maxWidth, batchCapacity),
 	allocator: mem.Allocator,
 	self: rawptr,
+	pending: rawptr,
+	destroying: bool,
 }
 
 // Allocates and initializes a vector-input model. The allocator defaults to the
 // current context.allocator and is retained for destruction, even if the context
-// later changes. seed=0 has the same meaning as in SequentialInit. Failure leaves
-// the handle unchanged; nil, copied/moved live, and already-live handles are rejected.
-// After successful destruction the original zeroed handle may be initialized again.
+// later changes. seed=0 has the same meaning as in SequentialInit. Ordinary failure
+// leaves the handle unchanged and reusable; if rollback cleanup itself fails, the
+// handle retains that allocation in a cleanup-only state and must be passed to
+// OwnedSequentialDestroy. Nil, copied/moved live, cleanup-pending, and already-live
+// handles are rejected. After successful destruction it may be initialized again.
 OwnedSequentialInit :: proc(
 	owner: ^OwnedSequential($maxLayers, $maxWidth, $batchCapacity),
 	inputWidth: int,
@@ -66,6 +71,13 @@ OwnedSequentialInitSpatial :: proc(
 }
 
 @(private="file")
+ownedSequentialRollback :: proc(owner: ^OwnedSequential($maxLayers, $maxWidth, $batchCapacity)) -> bool {
+	if mem.free(owner.pending, owner.allocator) != nil { return false }
+	owner^ = {}
+	return true
+}
+
+@(private="file")
 ownedSequentialInit :: proc(
 	owner: ^OwnedSequential($maxLayers, $maxWidth, $batchCapacity),
 	a, b, c: int,
@@ -73,14 +85,15 @@ ownedSequentialInit :: proc(
 	seed: u64,
 	allocator: mem.Allocator,
 ) -> bool {
-	if owner == nil || owner.model != nil || owner.self != nil { return false }
+	if owner == nil || owner.model != nil || owner.self != nil || owner.pending != nil || owner.destroying { return false }
 	Model :: Sequential(maxLayers, maxWidth, batchCapacity)
 	storage, err := mem.alloc(size_of(Model), align_of(Model), allocator)
 	if storage == nil { return false }
-	if err != nil {
-		_ = mem.free(storage, allocator)
-		return false
-	}
+	owner.allocator = allocator
+	owner.pending = storage
+	owner.self = rawptr(owner)
+	owner.destroying = true
+	if err != nil { _ = ownedSequentialRollback(owner); return false }
 	model := cast(^Model)storage
 	initialized := false
 	if spatial {
@@ -88,32 +101,35 @@ ownedSequentialInit :: proc(
 	} else {
 		initialized = SequentialInit(model, a, seed)
 	}
-	if !initialized {
-		_ = mem.free(storage, allocator)
-		return false
-	}
-	owner^ = {model, allocator, rawptr(owner)}
+	if !initialized { _ = ownedSequentialRollback(owner); return false }
+	owner.model = model
+	owner.pending = nil
+	owner.destroying = false
 	return true
 }
 
-// Returns a borrowed model, or nil for nil, empty, copied, or moved handles.
-// The guard does not validate already-issued borrows or the allocator's lifetime;
-// see OwnedSequential for the full lifetime and synchronization requirements.
+// Returns a borrowed model, or nil for nil, empty, copied/moved, destroying, or
+// cleanup-pending handles. The guard does not validate already-issued borrows or
+// the allocator's lifetime; see OwnedSequential for the full lifetime rules.
 OwnedSequentialModel :: proc(owner: ^OwnedSequential($maxLayers, $maxWidth, $batchCapacity)) -> ^Sequential(maxLayers, maxWidth, batchCapacity) {
-	if owner == nil || owner.self != rawptr(owner) || owner.model == nil { return nil }
+	if owner == nil || owner.self != rawptr(owner) || owner.model == nil || owner.pending != nil || owner.destroying { return nil }
 	return owner.model
 }
 
-// Frees the model using its original allocator and clears the handle. Returns
-// true for a successful free or an already-empty handle; nil and copied/moved
-// live handles return false without freeing. On a .Free error, returns false and leaves
-// the handle unchanged, subject to the allocator assumptions above. All model
-// borrows become invalid on success, including after a subsequent reinitialization.
+// Frees the live or cleanup-pending allocation using its original allocator and
+// clears the handle. Returns true for a successful free or an already-empty handle;
+// nil and copied/moved handles return false without freeing. Once destruction
+// begins, model borrows are invalid even if the free fails. On a .Free error the
+// handle remains cleanup-pending and a later call retries the same allocation.
 OwnedSequentialDestroy :: proc(owner: ^OwnedSequential($maxLayers, $maxWidth, $batchCapacity)) -> bool {
 	if owner == nil { return false }
-	if owner.self == nil && owner.model == nil { return true }
-	if owner.self != rawptr(owner) || owner.model == nil { return false }
-	if mem.free(rawptr(owner.model), owner.allocator) != nil { return false }
+	if owner.self == nil && owner.model == nil && owner.pending == nil { return true }
+	if owner.self != rawptr(owner) { return false }
+	owner.destroying = true
+	memory := owner.pending
+	if memory == nil { memory = rawptr(owner.model) }
+	if memory == nil { owner^ = {}; return true }
+	if mem.free(memory, owner.allocator) != nil { return false }
 	owner^ = {}
 	return true
 }

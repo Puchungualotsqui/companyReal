@@ -230,7 +230,7 @@ OwnedSequentialAllocatorCapturedAndFreeRetry :: proc(t: ^testing.T) {
 	defer OwnedSequentialDestroy(&owned)
 	model := OwnedSequentialModel(&owned)
 	state.failNextFree = true
-	testing.expect(t, !OwnedSequentialDestroy(&owned) && OwnedSequentialModel(&owned) == model && state.live == rawptr(model))
+	testing.expect(t, !OwnedSequentialDestroy(&owned) && OwnedSequentialModel(&owned) == nil && state.live == rawptr(model))
 	testing.expect(t, state.frees == 1 && state.successfulFrees == 0)
 	destroyed := false
 	{
@@ -246,6 +246,21 @@ OwnedSequentialAllocatorCapturedAndFreeRetry :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, initialized && state.allocations == 2)
 	testing.expect(t, OwnedSequentialDestroy(&owned) && state.successfulFrees == 2 && state.live == nil)
+}
+
+@(test)
+OwnedSequentialRollbackFreeFailureIsRetryable :: proc(t: ^testing.T) {
+	state := OwnedSequentialTestAllocator{backing = context.allocator}
+	allocator := mem.Allocator{procedure = OwnedSequentialTestAllocatorProc, data = &state}
+	owned: OwnedSequential(1, 4, 2)
+	state.failNextFree = true
+	testing.expect(t, !OwnedSequentialInit(&owned, 5, allocator = allocator))
+	testing.expect(t, owned.pending != nil && owned.self == rawptr(&owned) && owned.destroying &&
+		OwnedSequentialModel(&owned) == nil && state.live == owned.pending && state.successfulFrees == 0)
+	testing.expect(t, !OwnedSequentialInit(&owned, 1, allocator = allocator) && state.allocations == 1)
+	testing.expect(t, OwnedSequentialDestroy(&owned) && state.live == nil && state.successfulFrees == 1 && owned.pending == nil)
+	testing.expect(t, OwnedSequentialInit(&owned, 1, allocator = allocator))
+	testing.expect(t, OwnedSequentialDestroy(&owned))
 }
 
 @(test)

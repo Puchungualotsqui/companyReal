@@ -164,6 +164,78 @@ PPOCheckpointOptimizerValid :: proc(optimizer: SequentialOptimizer, parameters: 
 	return 0, 0, nil, false
 }
 
+// Exact byte capacities required by PPOCheckpointWriteNormalized. For the base
+// writer, checkpointScratch is zero. No allocation or mutation occurs.
+PPOCheckpointBufferSizes :: struct {
+	output, checkpointScratch, policyScratch, valueScratch: int,
+}
+
+@(private)
+ppoCheckpointWritePlan :: struct {
+	sizes: PPOCheckpointBufferSizes,
+	kind: u64,
+	learningRate: f32,
+	adam: ^Adam,
+	parameters: []^core.Node,
+	elementCount: int,
+	ok: bool,
+}
+
+@(private)
+ppoCheckpointWriteLayout :: proc(
+	policy: ^Sequential($policyMaxLayers, $policyMaxWidth, $policyBatchCapacity),
+	value: ^Sequential($valueMaxLayers, $valueMaxWidth, $valueBatchCapacity),
+	optimizer: SequentialOptimizer, state: PPOTrainingState, ppoConfig: PPOConfig, fitConfig: PPOFitConfig,
+	parameterStorage: []^core.Node,
+) -> ppoCheckpointWritePlan {
+	if policy == nil || value == nil || state.policyRandomState == 0 ||
+		!PPOConfigValid(ppoConfig) || !PPOFitConfigValid(fitConfig) ||
+		fitConfig.batchSize > min(policyBatchCapacity, valueBatchCapacity) { return {} }
+	parameters, elementCount, parametersOk := PPOCheckpointCombinedParameters(policy, value, parameterStorage)
+	if !parametersOk { return {} }
+	kind, learningRate, adam, optimizerOk := PPOCheckpointOptimizerValid(optimizer, parameters)
+	if !optimizerOk { return {} }
+	if adam != nil {
+		for first, index in adam.firstMoment {
+			if !AdamFinite(f64(first)) || !AdamFinite(f64(adam.secondMoment[index])) || adam.secondMoment[index] < 0 {
+				return {}
+			}
+		}
+	}
+	policySize, policyOk := CheckpointMeasure(policy, nil, state.policyRandomState)
+	valueSize, valueOk := CheckpointMeasure(value, nil, state.shuffleRandomState)
+	if !policyOk || !valueOk { return {} }
+	fixedSize := 112
+	if kind == 0 {
+		fixedSize += 4
+	} else {
+		if elementCount > (max(int)-fixedSize-32)/8 { return {} }
+		fixedSize += 32+8*elementCount
+	}
+	if policySize > max(int)-fixedSize || valueSize > max(int)-fixedSize-policySize { return {} }
+	return {
+		sizes = {output = fixedSize+policySize+valueSize, policyScratch = policySize, valueScratch = valueSize},
+		kind = kind, learningRate = learningRate, adam = adam, parameters = parameters, elementCount = elementCount, ok = true,
+	}
+}
+
+// Measures the exact output, policy-staging, and value-staging byte capacities
+// required by PPOCheckpointWrite. Validation and sizing match the writer. No
+// allocation or mutation occurs. The model, optimizer and state must remain
+// unchanged through a later write; the writer's disjointness and backing-storage
+// requirements apply. This does not include rollout or environment state.
+PPOCheckpointMeasure :: proc(
+	policy: ^Sequential($policyMaxLayers, $policyMaxWidth, $policyBatchCapacity),
+	value: ^Sequential($valueMaxLayers, $valueMaxWidth, $valueBatchCapacity),
+	optimizer: SequentialOptimizer, state: PPOTrainingState, ppoConfig: PPOConfig, fitConfig: PPOFitConfig,
+) -> (PPOCheckpointBufferSizes, bool) {
+	parameterStorage: [2*(policyMaxLayers+valueMaxLayers)]^core.Node
+	plan := ppoCheckpointWriteLayout(
+		policy, value, optimizer, state, ppoConfig, fitConfig, parameterStorage[:],
+	)
+	return plan.sizes, plan.ok
+}
+
 // Writes one resumable PPO training boundary. Both model payloads and the shared
 // optimizer are staged before output is changed. The workspace buffers and output
 // must be disjoint from models/optimizer and each other. No rollout is serialized:
@@ -178,51 +250,26 @@ PPOCheckpointWrite :: proc(
 	fitConfig: PPOFitConfig,
 	output, policyScratch, valueScratch: []u8,
 ) -> (int, bool) {
-	if policy == nil || value == nil || state.policyRandomState == 0 ||
-		!PPOConfigValid(ppoConfig) || !PPOFitConfigValid(fitConfig) ||
-		fitConfig.batchSize > min(policyBatchCapacity, valueBatchCapacity) ||
-		!PPOCheckpointWriteDisjoint(
-			rawptr(policy), size_of(Sequential(policyMaxLayers, policyMaxWidth, policyBatchCapacity)),
-			rawptr(value), size_of(Sequential(valueMaxLayers, valueMaxWidth, valueBatchCapacity)),
-			nil, output, policyScratch, valueScratch,
-		) {
-		return 0, false
-	}
+	if !PPOCheckpointWriteDisjoint(
+		rawptr(policy), size_of(Sequential(policyMaxLayers, policyMaxWidth, policyBatchCapacity)),
+		rawptr(value), size_of(Sequential(valueMaxLayers, valueMaxWidth, valueBatchCapacity)),
+		nil, output, policyScratch, valueScratch,
+	) { return 0, false }
 	parameterStorage: [2*(policyMaxLayers+valueMaxLayers)]^core.Node
-	parameters, elementCount, parametersOk := PPOCheckpointCombinedParameters(
-		policy, value, parameterStorage[:],
+	plan := ppoCheckpointWriteLayout(
+		policy, value, optimizer, state, ppoConfig, fitConfig, parameterStorage[:],
 	)
-	if !parametersOk do return 0, false
-	kind, learningRate, adam, optimizerOk := PPOCheckpointOptimizerValid(optimizer, parameters)
-	if !optimizerOk do return 0, false
+	if !plan.ok { return 0, false }
+	sizes, kind, learningRate, adam, elementCount := plan.sizes, plan.kind, plan.learningRate, plan.adam, plan.elementCount
 	if !PPOCheckpointWriteDisjoint(
 		rawptr(policy), size_of(Sequential(policyMaxLayers, policyMaxWidth, policyBatchCapacity)),
 		rawptr(value), size_of(Sequential(valueMaxLayers, valueMaxWidth, valueBatchCapacity)),
 		adam, output, policyScratch, valueScratch,
-	) {
-		return 0, false
-	}
-	if adam != nil {
-		for first, index in adam.firstMoment {
-			if !AdamFinite(f64(first)) || !AdamFinite(f64(adam.secondMoment[index])) || adam.secondMoment[index] < 0 {
-				return 0, false
-			}
-		}
-	}
+	) || len(output) < sizes.output || len(policyScratch) < sizes.policyScratch ||
+		len(valueScratch) < sizes.valueScratch { return 0, false }
 	policySize, policyOk := CheckpointWrite(policy, nil, state.policyRandomState, policyScratch)
 	valueSize, valueOk := CheckpointWrite(value, nil, state.shuffleRandomState, valueScratch)
-	if !policyOk || !valueOk do return 0, false
-
-	fixedSize := 112
-	if kind == 0 {
-		fixedSize += 4
-	} else {
-		if elementCount > (max(int)-fixedSize-32)/8 do return 0, false
-		fixedSize += 32+8*elementCount
-	}
-	if policySize > max(int)-fixedSize || valueSize > max(int)-fixedSize-policySize do return 0, false
-	totalSize := fixedSize+policySize+valueSize
-	if len(output) < totalSize do return 0, false
+	if !policyOk || !valueOk || policySize != sizes.policyScratch || valueSize != sizes.valueScratch { return 0, false }
 
 	offset := 0
 	CheckpointPut64(output, &offset, PPO_CHECKPOINT_MAGIC)

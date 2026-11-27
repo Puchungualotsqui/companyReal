@@ -1,6 +1,7 @@
 package nn
 
 import "../core"
+import "core:mem"
 
 
 
@@ -48,17 +49,32 @@ CheckpointGet32 :: proc(data: []u8, offset: ^int) -> (f32, bool) {
 	return transmute(f32)bits, true
 }
 
-// Returns bytes written, or (0, false) without changing output. Adam, when
-// present, must reference exactly the model's dense and convolution parameters
-// (weights then bias) in layer order.
-// All slices and objects must have valid backing storage and be disjoint; no
-// concurrent mutation is permitted. An initialized model must not have been copied.
-CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity), adam: ^Adam, shuffleState: u64, output: []u8) -> (int, bool) {
+// Adds count elements of elementSize bytes without overflowing int. On failure,
+// size is unchanged. All checkpoint size arithmetic goes through this helper.
+checkpointSizeAdd :: proc(size: ^int, count, elementSize: int) -> bool {
+	if size^ < 0 || count < 0 || elementSize <= 0 || count > (max(int)-size^)/elementSize { return false }
+	size^ += count*elementSize
+	return true
+}
+
+// Returns the exact CheckpointWrite byte count, or (0, false) for invalid state
+// or an unrepresentable size. No allocation or mutation occurs; shuffleState is
+// accepted for parity with CheckpointWrite and does not affect the size. Adam,
+// when present, must reference exactly the model's dense and convolution parameters
+// (weights then bias) in layer order. For SGD pass nil: its configuration is not
+// saved. Validation traverses model parameters and, when present, Adam state.
+// The same valid-backing-storage, disjointness, no-copy and no-concurrent-mutation
+// requirements as CheckpointWrite apply. Keep model and Adam unchanged between
+// measuring and writing; measurement does not reserve or snapshot their state.
+CheckpointMeasure :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity), adam: ^Adam, shuffleState: u64) -> (int, bool) {
+	return checkpointMeasureLayout(model, adam, nil)
+}
+
+// Shared validation and exact sizing pass for measurement and writing.
+checkpointMeasureLayout :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity), adam: ^Adam, versionOut: ^u64) -> (int, bool) {
 	if model == nil || model.self != rawptr(model) || maxLayers <= 0 || maxWidth <= 0 || batchCapacity <= 0 || model.inputWidth <= 0 || model.inputWidth > maxWidth || model.layerCount < 0 || model.layerCount > maxLayers || model.randomState == 0 { return 0, false }
 	if adam != nil && !AdamConfigValid(adam) { return 0, false }
-	// Accumulate against output length, avoiding arithmetic overflow.
 	size := 80
-	if len(output) < size { return 0, false }
 	parameterCount, elementCount, width := 0, 0, model.inputWidth
 	rank := len(model.input.value.shape)
 	if rank != 2 && rank != 4 { return 0, false }
@@ -77,15 +93,13 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 		}
 	}
 	if version == CHECKPOINT_SPATIAL_VERSION {
-		if len(output)-size < 24 { return 0, false }
-		size += 24
+		if !checkpointSizeAdd(&size, 24, 1) { return 0, false }
 	}
 	rows := model.inputShape[0]
 	if rows <= 0 || rows > batchCapacity || !core.TensorValid(model.input.value) || !core.SameShape(model.input.value, core.Tensor{shape = model.inputShape[:len(model.input.value.shape)]}) || (!spatial && model.inputShape[1] != width) { return 0, false }
 	for i in 0..<model.layerCount {
 		item := &model.layers[i]
-		if item.width <= 0 || item.width > maxWidth || len(output)-size < 16 { return 0, false }
-		size += 16
+		if item.width <= 0 || item.width > maxWidth || !checkpointSizeAdd(&size, 16, 1) { return 0, false }
 		input := &model.input
 		if i > 0 { input = &model.layers[i-1].output }
 		switch &operation in item.operation {
@@ -134,8 +148,7 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 			weights := width * item.width
 			if weights > max(int)-item.width { return 0, false }
 			count := weights + item.width
-			if count > (len(output)-size)/4 { return 0, false }
-			size += count*4
+			if !checkpointSizeAdd(&size, count, 4) { return 0, false }
 			if adam != nil {
 				if parameterCount > len(adam.parameters) || len(adam.parameters)-parameterCount < 2 || adam.parameters[parameterCount] != &dense.weights || adam.parameters[parameterCount+1] != &dense.bias { return 0, false }
 			}
@@ -162,8 +175,7 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 			count := kh*kw*channels*oc
 			if count > max(int)-oc || parameterCount > max(int)-2 { return 0, false }
 			count += oc
-			if len(output)-size < 40 || count > (len(output)-size-40)/4 || elementCount > max(int)-count { return 0, false }
-			size += 40 + count*4
+			if !checkpointSizeAdd(&size, 40, 1) || !checkpointSizeAdd(&size, count, 4) || elementCount > max(int)-count { return 0, false }
 			if adam != nil && (parameterCount > len(adam.parameters) || len(adam.parameters)-parameterCount < 2 || adam.parameters[parameterCount] != &conv.weights || adam.parameters[parameterCount+1] != &conv.bias) { return 0, false }
 			parameterCount += 2; elementCount += count
 			for value in conv.weights.value.data { if !AdamFinite(f64(value)) { return 0, false } }
@@ -174,8 +186,7 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 			kh, kw, stride := operation.kernelHeight, operation.kernelWidth, operation.stride
 			if kh <= 0 || kw <= 0 || stride <= 0 || kh > h || kw > w || kh > max(int)/kw { return 0, false }
 			oh, ow := (h-kh)/stride+1, (w-kw)/stride+1
-			if oh > maxWidth/ow || oh*ow > maxWidth/channels || oh*ow*channels != item.width || len(output)-size < 24 { return 0, false }
-			size += 24
+			if oh > maxWidth/ow || oh*ow > maxWidth/channels || oh*ow*channels != item.width || !checkpointSizeAdd(&size, 24, 1) { return 0, false }
 			h, w = oh, ow
 		case Flatten:
 			if item.width != width { return 0, false }
@@ -183,8 +194,7 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 		case Relu, Sigmoid, Tanh, Softmax:
 			if item.width != width { return 0, false }
 		case Dropout:
-			if item.width != width || !(operation.rate >= 0 && operation.rate < 1) || operation.randomState != &model.randomState || len(output)-size < 4 { return 0, false }
-			size += 4
+			if item.width != width || !(operation.rate >= 0 && operation.rate < 1) || operation.randomState != &model.randomState || !checkpointSizeAdd(&size, 4, 1) { return 0, false }
 		case nil:
 			return 0, false
 		}
@@ -196,13 +206,23 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 		if outputRows <= 0 || outputRows > batchCapacity || !core.TensorValid(item.output.value) || !core.SameShape(item.output.value, core.Tensor{shape = expected[:rank]}) { return 0, false }
 	}
 	if adam != nil {
-		if parameterCount != len(adam.parameters) || elementCount != len(adam.firstMoment) || len(output)-size < 24 { return 0, false }
-		size += 24
-		if elementCount > (len(output)-size)/8 { return 0, false }
-		size += elementCount*8
+		if parameterCount != len(adam.parameters) || elementCount != len(adam.firstMoment) || !checkpointSizeAdd(&size, 24, 1) || !checkpointSizeAdd(&size, elementCount, 8) { return 0, false }
 		for value in adam.firstMoment { if !AdamFinite(f64(value)) { return 0, false } }
 		for value in adam.secondMoment { if !AdamFinite(f64(value)) || value < 0 { return 0, false } }
 	}
+	if versionOut != nil { versionOut^ = version }
+	return size, true
+}
+
+// Returns bytes written, or (0, false) without changing output. Adam, when
+// present, must reference exactly the model's dense and convolution parameters
+// (weights then bias) in layer order.
+// All slices and objects must have valid backing storage and be disjoint; no
+// concurrent mutation is permitted. An initialized model must not have been copied.
+CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity), adam: ^Adam, shuffleState: u64, output: []u8) -> (int, bool) {
+	version: u64
+	size, valid := checkpointMeasureLayout(model, adam, &version)
+	if !valid || len(output) < size { return 0, false }
 	offset := 0
 	for value in ([10]u64{CHECKPOINT_MAGIC, version, u64(maxLayers), u64(maxWidth), u64(batchCapacity), u64(model.inputWidth), u64(model.layerCount), model.randomState, shuffleState, u64(adam != nil)}) { CheckpointPut64(output, &offset, value) }
 	if version == CHECKPOINT_SPATIAL_VERSION {
@@ -212,7 +232,6 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 			CheckpointPut64(output, &offset, u64(dim))
 		}
 	}
-	width = model.inputWidth
 	for i in 0..<model.layerCount {
 		item := &model.layers[i]
 		kind: u64
@@ -248,7 +267,6 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 			operation := &item.operation.(Dropout)
 			CheckpointPut32(output, &offset, operation.rate)
 		}
-		width = item.width
 	}
 	if adam != nil {
 		CheckpointPut64(output, &offset, adam.step)
@@ -257,6 +275,78 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 		for value in adam.secondMoment { CheckpointPut32(output, &offset, value) }
 	}
 	return offset, true
+}
+
+// Optional ownership for an encoded checkpoint. Start with a zero-valued handle
+// in its final location and do not copy, move, overwrite, or edit it while live.
+// The allocator and its state must remain valid until destruction; allocations
+// must be correctly sized, aligned, and disjoint from the handle, model, Adam,
+// their storage, and allocator state. Every non-nil pointer, even with an allocation
+// error, must be individually freeable. Externally synchronize owner and borrows.
+// Address guards cannot detect a stale copy restored to its original address or
+// revoke previously borrowed slices.
+CheckpointOwnedBuffer :: struct {
+	memory: rawptr,
+	size: int,
+	allocator: mem.Allocator,
+	self: rawptr,
+	ready: bool,
+}
+
+// Measures, allocates exactly that many bytes, and writes a checkpoint. The
+// allocator defaults to context.allocator. Success makes the bytes available via
+// CheckpointOwnedBufferBytes. Reinitializing a live or copied handle is rejected.
+//
+// ALWAYS call CheckpointOwnedBufferDestroy on the original handle, even on false:
+// if allocation returns a pointer with an error, or writing subsequently fails,
+// the handle retains that pointer in a cleanup-only state. No implicit free is
+// attempted, so no allocation is lost on rollback failure. Validation failure or
+// an allocation failure with a nil pointer leaves the zero-valued handle unchanged.
+// The model and optimizer must remain unchanged throughout the call; the model,
+// optimizer, and allocator must obey CheckpointMeasure/Write's rules. Writing
+// validates again after allocation, so this helper performs two validation passes.
+CheckpointOwnedBufferSave :: proc(
+	owner: ^CheckpointOwnedBuffer,
+	model: ^Sequential($maxLayers, $maxWidth, $batchCapacity),
+	adam: ^Adam,
+	shuffleState: u64,
+	allocator: mem.Allocator = context.allocator,
+) -> bool {
+	if owner == nil || owner.self != nil || owner.memory != nil { return false }
+	size, valid := CheckpointMeasure(model, adam, shuffleState)
+	if !valid { return false }
+	memory, err := mem.alloc(size, align_of(u8), allocator)
+	if memory == nil { return false }
+	owner^ = {memory, size, allocator, rawptr(owner), false}
+	if err != nil { return false }
+	bytes := mem.slice_ptr((^u8)(memory), size)
+	written, ok := CheckpointWrite(model, adam, shuffleState, bytes)
+	if !ok || written != size { return false }
+	owner.ready = true
+	return true
+}
+
+// Returns a mutable borrow, or nil for nil, empty, copied/moved, or cleanup-only
+// handles. Do not free it; it becomes invalid when destruction is attempted.
+CheckpointOwnedBufferBytes :: proc(owner: ^CheckpointOwnedBuffer) -> []u8 {
+	if owner == nil || owner.self != rawptr(owner) || owner.memory == nil || !owner.ready { return nil }
+	return mem.slice_ptr((^u8)(owner.memory), owner.size)
+}
+
+// Releases the allocation with its original allocator and clears the handle.
+// Empty handles succeed; nil and copied/moved handles fail. A free error leaves
+// the handle cleanup-only and its pointer recorded. Retry only if the allocator
+// guarantees a failed free leaves the allocation intact; otherwise ownership is
+// ambiguous and the allocator must resolve it. Previously borrowed bytes must no
+// longer be used after any destruction attempt, including one that reports error.
+CheckpointOwnedBufferDestroy :: proc(owner: ^CheckpointOwnedBuffer) -> bool {
+	if owner == nil { return false }
+	if owner.self == nil && owner.memory == nil { return true }
+	if owner.self != rawptr(owner) || owner.memory == nil { return false }
+	owner.ready = false
+	if mem.free(owner.memory, owner.allocator) != nil { return false }
+	owner^ = {}
+	return true
 }
 
 // Inspection errors describe the supervised byte stream, not a destination model.

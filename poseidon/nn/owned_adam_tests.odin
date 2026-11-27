@@ -10,6 +10,7 @@ OwnedAdamTestAllocator :: struct {
 	attempts, successes, frees, failAt: int,
 	pointerAndErrorAt: int,
 	failWithNil: bool,
+	failNextFree: bool,
 	sizes, alignments: [3]int,
 }
 
@@ -34,7 +35,13 @@ OwnedAdamTestAllocatorProc :: proc(
 		}
 		return memory, err
 	}
-	if mode == .Free { state.frees += 1 }
+	if mode == .Free {
+		state.frees += 1
+		if state.failNextFree {
+			state.failNextFree = false
+			return nil, .Invalid_Argument
+		}
+	}
 	return state.backing.procedure(state.backing.data, mode, size, alignment, oldMemory, oldSize, loc)
 }
 
@@ -121,6 +128,24 @@ OwnedAdamAllocationAndLifetime :: proc(t: ^testing.T) {
 	testing.expect(t, destroyed && state.frees == 3 && SequentialOwnedAdamOptimizer(&owned) == nil)
 	_, _, _, storageOk = SequentialOwnedAdamStorage(&owned)
 	testing.expect(t, !storageOk && SequentialOwnedAdamDestroy(&owned) && state.frees == 3)
+}
+
+@(test)
+OwnedAdamRollbackFreeFailureIsRetryable :: proc(t: ^testing.T) {
+	model: Sequential(1, 1, 2)
+	setup := SequentialInit(&model, 1, 7) && SequentialAddDense(&model, 1)
+	testing.expect(t, setup)
+	if !setup { return }
+	state := OwnedAdamTestAllocator{backing = context.allocator, failAt = 2, failNextFree = true}
+	allocator := mem.Allocator{procedure = OwnedAdamTestAllocatorProc, data = &state}
+	owned: SequentialOwnedAdam
+	testing.expect(t, !SequentialOwnedAdamInit(&model, &owned, allocator = allocator))
+	testing.expect(t, owned.pending[0] != nil && owned.pending[1] == nil && owned.self == rawptr(&owned) && owned.destroying &&
+		SequentialOwnedAdamOptimizer(&owned) == nil && state.frees == 1 && state.successes == 1)
+	_, _, _, storageOk := SequentialOwnedAdamStorage(&owned)
+	testing.expect(t, !storageOk)
+	testing.expect(t, SequentialOwnedAdamDestroy(&owned) && state.frees == 2 && owned.pending == ([3]rawptr{}))
+	testing.expect(t, SequentialOwnedAdamDestroy(&owned))
 }
 
 @(test)

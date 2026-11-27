@@ -55,25 +55,11 @@ main :: proc() {
 	assert(nn.SequentialAddActivation(&value, .Tanh))
 	assert(nn.SequentialAddDense(&value, 1))
 
-	rolloutObservations: [ROLLOUT_CAPACITY*OBSERVATION_WIDTH]f32
-	rolloutActions: [ROLLOUT_CAPACITY]int
-	rolloutRewards, rolloutValues, rolloutNextValues: [ROLLOUT_CAPACITY]f32
-	rolloutLogProbabilities: [ROLLOUT_CAPACITY]f64
-	rolloutLegal: [ROLLOUT_CAPACITY*ACTION_COUNT]bool
-	rolloutTerminated, rolloutTruncated: [ROLLOUT_CAPACITY]bool
-	rolloutAdvantages, rolloutReturns: [ROLLOUT_CAPACITY]f32
-	buffer: rl.RolloutBuffer
-	assert(rl.RolloutBufferInit(
-		&buffer,
-		rl.RolloutStorage{
-			observations = rolloutObservations[:], actions = rolloutActions[:],
-			rewards = rolloutRewards[:], values = rolloutValues[:], nextValues = rolloutNextValues[:],
-			oldLogProbabilities = rolloutLogProbabilities[:], legalActions = rolloutLegal[:],
-			terminated = rolloutTerminated[:], truncated = rolloutTruncated[:],
-			advantages = rolloutAdvantages[:], returns = rolloutReturns[:],
-		},
-		ROLLOUT_CAPACITY, OBSERVATION_WIDTH, ACTION_COUNT,
-	))
+	ownedRollout: rl.OwnedRolloutBuffer
+	assert(rl.OwnedRolloutBufferInit(&ownedRollout, ROLLOUT_CAPACITY, OBSERVATION_WIDTH, ACTION_COUNT))
+	defer assert(rl.OwnedRolloutBufferDestroy(&ownedRollout))
+	buffer := rl.OwnedRolloutBufferBorrow(&ownedRollout)
+	assert(buffer != nil)
 
 	options := nn.PPOTrainingContextOptionsDefault(ROLLOUT_CAPACITY)
 	options.fit.batchSize = BATCH_SIZE
@@ -92,7 +78,7 @@ main :: proc() {
 	assert(evalOk)
 	fmt.printf("Initial greedy evaluation: return %.3f, success %.0f%%\n", initialReturn, initialSuccess*100)
 	for iteration in 1..=20 {
-		assert(rl.RolloutBufferReset(&buffer))
+		assert(rl.RolloutBufferReset(buffer))
 		legal := [ACTION_COUNT]bool{true, true}
 		for buffer.count < buffer.capacity {
 			observation := [OBSERVATION_WIDTH]f32{f32(position)/4, 1}
@@ -117,7 +103,7 @@ main :: proc() {
 				assert(nextOk)
 				nextValue = prediction
 			}
-			assert(rl.RolloutBufferAppend(&buffer, rl.RolloutTransition{
+			assert(rl.RolloutBufferAppend(buffer, rl.RolloutTransition{
 				observation = observation[:], action = action, reward = reward,
 				value = currentValue, nextValue = nextValue,
 				oldLogProbability = logProbability, legalActions = legal[:],
@@ -131,10 +117,10 @@ main :: proc() {
 			}
 
 		}
-		assert(rl.RolloutComputeGAE(&buffer, 0.99, 0.95))
-		assert(rl.RolloutNormalizeAdvantages(&buffer))
+		assert(rl.RolloutComputeGAE(buffer, 0.99, 0.95))
+		assert(rl.RolloutNormalizeAdvantages(buffer))
 		assert(nn.PPOTrainingContextRecordRollout(&trainer) == .None)
-		stats, fitError := nn.PPOTrainingContextFit(&trainer, &buffer)
+		stats, fitError := nn.PPOTrainingContextFit(&trainer, buffer)
 		assert(fitError == .None)
 		evaluationReturn, successRate, evalOk := PPOExampleEvaluate(&policy)
 		assert(evalOk)

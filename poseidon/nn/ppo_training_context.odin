@@ -46,8 +46,8 @@ PPOTrainingContextOptionsDefault :: proc(rolloutCapacity: int) -> PPOTrainingCon
 @(private)
 PPOTrainingContextPhase :: enum { Empty, Initializing, Ready, Destroying }
 
-// Checkpoint initialization records every allocation until it can transfer
-// ownership to the embedded fit/Adam owners. Failed frees remain retryable.
+// Initialization records every allocation until it can transfer ownership to
+// the embedded fit/Adam owners. A reported free error leaves its pointer here.
 @(private)
 PPOTrainingContextPending :: struct {
 	allocator: mem.Allocator,
@@ -81,9 +81,10 @@ ppoTrainingContextFreePending :: proc(pending: ^PPOTrainingContextPending) -> bo
 // The allocator and its state must remain alive and unmoved through destruction.
 // Its allocations must be aligned, individually freeable, and disjoint from the
 // whole trainer, both models, external parameter buffers, allocator state, rollout,
-// and each other. Rollback frees must succeed to avoid leaks; initialization cannot
-// recover an allocation retained by a failed internal rollback. A failed destroy
-// is retryable only when a reported free error leaves that allocation intact.
+// and each other. Every non-nil pointer returned, including one returned with an
+// allocation error, must be individually freeable. A reported free error leaves
+// ownership ambiguous: retry Destroy only if the allocator guarantees that the
+// allocation remains intact; otherwise use allocator-specific cleanup.
 PPOTrainingContext :: struct(
 	$policyMaxLayers, $policyMaxWidth, $policyBatchCapacity: int,
 	$valueMaxLayers, $valueMaxWidth, $valueBatchCapacity: int,
@@ -123,8 +124,8 @@ ppoTrainingContextModelDisjoint :: proc(model: ^Sequential($maxLayers, $maxWidth
 // size selects the smaller model capacity, bounded by rolloutCapacity for scratch.
 //
 // The trainer is usable only on .None. On setup failure it is normally empty; if
-// cleanup itself fails, .CleanupFailed leaves a destroying trainer that must be
-// passed to Destroy again. An underlying initializer's failed rollback may leak,
+// cleanup reports an error, .CleanupFailed leaves a destroying trainer holding the
+// affected pointers. Retry Destroy only when failed frees retain their allocations,
 // as described above. Initialization does not change model parameters or RNG.
 PPOTrainingContextInit :: proc(
 	trainer: ^PPOTrainingContext($policyMaxLayers, $policyMaxWidth, $policyBatchCapacity, $valueMaxLayers, $valueMaxWidth, $valueBatchCapacity),
@@ -150,29 +151,88 @@ PPOTrainingContextInit :: proc(
 		!ppoTrainingContextModelDisjoint(policy, contextRange) || !ppoTrainingContextModelDisjoint(value, contextRange) {
 		return .InvalidModel
 	}
-	parameters: [2*(policyMaxLayers+valueMaxLayers)]^core.Node
-	_, _, modelsOk := PPOCheckpointCombinedParameters(policy, value, parameters[:])
+	parameterScratch: [2*(policyMaxLayers+valueMaxLayers)]^core.Node
+	parameters, elements, modelsOk := PPOCheckpointCombinedParameters(policy, value, parameterScratch[:])
 	if !modelsOk { return .InvalidModel }
 	observationWidth := policy.inputWidth
 	actionCount := policy.layers[policy.layerCount-1].width
 	batchSize := options.fit.batchSize
 	if batchSize == 0 { batchSize = min(policyBatchCapacity, valueBatchCapacity) }
-	if !PPOOwnedFitStorageInit(&trainer.scratch, options.rolloutCapacity, observationWidth, actionCount, batchSize, options.fit.epochs, allocator) {
-		return .ScratchSetupFailed
-	}
+	layout, layoutOk := ppoOwnedFitStorageLayout(options.rolloutCapacity, observationWidth, actionCount, batchSize, options.fit.epochs)
+	if !layoutOk { return .ScratchSetupFailed }
+
 	trainer.self, trainer.phase = rawptr(trainer), .Initializing
-	if !PPOOwnedAdamInit(&trainer.adam, policy, value, options.learningRate, options.beta1, options.beta2, options.epsilon, allocator) {
-		trainer.phase = .Destroying
-		if !PPOOwnedFitStorageDestroy(&trainer.scratch) { return .CleanupFailed }
-		trainer^ = {}
-		return .OptimizerSetupFailed
+	trainer.pending.allocator = allocator
+	sizes := [4]int{layout.total, 0, 0, 0}
+	alignments := [4]int{layout.alignment, align_of(^core.Node), align_of(f32), align_of(f32)}
+	ranges: [7]PPOFitMemoryRange
+	ranges[0], ranges[1], ranges[2] = contextRange, policyRange, valueRange
+	for index in 0..<len(sizes) {
+		if index == 1 {
+			// Preserve the stricter model wiring and cross-model checks performed by
+			// PPOOwnedAdamInit, after scratch setup as in the original initializer.
+			policyCount, policyElements, policyOk := SequentialAdamRequirements(policy)
+			valueCount, valueElements, valueOk := SequentialAdamRequirements(value)
+			if !policyOk || !valueOk || policyCount > max(int)-valueCount || policyElements > max(int)-valueElements ||
+				policyCount+valueCount != len(parameters) || policyElements+valueElements != elements ||
+				len(parameters) > max(int)/size_of(^core.Node) || elements > max(int)/size_of(f32) ||
+				!ppoTrainingContextModelDisjoint(policy, valueRange) || !ppoTrainingContextModelDisjoint(value, policyRange) {
+				return ppoTrainingContextRollback(trainer, .OptimizerSetupFailed)
+			}
+			policyParameters: [2*policyMaxLayers]^core.Node
+			valueParameters: [2*valueMaxLayers]^core.Node
+			policyList, policyListOk := SequentialParameters(policy, policyParameters[:])
+			valueList, valueListOk := SequentialParameters(value, valueParameters[:])
+			if !policyListOk || !valueListOk || len(policyList) != policyCount || len(valueList) != valueCount {
+				return ppoTrainingContextRollback(trainer, .OptimizerSetupFailed)
+			}
+			sizes[1], sizes[2], sizes[3] = len(parameters)*size_of(^core.Node), elements*size_of(f32), elements*size_of(f32)
+		}
+		failure := PPOTrainingContextError.OptimizerSetupFailed
+		if index == 0 { failure = .ScratchSetupFailed }
+		bytes, err := mem.alloc_bytes(sizes[index], alignments[index], allocator)
+		memory := rawptr(raw_data(bytes))
+		trainer.pending.blocks[index] = memory
+		if memory == nil || err != nil { return ppoTrainingContextRollback(trainer, failure) }
+		allocated, rangeOk := SequentialAdamRange(memory, sizes[index], 1)
+		if !rangeOk || len(bytes) < sizes[index] || uintptr(memory)%uintptr(alignments[index]) != 0 {
+			return ppoTrainingContextRollback(trainer, failure)
+		}
+		allocatedRange := PPOFitMemoryRange{allocated.address, allocated.bytes}
+		for previous in ranges[:3+index] {
+			if PPOFitMemoryRangesOverlap(allocatedRange, previous) { return ppoTrainingContextRollback(trainer, failure) }
+		}
+		if !ppoTrainingContextModelDisjoint(policy, allocatedRange) || !ppoTrainingContextModelDisjoint(value, allocatedRange) {
+			return ppoTrainingContextRollback(trainer, failure)
+		}
+		ranges[3+index] = allocatedRange
 	}
+
+	parameterStorage := mem.slice_ptr((^^core.Node)(trainer.pending.blocks[1]), len(parameters))
+	first := mem.slice_ptr((^f32)(trainer.pending.blocks[2]), elements)
+	second := mem.slice_ptr((^f32)(trainer.pending.blocks[3]), elements)
+	copy(parameterStorage, parameters)
+	if !AdamInit(&trainer.adam.optimizer, parameterStorage, first, second, options.learningRate, options.beta1, options.beta2, options.epsilon) {
+		return ppoTrainingContextRollback(trainer, .OptimizerSetupFailed)
+	}
+	trainer.scratch = {storage = ppoOwnedFitStorageViewAt(trainer.pending.blocks[0], layout), memory = trainer.pending.blocks[0], allocator = allocator, self = rawptr(&trainer.scratch)}
+	trainer.adam.parameterStorage, trainer.adam.firstMoment, trainer.adam.secondMoment = parameterStorage, first, second
+	trainer.adam.allocator, trainer.adam.self = allocator, rawptr(&trainer.adam)
+	trainer.pending = {}
 	trainer.policy, trainer.value = policy, value
 	trainer.objective, trainer.fitConfig = options.objective, options.fit
 	trainer.rolloutCapacity, trainer.observationWidth, trainer.actionCount = options.rolloutCapacity, observationWidth, actionCount
 	_ = PPOTrainingStateInit(&trainer.state, options.policySeed, options.shuffleSeed)
 	trainer.phase = .Ready
 	return .None
+}
+
+@(private="file")
+ppoTrainingContextRollback :: proc(
+	trainer: ^PPOTrainingContext($pl, $pw, $pb, $vl, $vw, $vb), failure: PPOTrainingContextError,
+) -> PPOTrainingContextError {
+	if PPOTrainingContextDestroy(trainer) != .None { return .CleanupFailed }
+	return failure
 }
 
 // Borrows the state for action sampling and rollout recording. The pointer cannot
@@ -233,9 +293,10 @@ PPOTrainingContextFit :: proc(
 	return stats, .None
 }
 
-// Frees both owners with their captured allocator. Once destruction starts all
-// trainer borrows are invalid, even if a free fails. .CleanupFailed retains the
-// remaining allocations for a later Destroy, subject to the allocator contract.
+// Frees both owners and any pending initialization blocks with their captured
+// allocator. Once destruction starts all trainer borrows are invalid. On a free
+// error .CleanupFailed remembers the pointer, but retry is safe only if the allocator
+// left the allocation intact; otherwise use allocator-specific cleanup.
 // An empty/destroyed trainer succeeds; a nil, copied, or moved trainer fails.
 PPOTrainingContextDestroy :: proc(trainer: ^PPOTrainingContext($pl, $pw, $pb, $vl, $vw, $vb)) -> PPOTrainingContextError {
 	if trainer == nil { return .InvalidHandle }

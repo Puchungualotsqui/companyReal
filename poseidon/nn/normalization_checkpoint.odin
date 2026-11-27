@@ -308,6 +308,52 @@ PPOTrainingNormalizerTargetsValid :: proc(normalizers: PPOTrainingNormalizers) -
 	return true
 }
 
+@(private="file")
+ppoNormalizedCheckpointWriteLayout :: proc(
+	policy: ^Sequential($policyMaxLayers, $policyMaxWidth, $policyBatchCapacity),
+	value: ^Sequential($valueMaxLayers, $valueMaxWidth, $valueBatchCapacity),
+	optimizer: SequentialOptimizer, state: PPOTrainingState, ppoConfig: PPOConfig, fitConfig: PPOFitConfig,
+	normalizers: PPOTrainingNormalizers, parameterStorage: []^core.Node,
+) -> (sizes: PPOCheckpointBufferSizes, adam: ^Adam, ok: bool) {
+	if policy == nil || value == nil || !PPOTrainingNormalizerTargetsValid(normalizers) ||
+		normalizers.observation != nil && len(normalizers.observation.mean) != policy.inputWidth ||
+		normalizers.reward != nil && len(normalizers.reward.mean) != 1 { return {}, nil, false }
+	policyNormalizerBytes, policyNormalizerOk := PPOCheckpointNormalizerByteSize(normalizers.observation)
+	rewardNormalizerBytes, rewardNormalizerOk := PPOCheckpointNormalizerByteSize(normalizers.reward)
+	if !policyNormalizerOk || !rewardNormalizerOk { return {}, nil, false }
+	basePlan := ppoCheckpointWriteLayout(
+		policy, value, optimizer, state, ppoConfig, fitConfig, parameterStorage,
+	)
+	if !basePlan.ok { return {}, nil, false }
+	fixedSize := 24+policyNormalizerBytes+rewardNormalizerBytes
+	if basePlan.sizes.output > max(int)-fixedSize { return {}, nil, false }
+	sizes = {
+		output = fixedSize+basePlan.sizes.output,
+		checkpointScratch = basePlan.sizes.output,
+		policyScratch = basePlan.sizes.policyScratch,
+		valueScratch = basePlan.sizes.valueScratch,
+	}
+	return sizes, basePlan.adam, true
+}
+
+// Measures exact output/checkpoint-scratch/policy-scratch/value-scratch byte
+// capacities for PPOCheckpointWriteNormalized. Validation and sizing match the
+// writer and allocate nothing. Keep models, optimizer, normalizers and state
+// unchanged through a later write; the writer's disjointness/backing requirements
+// apply. Rollout and environment state are not included.
+PPOCheckpointMeasureNormalized :: proc(
+	policy: ^Sequential($policyMaxLayers, $policyMaxWidth, $policyBatchCapacity),
+	value: ^Sequential($valueMaxLayers, $valueMaxWidth, $valueBatchCapacity),
+	optimizer: SequentialOptimizer, state: PPOTrainingState, ppoConfig: PPOConfig, fitConfig: PPOFitConfig,
+	normalizers: PPOTrainingNormalizers,
+) -> (PPOCheckpointBufferSizes, bool) {
+	parameterStorage: [2*(policyMaxLayers+valueMaxLayers)]^core.Node
+	sizes, _, ok := ppoNormalizedCheckpointWriteLayout(
+		policy, value, optimizer, state, ppoConfig, fitConfig, normalizers, parameterStorage[:],
+	)
+	return sizes, ok
+}
+
 // Writes both PPO learner state and optional observation/reward running moments.
 // This wrapper is required whenever normalization is used; the base checkpoint
 // API intentionally has no normalizer dependency. All scratch, output, models,
@@ -322,33 +368,24 @@ PPOCheckpointWriteNormalized :: proc(
 	normalizers: PPOTrainingNormalizers,
 	output, checkpointScratch, policyScratch, valueScratch: []u8,
 ) -> (int, bool) {
-	if policy == nil || value == nil || !PPOTrainingNormalizerTargetsValid(normalizers) ||
-		normalizers.observation != nil && len(normalizers.observation.mean) != policy.inputWidth ||
-		normalizers.reward != nil && len(normalizers.reward.mean) != 1 {
-		return 0, false
-	}
-	policyNormalizerBytes, policyNormalizerOk := PPOCheckpointNormalizerByteSize(normalizers.observation)
-	rewardNormalizerBytes, rewardNormalizerOk := PPOCheckpointNormalizerByteSize(normalizers.reward)
-	if !policyNormalizerOk || !rewardNormalizerOk do return 0, false
-	adam: ^Adam
-	switch item in optimizer {
-	case ^Adam: adam = item
-	case SequentialSGD:
-	}
+	parameterStorage: [2*(policyMaxLayers+valueMaxLayers)]^core.Node
+	sizes, adam, layoutOk := ppoNormalizedCheckpointWriteLayout(
+		policy, value, optimizer, state, ppoConfig, fitConfig, normalizers, parameterStorage[:],
+	)
+	if !layoutOk { return 0, false }
 	if !PPOCheckpointNormalizedWriteDisjoint(
 		rawptr(policy), size_of(Sequential(policyMaxLayers, policyMaxWidth, policyBatchCapacity)),
 		rawptr(value), size_of(Sequential(valueMaxLayers, valueMaxWidth, valueBatchCapacity)),
 		adam, output, checkpointScratch, policyScratch, valueScratch, normalizers,
-	) { return 0, false }
+	) || len(output) < sizes.output || len(checkpointScratch) < sizes.checkpointScratch ||
+		len(policyScratch) < sizes.policyScratch || len(valueScratch) < sizes.valueScratch { return 0, false }
 	baseSize, baseOk := PPOCheckpointWrite(
 		policy, value, optimizer, state, ppoConfig, fitConfig,
 		checkpointScratch, policyScratch, valueScratch,
 	)
-	if !baseOk do return 0, false
-	fixedSize := 24+policyNormalizerBytes+rewardNormalizerBytes
-	if baseSize > max(int)-fixedSize do return 0, false
-	totalSize := fixedSize+baseSize
-	if len(output) < totalSize do return 0, false
+	if !baseOk || baseSize != sizes.checkpointScratch { return 0, false }
+	policyNormalizerBytes, _ := PPOCheckpointNormalizerByteSize(normalizers.observation)
+	rewardNormalizerBytes, _ := PPOCheckpointNormalizerByteSize(normalizers.reward)
 	offset := 0
 	CheckpointPut64(output, &offset, PPO_NORMALIZED_CHECKPOINT_MAGIC)
 	CheckpointPut64(output, &offset, PPO_NORMALIZED_CHECKPOINT_VERSION)
