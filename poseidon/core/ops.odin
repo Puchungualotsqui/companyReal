@@ -1,5 +1,6 @@
 package core
 
+import "base:intrinsics"
 import "core:simd"
 import "core:thread"
 
@@ -121,17 +122,36 @@ MatMul :: proc(output, a, b: Tensor) -> bool {
 	}
 	for row in 0..<rows {
 		column := 0
-		for ; column <= columns-4; column += 4 {
-			sum: #simd[4]f32 = 0
-			for k in 0..<inner {
-				value := a.data[row*inner+k]
-				index := k*columns + column
-				left := #simd[4]f32{value, value, value, value}
-				right := #simd[4]f32{b.data[index], b.data[index+1], b.data[index+2], b.data[index+3]}
-				sum += left * right
+		// The define also allows testing the scalar fallback on SIMD-capable targets.
+		when simd.HAS_HARDWARE_SIMD && !#config(POSEIDON_MATMUL_SCALAR, false) {
+			// Independent columns keep the original k order without horizontal reductions.
+			for ; column <= columns-16; column += 16 {
+				sum0, sum1, sum2, sum3: #simd[4]f32
+				for k in 0..<inner {
+					value := a.data[row*inner+k]
+					left := #simd[4]f32{value, value, value, value}
+					index := k*columns + column
+					sum0 += left * intrinsics.unaligned_load((^#simd[4]f32)(&b.data[index]))
+					sum1 += left * intrinsics.unaligned_load((^#simd[4]f32)(&b.data[index+4]))
+					sum2 += left * intrinsics.unaligned_load((^#simd[4]f32)(&b.data[index+8]))
+					sum3 += left * intrinsics.unaligned_load((^#simd[4]f32)(&b.data[index+12]))
+				}
+				index := row*columns + column
+				intrinsics.unaligned_store((^#simd[4]f32)(&output.data[index]), sum0)
+				intrinsics.unaligned_store((^#simd[4]f32)(&output.data[index+4]), sum1)
+				intrinsics.unaligned_store((^#simd[4]f32)(&output.data[index+8]), sum2)
+				intrinsics.unaligned_store((^#simd[4]f32)(&output.data[index+12]), sum3)
 			}
-			for lane in 0..<4 {
-				output.data[row*columns+column+lane] = simd.extract(sum, lane)
+			for ; column <= columns-4; column += 4 {
+				sum: #simd[4]f32 = 0
+				for k in 0..<inner {
+					value := a.data[row*inner+k]
+					left := #simd[4]f32{value, value, value, value}
+					index := k*columns + column
+					sum += left * intrinsics.unaligned_load((^#simd[4]f32)(&b.data[index]))
+				}
+				index := row*columns + column
+				intrinsics.unaligned_store((^#simd[4]f32)(&output.data[index]), sum)
 			}
 		}
 		for ; column < columns; column += 1 {

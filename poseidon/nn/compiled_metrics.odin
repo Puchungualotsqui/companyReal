@@ -8,6 +8,7 @@ SupervisedMetric :: enum {
 	MeanSquaredError,
 	BinaryAccuracyWithLogits,
 	CategoricalAccuracyWithLogits,
+	RootMeanSquaredError,
 }
 
 SupervisedEvaluation :: struct {
@@ -38,15 +39,20 @@ SequentialFitMetricsTracking :: struct {
 	history: []SupervisedEpochMetric,
 }
 
-SUPERVISED_METRIC_COUNT :: 4
+SUPERVISED_METRIC_COUNT :: 5
+// Metric values index fixed arrays, so keep their range zero-based and in sync.
+#assert(SUPERVISED_METRIC_COUNT == len([SupervisedMetric]bool{}))
+#assert(int(SupervisedMetric.RootMeanSquaredError) == SUPERVISED_METRIC_COUNT - 1)
 
 // Evaluates the compiled data loss and an explicitly selected metric over all
 // row-major samples. batchSize zero uses model capacity; otherwise it must be
 // in [1, batchCapacity]. No prediction buffer or heap allocation is needed.
-// MAE/MSE and binary accuracy average over elements, including spatial outputs.
-// Binary logits >= 0 predict 1 and targets must be exactly 0 or 1. Categorical
-// accuracy requires [batch, classes] output and distribution targets summing to
-// 1 within 1e-5; prediction and target argmax ties select the first class.
+// MAE/MSE/RMSE and binary accuracy average over elements, including spatial outputs.
+// RMSE is the square root of the dataset-wide f64 mean squared error, not an
+// average of minibatch RMSEs. Binary logits >= 0 predict 1 and targets must be
+// exactly 0 or 1. Categorical accuracy requires [batch, classes] output and
+// distribution targets summing to 1 within 1e-5; prediction and target argmax
+// ties select the first class.
 // Loss-specific target and shape rules also apply. Logits metrics and BCE loss
 // reject a final sigmoid or softmax; CCE loss rejects a final softmax, including
 // before trailing dropout/flatten. The caller must otherwise ensure outputs really
@@ -138,13 +144,16 @@ CompiledSequentialEvaluateMany :: proc(
 	selected: [SUPERVISED_METRIC_COUNT]bool
 	for metric in metrics {
 		switch metric {
-		case .MeanAbsoluteError, .MeanSquaredError, .BinaryAccuracyWithLogits, .CategoricalAccuracyWithLogits:
+		case .MeanAbsoluteError, .MeanSquaredError, .BinaryAccuracyWithLogits, .CategoricalAccuracyWithLogits, .RootMeanSquaredError:
 		case: return 0, false
 		}
 		index := int(metric)
 		if selected[index] { return 0, false }
 		selected[index] = true
 	}
+	absoluteMetric := selected[int(SupervisedMetric.MeanAbsoluteError)]
+	rootSquaredMetric := selected[int(SupervisedMetric.RootMeanSquaredError)]
+	squaredMetric := selected[int(SupervisedMetric.MeanSquaredError)] || rootSquaredMetric
 	binaryMetric := selected[int(SupervisedMetric.BinaryAccuracyWithLogits)]
 	categoricalMetric := selected[int(SupervisedMetric.CategoricalAccuracyWithLogits)]
 	binaryLoss, categoricalLoss := false, false
@@ -199,11 +208,11 @@ CompiledSequentialEvaluateMany :: proc(
 		}
 		if !ok || math.is_nan(batchLoss) || math.is_inf(batchLoss) { return {}, false }
 		dataLoss += f64(batchLoss) * f64(count) / f64(rows)
-		if selected[int(SupervisedMetric.MeanAbsoluteError)] || selected[int(SupervisedMetric.MeanSquaredError)] {
+		if absoluteMetric || squaredMetric {
 			for value, i in prediction {
 				difference := f64(value) - f64(labels[i])
-				if selected[int(SupervisedMetric.MeanAbsoluteError)] { absoluteSum += math.abs(difference) }
-				if selected[int(SupervisedMetric.MeanSquaredError)] { squaredSum += difference*difference }
+				if absoluteMetric { absoluteSum += math.abs(difference) }
+				if squaredMetric { squaredSum += difference*difference }
 			}
 		}
 		if binaryMetric {
@@ -222,9 +231,13 @@ CompiledSequentialEvaluateMany :: proc(
 		}
 		start += count
 	}
+	squaredMean := squaredSum/f64(len(targets))
+	rootSquaredMean: f64
+	if rootSquaredMetric { rootSquaredMean = math.sqrt(squaredMean) }
 	results := [SUPERVISED_METRIC_COUNT]f64{
-		absoluteSum/f64(len(targets)), squaredSum/f64(len(targets)),
+		absoluteSum/f64(len(targets)), squaredMean,
 		f64(binaryCorrect)/f64(len(targets)), f64(categoricalCorrect)/f64(rows),
+		rootSquaredMean,
 	}
 	if math.is_nan(dataLoss) || math.is_inf(dataLoss) { return 0, false }
 	for metric in metrics {

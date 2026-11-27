@@ -4,7 +4,7 @@ This roadmap focuses first on making Poseidon usable for training and evaluating
 
 ## Current capabilities
 
-- Caller-owned tensors, basic autograd graphs, and tensor operations in `core/`.
+- Caller-owned tensors, basic autograd graphs, and tensor operations in `core/`; matrix multiplication has a column-blocked SIMD path and scalar fallback.
 - Dense and Conv2D layers, pooling, flattening, common activations, and dropout.
 - Full-batch and minibatch supervised training, SGD/Adam, common regression/classification losses, validation metrics, early stopping, and checkpoint save/load.
 - Data standardization and seeded dataset splitting/gathering.
@@ -82,10 +82,11 @@ This roadmap focuses first on making Poseidon usable for training and evaluating
    - Fog of War motivates an initial partial-observation experiment. Compare feed-forward policies over several history depths first; add recurrent layers and backpropagation through time only if a finite history window demonstrably fails.
 
 4. **General DL expansion and cohesive API — in progress**
-   - Added a non-owning supervised compile/fit/evaluate/predict facade over `Sequential`, with declarative layer specs, grouped fit options, and a runnable regression example. Existing lower-level APIs remain available.
-   - `SequentialAdamRequirements` and `SequentialAdamWorkspace` simplify caller-owned Adam setup; `SequentialSummary` reports per-layer shapes and parameter counts. Multiple dataset-level MAE, MSE, or logits accuracy metrics can be evaluated together or recorded once per training/validation epoch.
-   - Future work: simplify storage management further, offer richer summaries and metric families, and broaden differentiable operations and composition for demonstrated use cases. The facade does not yet offer Keras-like automatic allocation or full Keras feature coverage.
-   - Consider additional optimizers, regularizers, and layer families based on demonstrated needs.
+   - Added a non-owning supervised compile/fit/evaluate/predict facade over `Sequential`, with declarative layer specs, grouped fit options, and a runnable regression example. Existing lower-level APIs remain available. `CompiledSequentialFitAuto` optionally allocates temporary index scratch.
+   - `SequentialAdamRequirements` and `SequentialAdamWorkspace` simplify caller-owned Adam setup; `SequentialSummary` reports per-layer shapes and parameter counts. Multiple dataset-level MAE, MSE, RMSE, or logits accuracy metrics can be evaluated together or recorded once per training/validation epoch.
+   - Matrix multiplication uses a compile-time-selected SIMD column-blocked path with scalar fallback; a reproducible microbenchmark compares it to the prior kernel. Full-game bottlenecks remain to be profiled.
+   - Future work: simplify model/optimizer storage management further, offer richer summaries and metric families, and broaden differentiable operations and composition for demonstrated use cases. The facade does not yet offer full Keras feature coverage or automatic model allocation.
+   - Consider additional optimizers, regularizers, and layer families based on demonstrated needs; SGD, Adam, L2, and dropout are already supported.
    - Consider GPU or other compute backends only after profiling shows CPU execution is a bottleneck and the maintenance cost is justified.
 
 ## Suggested completion target

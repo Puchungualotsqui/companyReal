@@ -33,16 +33,16 @@ main :: proc() {
 	initialLoss, evaluated := nn.CompiledSequentialEvaluate(&compiled, inputs[:], targets[:])
 	assert(evaluated)
 
-	indices: [9]int
 	shuffleState: u64 = 42
 	history: [100]nn.EpochMetrics
-	metricNames := [2]nn.SupervisedMetric{.MeanAbsoluteError, .MeanSquaredError}
+	metricNames := [2]nn.SupervisedMetric{.MeanAbsoluteError, .RootMeanSquaredError}
 	metricHistory: [100*2]nn.SupervisedEpochMetric
 	tracking := nn.SequentialFitMetricsTracking{metricNames[:], metricHistory[:]}
 	options := nn.SequentialFitOptionsDefault()
 	options.epochs, options.history, options.metricsMany = len(history), history[:], &tracking
-	finalLoss, trained := nn.CompiledSequentialFitWithOptions(
-		&compiled, inputs[:], targets[:], indices[:], &shuffleState, options,
+	// The convenience fit allocates and frees its index scratch automatically.
+	finalLoss, trained := nn.CompiledSequentialFitAuto(
+		&compiled, inputs[:], targets[:], &shuffleState, options,
 	)
 	assert(trained)
 	metricValues: [2]f64
@@ -51,6 +51,6 @@ main :: proc() {
 	predictions: [9]f32
 	assert(nn.CompiledSequentialPredict(&compiled, inputs[:], predictions[:]))
 	lastEpoch := (len(history)-1)*len(metricNames)
-	fmt.printf("MSE: %.6f -> %.6f; MAE: %.6f (epoch %d: %.6f)\nPredictions: %v\n",
-		initialLoss, finalLoss, metricValues[0], metricHistory[lastEpoch].epoch, metricHistory[lastEpoch].trainingMetric, predictions)
+	fmt.printf("MSE: %.6f -> %.6f; MAE: %.6f; RMSE: %.6f (epoch %d MAE: %.6f)\nPredictions: %v\n",
+		initialLoss, finalLoss, metricValues[0], metricValues[1], metricHistory[lastEpoch].epoch, metricHistory[lastEpoch].trainingMetric, predictions)
 }

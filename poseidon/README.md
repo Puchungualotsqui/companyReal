@@ -58,13 +58,25 @@ For Adam, `SequentialAdamRequirements` reports the number of parameter pointers 
 
 `SequentialSummary` writes one `SequentialLayerSummary` per layer to caller-provided storage, returning input/output shapes and parameter counts. Shapes omit the batch dimension; spatial shapes are HWC. The returned layer slice borrows that storage. Counts are per parameter node and do not deduplicate manually shared buffers.
 
-`CompiledSequentialFitWithOptions` groups settings in `SequentialFitOptions`. Start with `SequentialFitOptionsDefault()` (200 epochs, shuffle enabled, batch size set by model capacity), then override the fields you need. An explicitly zero-valued options struct means **zero epochs** and evaluates without training. Fit uses caller-owned indices, shuffle state, and optional history/validation/snapshot storage. It supports minibatches, validation, L2, early stopping, and SGD or Adam through the existing `SequentialFitBatches` implementation. A late training failure can leave partial updates.
+`CompiledSequentialFitWithOptions` groups settings in `SequentialFitOptions`. Start with `SequentialFitOptionsDefault()` (200 epochs, shuffle enabled, batch size set by model capacity), then override the fields you need. An explicitly zero-valued options struct means **zero epochs** and evaluates without training. This allocation-free fit uses caller-owned indices, shuffle state, and optional history/validation/snapshot storage. It supports minibatches, validation, L2, early stopping, and SGD or Adam through the existing `SequentialFitBatches` implementation. A late training failure can leave partial updates.
 
-`CompiledSequentialEvaluate` reports data loss, not the L2 penalty. `CompiledSequentialEvaluateMetrics` returns loss plus one selected metric; `CompiledSequentialEvaluateMany` writes multiple metrics into caller-owned output in selector order, using one inference pass per minibatch. Supported metrics are MAE, MSE, binary-logits accuracy, and categorical-logits accuracy. The list must be nonempty and contain distinct metrics. Binary accuracy requires 0/1 targets; categorical accuracy requires distribution targets. Logits accuracy requires raw logits, not a final sigmoid/softmax. Dataset aggregates include partial final batches.
+For a simpler fit, `CompiledSequentialFitAuto` allocates and frees its own temporary index buffer using the supplied allocator (or `context.allocator`). Model, optimizer, data, and optional history/validation/snapshot storage remain caller-owned. Pass a shuffle-state pointer to continue the RNG stream across calls; with `nil`, each call starts a local deterministic shuffle stream. Allocators must support individual frees.
+
+`CompiledSequentialEvaluate` reports data loss, not the L2 penalty. `CompiledSequentialEvaluateMetrics` returns loss plus one selected metric; `CompiledSequentialEvaluateMany` writes multiple metrics into caller-owned output in selector order, using one inference pass per minibatch. Supported metrics are MAE, MSE, RMSE, binary-logits accuracy, and categorical-logits accuracy. RMSE is the square root of dataset-wide MSE, not the mean of per-batch RMSEs. The list must be nonempty and contain distinct metrics. Binary accuracy requires 0/1 targets; categorical accuracy requires distribution targets. Logits accuracy requires raw logits, not a final sigmoid/softmax. Dataset aggregates include partial final batches.
 
 To record metrics during fitting, use either `options.metrics` with a `SequentialFitMetricTracking` for one metric or `options.metricsMany` with a `SequentialFitMetricsTracking` for several, but not both. For `M` selected metrics and `E` epochs, the multi-metric history needs at least `E*M` `SupervisedEpochMetric` entries: `history[epoch*M+metricIndex]` corresponds to the supplied selector at `metricIndex`. Epoch indices here are zero-based; the entry's `epoch` field is one-based. Each completed epoch reports post-update, inference-mode training and optional validation metrics; evaluation is validated once before training. With early stopping and best-checkpoint restore, history describes the actual run, not just the restored epoch. Zero epochs writes no metric-history entries. Tracking adds full-dataset inference passes, and its storage/metadata must not overlap other inputs, model/optimizer storage, or fit scratch. `CompiledSequentialPredict` writes into caller-owned output.
 
-These helpers do not allocate, split data, or serialize the compiled configuration. Adam setup uses stack scratch proportional to the layer capacity; see the API comments for storage, aliasing, and mutation contracts. The underlying `Sequential` APIs remain available for finer control.
+Except for `CompiledSequentialFitAuto`'s temporary index buffer, these helpers do not allocate. They do not split data or serialize the compiled configuration. Adam setup uses stack scratch proportional to the layer capacity; see the API comments for storage, aliasing, and mutation contracts. The underlying `Sequential` APIs remain available for finer control.
+
+## CPU SIMD
+
+`core.MatMul`, used by dense forward passes, processes groups of columns with four-lane SIMD on supported build targets and uses a scalar path for remaining columns or targets without hardware SIMD. Selection is compile-time, not runtime dispatch; build for the CPUs on which the binary will run. To force the scalar matrix-multiplication path for testing, pass `-define:POSEIDON_MATMUL_SCALAR=true`. Output must not overlap either input.
+
+A warm-cache microbenchmark compares the current kernel with the earlier implementation; it is not an end-to-end training benchmark:
+
+```sh
+odin test core -o:speed -define:POSEIDON_MATMUL_BENCH=true -define:ODIN_TEST_NAMES=core.MatMulBenchmark -define:ODIN_TEST_THREADS=1 -define:ODIN_TEST_FANCY=false
+```
 
 ## PPO workflow
 
@@ -115,10 +127,10 @@ Use `PPOCheckpointWriteNormalized` / `PPOCheckpointReadNormalized` to include op
 
 | API family | Allocates? | Main mutation |
 |---|---:|---|
-| `core` tensor/layer operations | No | Caller-provided output, gradient, and graph storage |
+| `core` tensor operations | No for serial operations; parallel helpers create workers | Caller-provided output, gradient, and graph storage |
 | `SequentialAddSpecs` / `SequentialSummary` | No | Model architecture and initialization RNG / caller-provided summary storage |
 | `SequentialAdamInit` / `SequentialAdamWorkspaceInit` | No | Adam parameter/moment storage; initialization resets optimizer state |
-| Compiled fit / evaluate / predict | No | Fit mutates model/optimizer and supplied scratch; evaluation/prediction use model scratch, and prediction writes output |
+| Compiled fit / evaluate / predict | No, except `CompiledSequentialFitAuto` allocates temporary indices | Fit mutates model/optimizer and supplied scratch; evaluation/prediction use model scratch, and prediction writes output |
 | `SequentialPredict` / `SequentialPolicyAction(s)` | No | Model input/output activation scratch; stochastic action selection also advances the supplied RNG |
 | Rollout, return, and observation-history utilities | No | Caller-owned rollout arrays, environment IDs, history storage, and supplied per-environment scratch |
 | `SequentialPPOFit` | No | Model parameters/gradients, optimizer, supplied shuffle RNG, PPO scratch, epoch metrics |
@@ -127,4 +139,4 @@ Use `PPOCheckpointWriteNormalized` / `PPOCheckpointReadNormalized` to include op
 | `PPOCheckpointRead` / normalized read | No | Destination models and optimizer storage on success; normalized read also restores supplied normalizer arrays |
 | Evaluation accumulator | No | Caller-owned accumulator and custom-mean storage |
 
-File I/O helpers may use operating-system file handles and temporary files; the in-memory tensor, rollout, training, normalization, evaluation, and byte-checkpoint procedures use caller-supplied storage.
+File I/O helpers may use operating-system file handles and temporary files. Except for the explicitly allocating fit helper, in-memory tensor, rollout, training, normalization, evaluation, and byte-checkpoint procedures use caller-supplied storage.
