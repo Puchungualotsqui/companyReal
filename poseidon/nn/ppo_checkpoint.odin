@@ -339,19 +339,25 @@ PPOCheckpointRead :: proc(
 	offset += policySize
 	valueInput := input[offset:offset+valueSize]
 
-	policyProbe: Sequential(policyMaxLayers, policyMaxWidth, policyBatchCapacity)
-	valueProbe: Sequential(valueMaxLayers, valueMaxWidth, valueBatchCapacity)
-	policyInnerState, valueInnerState: u64
-	if !CheckpointRead(&policyProbe, nil, &policyInnerState, policyInput, nil, nil, nil) ||
-		!CheckpointRead(&valueProbe, nil, &valueInnerState, valueInput, nil, nil, nil) {
+	// Inspection shares CheckpointRead's parser. Its layer, rank, dimension,
+	// parameter and RNG checks establish that the constructors can be replayed
+	// for these exact model types; their node buffers are then distinct and inline.
+	policyInfo, policyDetails, policyError := CheckpointInspectWithDetails(policyInput)
+	valueInfo, valueError := CheckpointInspect(valueInput)
+	if policyError.code != .None || valueError.code != .None ||
+		policyInfo.maxLayers != policyMaxLayers || policyInfo.maxWidth != policyMaxWidth || policyInfo.batchCapacity != policyBatchCapacity ||
+		valueInfo.maxLayers != valueMaxLayers || valueInfo.maxWidth != valueMaxWidth || valueInfo.batchCapacity != valueBatchCapacity ||
+		policyInfo.hasAdam || valueInfo.hasAdam || policyInfo.parameterPointers == 0 || valueInfo.parameterPointers == 0 ||
+		policyInfo.inputWidth != valueInfo.inputWidth || policyInfo.outputRank != 2 || valueInfo.outputRank != 2 ||
+		valueInfo.outputWidth != 1 || policyDetails.effectiveOutputIsSoftmax ||
+		policyInfo.parameterPointers > max(int)-valueInfo.parameterPointers ||
+		policyInfo.momentElements > max(int)-valueInfo.momentElements {
 		return {}, {}, {}, nil, false
 	}
-	probeParameters: [2*(policyMaxLayers+valueMaxLayers)]^core.Node
-	parameters, actualElementCount, parametersOk := PPOCheckpointCombinedParameters(
-		&policyProbe, &valueProbe, probeParameters[:],
-	)
-	if !parametersOk || kind == 1 && actualElementCount != storedElementCount ||
-		kind == 1 && (len(parameterStorage) < len(parameters) || len(firstMoment) < storedElementCount || len(secondMoment) < storedElementCount) {
+	parameterCount := policyInfo.parameterPointers+valueInfo.parameterPointers
+	actualElementCount := policyInfo.momentElements+valueInfo.momentElements
+	if kind == 1 && (actualElementCount != storedElementCount || len(parameterStorage) < parameterCount ||
+		len(firstMoment) < storedElementCount || len(secondMoment) < storedElementCount) {
 		return {}, {}, {}, nil, false
 	}
 	if !PPOCheckpointReadDisjoint(
@@ -363,10 +369,9 @@ PPOCheckpointRead :: proc(
 		return {}, {}, {}, nil, false
 	}
 
-	// Probe reads above validated both complete nested models before either
-	// destination model is changed. The same reads are now deterministic commits.
-	policyInnerState = 0
-	valueInnerState = 0
+	// Both complete payloads and all destination ranges were checked above.
+	// Exact capacities and model-only flags make these deterministic commits.
+	policyInnerState, valueInnerState: u64
 	if !CheckpointRead(policy, nil, &policyInnerState, policyInput, nil, nil, nil) ||
 		!CheckpointRead(value, nil, &valueInnerState, valueInput, nil, nil, nil) {
 		return {}, {}, {}, nil, false

@@ -347,12 +347,15 @@ PPOCheckpointReadNormalized :: proc(
 	baseInput := input[offset:]
 	policyInput, valueInput, payloadsOk := PPOCheckpointPeekModelPayloads(baseInput)
 	if !payloadsOk do return {}, {}, {}, nil, false
-	policyProbe: Sequential(policyMaxLayers, policyMaxWidth, policyBatchCapacity)
-	valueProbe: Sequential(valueMaxLayers, valueMaxWidth, valueBatchCapacity)
-	probeState: u64
-	if !CheckpointRead(&policyProbe, nil, &probeState, policyInput, nil, nil, nil) ||
-		!CheckpointRead(&valueProbe, nil, &probeState, valueInput, nil, nil, nil) ||
-		observationDescriptor.present && observationDescriptor.width != policyProbe.inputWidth ||
+	// These checks match the model-only probe reads; PPOCheckpointRead then
+	// preflights the paired PPO topology and optimizer before committing either.
+	policyInfo, policyError := CheckpointInspect(policyInput)
+	valueInfo, valueError := CheckpointInspect(valueInput)
+	if policyError.code != .None || valueError.code != .None ||
+		policyInfo.maxLayers != policyMaxLayers || policyInfo.maxWidth != policyMaxWidth || policyInfo.batchCapacity != policyBatchCapacity ||
+		valueInfo.maxLayers != valueMaxLayers || valueInfo.maxWidth != valueMaxWidth || valueInfo.batchCapacity != valueBatchCapacity ||
+		policyInfo.hasAdam || valueInfo.hasAdam ||
+		observationDescriptor.present && observationDescriptor.width != policyInfo.inputWidth ||
 		rewardDescriptor.present && rewardDescriptor.width != 1 {
 		return {}, {}, {}, nil, false
 	}
@@ -447,12 +450,16 @@ PPOPolicyExportRead :: proc(
 		return false
 	}
 	modelInput := input[offset:]
-	probe: Sequential(maxLayers, maxWidth, batchCapacity)
-	innerState: u64
-	if !CheckpointRead(&probe, nil, &innerState, modelInput, nil, nil, nil) || !PPOPolicyExportModelValid(&probe) {
+	info, details, inspectError := CheckpointInspectWithDetails(modelInput)
+	if policy == nil || inspectError.code != .None || info.maxLayers != maxLayers || info.maxWidth != maxWidth ||
+		info.batchCapacity != batchCapacity || info.hasAdam || info.parameterPointers == 0 ||
+		info.outputRank != 2 || info.outputWidth <= 0 || details.effectiveOutputIsSoftmax ||
+		descriptor.present && descriptor.width != info.inputWidth {
 		return false
 	}
-	if descriptor.present && descriptor.width != probe.inputWidth do return false
+	// Inspection shares CheckpointRead's parser; exact capacities and the
+	// model-only flag make reconstruction deterministic for this destination.
+	innerState: u64
 	if !CheckpointRead(policy, nil, &innerState, modelInput, nil, nil, nil) do return false
 	PPOCheckpointApplyNormalizer(input, descriptor, observationNormalizer)
 	return true

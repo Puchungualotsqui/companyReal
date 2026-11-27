@@ -16,9 +16,9 @@ import "core:mem"
 // not be used after successful destruction. Discard/rebind dependent objects
 // before reuse, even if a later allocation happens to have the same address.
 // Existing model APIs' rules for reinitialization, architecture changes, scratch
-// invalidation, disjointness and concurrent access still apply. Heap ownership
-// does not eliminate stack use inside those APIs: for example, SequentialAddDense
-// can require a large stack temporary for large maxWidth, depending on the build.
+// invalidation, disjointness and concurrent access still apply. Layer storage is
+// initialized in place, but heap ownership does not eliminate stack scratch in
+// other model, fit, optimizer, and checkpoint APIs; size capacities accordingly.
 // This handle does not own external optimizer, data, or scratch storage. Externally
 // synchronize operations on the owner, model, and borrowers; a shared allocator
 // must itself support any concurrent use.

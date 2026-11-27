@@ -115,13 +115,12 @@ main :: proc() {
 			collectionNanoseconds += i64(time.tick_since(phaseStart))
 
 			phaseStart = time.tick_now()
-			predictions, valueOk := nn.SequentialPredict(&value, observations[:])
+			valueOk := nn.SequentialPredictBatches(&value, observations[:], currentValues[:])
 			policyOk := nn.SequentialPolicyActions(
 				&policy, observations[:], legalActions[:], .Stochastic,
 				actions[:], oldLogProbabilities[:], &trainingState.policyRandomState,
 			)
 			assert(valueOk && policyOk)
-			copy(currentValues[:], predictions)
 			inferenceNanoseconds += i64(time.tick_since(phaseStart))
 
 			phaseStart = time.tick_now()
@@ -148,9 +147,8 @@ main :: proc() {
 			collectionNanoseconds += i64(time.tick_since(phaseStart))
 
 			phaseStart = time.tick_now()
-			nextPredictions, nextValueOk := nn.SequentialPredict(&value, nextObservations[:])
+			nextValueOk := nn.SequentialPredictBatches(&value, nextObservations[:], nextValues[:])
 			assert(nextValueOk)
-			copy(nextValues[:], nextPredictions)
 			inferenceNanoseconds += i64(time.tick_since(phaseStart))
 
 			phaseStart = time.tick_now()

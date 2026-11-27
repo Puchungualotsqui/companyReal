@@ -4,7 +4,12 @@ package nn
 // place, and an Adam optimizer and its backing storage must outlive this handle.
 // Compile only binds configuration; data, loss/optimizer compatibility and
 // optimizer state are validated by the underlying batch operations at use time.
-// This API does not allocate, infer metrics, split data, or own scratch/history.
+// Discard and rebind the handle and optimizer as appropriate after an external
+// model reinitialization, restore, architecture change or destruction. Address
+// checks cannot detect reinitialization at the same address; old Adam moments
+// may otherwise appear valid for a different model. A successful fit's internal
+// best-snapshot restore rewires its Adam state. This API does not allocate, infer
+// metrics, split data, or own scratch/history.
 CompiledSequential :: struct($maxLayers, $maxWidth, $batchCapacity: int) {
 	model: ^Sequential(maxLayers, maxWidth, batchCapacity),
 	loss: SequentialLoss,
@@ -69,6 +74,13 @@ CompiledSequentialFit :: proc(compiled: ^CompiledSequential($maxLayers, $maxWidt
 CompiledSequentialPredict :: proc(compiled: ^CompiledSequential($maxLayers, $maxWidth, $batchCapacity), inputs, outputs: []f32, batchSize: int = 0) -> bool {
 	if compiled == nil || compiled.model == nil do return false
 	return SequentialPredictBatches(compiled.model, inputs, outputs, batchSize)
+}
+
+// Returns one scalar prediction by value. See SequentialPredictScalar for shape,
+// ownership, failure and model-scratch mutation requirements.
+CompiledSequentialPredictScalar :: proc(compiled: ^CompiledSequential($maxLayers, $maxWidth, $batchCapacity), input: []f32) -> (f32, bool) {
+	if compiled == nil || compiled.model == nil do return 0, false
+	return SequentialPredictScalar(compiled.model, input)
 }
 
 // Evaluation returns only data loss, uses model activation scratch, and cannot

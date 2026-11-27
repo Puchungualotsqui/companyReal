@@ -5,6 +5,40 @@ import "../rl"
 import "core:math"
 import "core:testing"
 
+PPOSequentialTestCollect :: proc(
+	policy, value: ^Sequential(1, 2, 3),
+	buffer: ^rl.RolloutBuffer,
+) -> bool {
+	legal := [2]bool{true, true}
+	for index in 0..<5 {
+		observation := [2]f32{f32(index)/4, 1}
+		action := index%2
+		logits, policyPredictOk := SequentialPredict(policy, observation[:])
+		currentValue, valuePredictOk := SequentialPredictScalar(value, observation[:])
+		if !policyPredictOk || !valuePredictOk do return false
+		singleAction := [1]int{action}
+		logProbability: [1]f64
+		if !CategoricalPolicyLogProbs(
+			core.Tensor{policy.layers[0].output.value.shape, logits}, legal[:], singleAction[:], logProbability[:],
+		) { return false }
+		nextObservation := observation
+		nextObservation[0] += 0.1
+		nextValue: f32
+		if index < 4 {
+			prediction, nextOk := SequentialPredictScalar(value, nextObservation[:])
+			if !nextOk do return false
+			nextValue = prediction
+		}
+		transition := rl.RolloutTransition{
+			observation = observation[:], action = action, reward = f32(index%2),
+			value = currentValue, nextValue = nextValue, oldLogProbability = logProbability[0],
+			legalActions = legal[:], terminated = index == 4,
+		}
+		if !rl.RolloutBufferAppend(buffer, transition) do return false
+	}
+	return true
+}
+
 @(test)
 PPOFitShuffleIsDeterministic :: proc(t: ^testing.T) {
 	first, second: [9]int
@@ -46,36 +80,10 @@ SequentialPPOFitMinibatchesAndSchedule :: proc(t: ^testing.T) {
 		legalActions = legalActions[:], terminated = terminated[:], truncated = truncated[:],
 		advantages = advantages[:], returns = returns[:],
 	}
-	testing.expect(t, rl.RolloutBufferInit(&buffer, storage, 5, 2, 2))
-	legal := [2]bool{true, true}
-	for index in 0..<5 {
-		observation := [2]f32{f32(index)/4, 1}
-		action := index%2
-		logits, policyPredictOk := SequentialPredict(&policy, observation[:])
-		predicted, valuePredictOk := SequentialPredict(&value, observation[:])
-		testing.expect(t, policyPredictOk && valuePredictOk)
-		if !policyPredictOk || !valuePredictOk { return }
-		singleAction := [1]int{action}
-		logProbability: [1]f64
-		testing.expect(t, CategoricalPolicyLogProbs(
-			core.Tensor{policy.layers[0].output.value.shape, logits}, legal[:], singleAction[:], logProbability[:],
-		))
-		nextObservation := observation
-		nextObservation[0] += 0.1
-		nextValue: f32
-		if index < 4 {
-			nextPredictions, nextOk := SequentialPredict(&value, nextObservation[:])
-			testing.expect(t, nextOk)
-			if !nextOk { return }
-			nextValue = nextPredictions[0]
-		}
-		transition := rl.RolloutTransition{
-			observation = observation[:], action = action, reward = f32(index%2),
-			value = predicted[0], nextValue = nextValue, oldLogProbability = logProbability[0],
-			legalActions = legal[:], terminated = index == 4,
-		}
-		testing.expect(t, rl.RolloutBufferAppend(&buffer, transition))
-	}
+	bufferOk := rl.RolloutBufferInit(&buffer, storage, 5, 2, 2)
+	collected := bufferOk && PPOSequentialTestCollect(&policy, &value, &buffer)
+	testing.expect(t, collected)
+	if !collected { return }
 	testing.expect(t, rl.RolloutComputeGAE(&buffer, 0.9, 0.95))
 	testing.expect(t, rl.RolloutNormalizeAdvantages(&buffer))
 

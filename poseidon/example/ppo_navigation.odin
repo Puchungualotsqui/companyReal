@@ -1,7 +1,6 @@
 package main
 
 // Run with: odin run example/ppo_navigation.odin -file
-import "../core"
 import "../nn"
 import "../rl"
 import "core:fmt"
@@ -76,35 +75,15 @@ main :: proc() {
 		ROLLOUT_CAPACITY, OBSERVATION_WIDTH, ACTION_COUNT,
 	))
 
-	policyParametersStorage: [6]^core.Node
-	valueParametersStorage: [6]^core.Node
-	policyParameters, policyParamsOk := nn.SequentialParameters(&policy, policyParametersStorage[:])
-	valueParameters, valueParamsOk := nn.SequentialParameters(&value, valueParametersStorage[:])
-	assert(policyParamsOk && valueParamsOk)
-	combinedParameters: [12]^core.Node
-	copy(combinedParameters[:len(policyParameters)], policyParameters)
-	copy(combinedParameters[len(policyParameters):len(policyParameters)+len(valueParameters)], valueParameters)
-	parameterCount := len(policyParameters)+len(valueParameters)
-	firstMoment, secondMoment: [75]f32
-	adam: nn.Adam
-	assert(nn.AdamInit(&adam, combinedParameters[:parameterCount], firstMoment[:], secondMoment[:], learningRate = 0.003))
-
-	indices: [ROLLOUT_CAPACITY]int
-	batchObservations: [BATCH_SIZE*OBSERVATION_WIDTH]f32
-	batchActions: [BATCH_SIZE]int
-	batchLegal: [BATCH_SIZE*ACTION_COUNT]bool
-	batchLogProbabilities: [BATCH_SIZE]f64
-	batchAdvantages, batchReturns: [BATCH_SIZE]f32
-	epochMetrics: [4]nn.PPOEpochStats
-	fitStorage := nn.PPOFitStorage{
-		indices = indices[:], observations = batchObservations[:], actions = batchActions[:],
-		legalActions = batchLegal[:], oldLogProbabilities = batchLogProbabilities[:],
-		advantages = batchAdvantages[:], returns = batchReturns[:], epochMetrics = epochMetrics[:],
-	}
-	ppoConfig := nn.PPOConfig{clipRange = 0.2, entropyCoefficient = 0.01, valueCoefficient = 0.5, valueHuberDelta = 1}
-	fitConfig := nn.PPOFitConfig{epochs = len(epochMetrics), batchSize = BATCH_SIZE, maxGradientNorm = 0.5}
-	trainingState: nn.PPOTrainingState
-	assert(nn.PPOTrainingStateInit(&trainingState, 12345, 67890))
+	options := nn.PPOTrainingContextOptionsDefault(ROLLOUT_CAPACITY)
+	options.fit.batchSize = BATCH_SIZE
+	options.learningRate = 0.003
+	options.policySeed, options.shuffleSeed = 12345, 67890
+	trainer: nn.PPOTrainingContext(3, 8, 8, 3, 8, 8)
+	assert(nn.PPOTrainingContextInit(&trainer, &policy, &value, options) == .None)
+	defer assert(nn.PPOTrainingContextDestroy(&trainer) == .None)
+	trainingState := nn.PPOTrainingContextState(&trainer)
+	assert(trainingState != nil)
 	position, episodeSteps := 0, 0
 	completedEpisodes, successfulEpisodes := 0, 0
 	rolloutRewardTotal: f64
@@ -117,7 +96,7 @@ main :: proc() {
 		legal := [ACTION_COUNT]bool{true, true}
 		for buffer.count < buffer.capacity {
 			observation := [OBSERVATION_WIDTH]f32{f32(position)/4, 1}
-			predictions, valueOk := nn.SequentialPredict(&value, observation[:])
+			currentValue, valueOk := nn.SequentialPredictScalar(&value, observation[:])
 			assert(valueOk)
 			action, logProbability, actionOk := nn.SequentialPolicyAction(
 				&policy, observation[:], legal[:], .Stochastic, &trainingState.policyRandomState,
@@ -134,13 +113,13 @@ main :: proc() {
 			nextObservation := [OBSERVATION_WIDTH]f32{f32(position)/4, 1}
 			nextValue: f32
 			if !terminated {
-				nextPredictions, nextOk := nn.SequentialPredict(&value, nextObservation[:])
+				prediction, nextOk := nn.SequentialPredictScalar(&value, nextObservation[:])
 				assert(nextOk)
-				nextValue = nextPredictions[0]
+				nextValue = prediction
 			}
 			assert(rl.RolloutBufferAppend(&buffer, rl.RolloutTransition{
 				observation = observation[:], action = action, reward = reward,
-				value = predictions[0], nextValue = nextValue,
+				value = currentValue, nextValue = nextValue,
 				oldLogProbability = logProbability, legalActions = legal[:],
 				terminated = terminated, truncated = truncated,
 			}))
@@ -154,11 +133,9 @@ main :: proc() {
 		}
 		assert(rl.RolloutComputeGAE(&buffer, 0.99, 0.95))
 		assert(rl.RolloutNormalizeAdvantages(&buffer))
-		assert(nn.PPOTrainingStateRecordRollout(&trainingState))
-		stats, fitOk := nn.SequentialPPOFitStateful(
-			&policy, &value, &buffer, &trainingState, ppoConfig, fitConfig, &adam, fitStorage,
-		)
-		assert(fitOk)
+		assert(nn.PPOTrainingContextRecordRollout(&trainer) == .None)
+		stats, fitError := nn.PPOTrainingContextFit(&trainer, &buffer)
+		assert(fitError == .None)
 		evaluationReturn, successRate, evalOk := PPOExampleEvaluate(&policy)
 		assert(evalOk)
 		rolloutMeanReward: f64

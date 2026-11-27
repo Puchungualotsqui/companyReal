@@ -67,6 +67,57 @@ EarlyRestoreReferenceAndResume :: proc(t: ^testing.T) {
 }
 
 @(test)
+EarlyRestoreReplacesExternalParameterBuffers :: proc(t: ^testing.T) {
+	for useAdam in ([2]bool{false, true}) {
+		model: Sequential(1, 1, 2)
+		initialized := SequentialInit(&model, 1, 17) && SequentialAddDense(&model, 1)
+		testing.expect(t, initialized)
+		if !initialized { return }
+		dense := TestDenseStorage(&model.layers[0])
+		weights, weightGrad := [1]f32{1}, [1]f32{}
+		bias, biasGrad := [1]f32{0}, [1]f32{}
+		dense.weights.value.data, dense.weights.grad.data = weights[:], weightGrad[:]
+		dense.bias.value.data, dense.bias.grad.data = bias[:], biasGrad[:]
+		parameters: [2]^core.Node
+		first, second: [2]f32
+		adam: Adam
+		optimizer: SequentialOptimizer = SequentialSGD{0.05}
+		if useAdam {
+			initialized = SequentialAdamInit(&model, &adam, parameters[:], first[:], second[:])
+			testing.expect(t, initialized)
+			if !initialized { return }
+			optimizer = &adam
+		}
+		compiled: CompiledSequential(1, 1, 2)
+		initialized = SequentialCompile(&compiled, &model, optimizer = optimizer)
+		testing.expect(t, initialized)
+		if !initialized { return }
+		inputs, targets := [3]f32{-1, 0, 1}, [3]f32{1, 0, 2}
+		indices: [3]int
+		state: u64 = 42
+		result: SequentialEarlyStoppingResult
+		stop := SequentialEarlyStopping{patience = 1, result = &result}
+		snapshot: [1024]u8
+		options := SequentialFitOptionsDefault()
+		options.epochs, options.shuffle = 1, false
+		options.validationInputs, options.validationTargets = inputs[:], targets[:]
+		options.earlyStopping, options.bestSnapshot = &stop, snapshot[:]
+		_, ok := CompiledSequentialFitWithOptions(&compiled, inputs[:], targets[:], indices[:], &state, options)
+		testing.expect(t, ok && result.epochsRan == 1 && result.bestEpoch == 1)
+		if !ok { return }
+		dense = TestDenseStorage(&model.layers[0])
+		testing.expect(t, raw_data(dense.weights.value.data) == &dense.weightData[0] && raw_data(dense.weights.grad.data) == &dense.weightGrad[0])
+		testing.expect(t, raw_data(dense.bias.value.data) == &dense.biasData[0] && raw_data(dense.bias.grad.data) == &dense.biasGrad[0])
+		testing.expect(t, dense.weightData[0] == weights[0] && dense.biasData[0] == bias[0])
+		if useAdam { testing.expect(t, adam.parameters[0] == &dense.weights && adam.parameters[1] == &dense.bias && adam.step > 0) }
+		before, predicted := CompiledSequentialPredictScalar(&compiled, inputs[2:])
+		weights[0], bias[0] = 999, 999
+		after, predictedAgain := CompiledSequentialPredictScalar(&compiled, inputs[2:])
+		testing.expect(t, predicted && predictedAgain && before == after)
+	}
+}
+
+@(test)
 EarlyRestorePreflightAndZeroEpochs :: proc(t: ^testing.T) {
 	model: Sequential(1, 1, 2)
 	testing.expect(t, SequentialInit(&model, 1, 11) && SequentialAddDense(&model, 1))

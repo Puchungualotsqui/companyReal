@@ -1,6 +1,7 @@
 package nn
 
 import "../core"
+import "base:intrinsics"
 import "core:math"
 
 SequentialOperation :: union { Dense, Conv2D, Pool2D, Flatten, Relu, Sigmoid, Tanh, Softmax, Dropout }
@@ -45,6 +46,27 @@ Sequential :: struct($maxLayers, $maxWidth, $batchCapacity: int) {
 	inputWidth, layerCount: int,
 	randomState: u64,
 	self: rawptr,
+}
+
+// The three SequentialLayer storage variants have zero-valued defaults. Clear the
+// selected payload in place, then set its tag without a large stack temporary.
+// This helper is deliberately limited to SequentialLayer's ordinary tagged union:
+// it relies on Odin's payload-at-offset-zero layout (also used by core:reflect).
+// The tag's type, offset and value come from compiler intrinsics, not fixed constants.
+@(private="file")
+sequentialInitStorage :: proc(item: ^SequentialLayer($maxWidth, $batchCapacity), $V: typeid) -> ^V {
+	U :: type_of(item.storage)
+	Tag :: intrinsics.type_union_tag_type(U)
+	#assert(intrinsics.type_is_variant_of(U, V))
+	#assert(size_of(V) <= intrinsics.type_union_tag_offset(U))
+	#assert(intrinsics.type_union_tag_offset(U) + size_of(Tag) <= size_of(U))
+	#assert(intrinsics.type_union_tag_offset(U) % align_of(Tag) == 0)
+	#assert(align_of(U) >= align_of(Tag))
+	storage := &item.storage
+	intrinsics.mem_zero(storage, size_of(V))
+	tag := cast(^Tag)(uintptr(rawptr(storage)) + intrinsics.type_union_tag_offset(U))
+	tag^ = Tag(intrinsics.type_union_base_tag_value(U) + intrinsics.type_variant_index_of(U, V))
+	return &storage^.(V)
 }
 
 // Returns the inline storage size for compile-time model capacities.
@@ -142,8 +164,7 @@ SequentialAddDense :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapac
 	}
 	if !SequentialInputShapeValid(model) || len(input.value.shape) != 2 { return false }
 	item := &model.layers[model.layerCount]
-	item.storage = DenseStorage(maxWidth){}
-	dense := &item.storage.(DenseStorage(maxWidth))
+	dense := sequentialInitStorage(item, DenseStorage(maxWidth))
 	item.width = width
 	item.outputShape = {batchCapacity, width, 0, 0}
 	dense.weightShape = {inputWidth, width}
@@ -192,8 +213,7 @@ SequentialAddConv2D :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapa
 	item.width = count
 	item.outputShape = {batchCapacity, height, width, outputChannels}
 	item.output = {value = core.Tensor{item.outputShape[:], item.outputData[:batchCapacity * count]}, grad = core.Tensor{item.outputShape[:], item.outputGrad[:batchCapacity * count]}}
-	item.storage = Conv2DStorage(maxWidth){}
-	storage := &item.storage.(Conv2DStorage(maxWidth))
+	storage := sequentialInitStorage(item, Conv2DStorage(maxWidth))
 	storage.weightShape = {kernelHeight, kernelWidth, channels, outputChannels}
 	storage.biasShape = {outputChannels}
 	storage.weights = {value = core.Tensor{storage.weightShape[:], storage.weightData[:fanIn * outputChannels]}, grad = core.Tensor{storage.weightShape[:], storage.weightGrad[:fanIn * outputChannels]}}
@@ -333,8 +353,7 @@ SequentialAddDropout :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCap
 	item.outputShape[0] = batchCapacity
 	rank := len(input.value.shape)
 	item.output = {value = core.Tensor{item.outputShape[:rank], item.outputData[:batchCapacity * width]}, grad = core.Tensor{item.outputShape[:rank], item.outputGrad[:batchCapacity * width]}}
-	item.storage = DropoutStorage(maxWidth, batchCapacity){}
-	dropoutStorage := &item.storage.(DropoutStorage(maxWidth, batchCapacity))
+	dropoutStorage := sequentialInitStorage(item, DropoutStorage(maxWidth, batchCapacity))
 	item.operation = Dropout{input, &item.output, dropoutStorage.maskData[:batchCapacity * width], rate, &model.randomState, false}
 	switch &operation in item.operation {
 	case Dropout:
@@ -418,6 +437,19 @@ SequentialPredictBatches :: proc(model: ^Sequential($maxLayers, $maxWidth, $batc
 		start += count
 	}
 	return true
+}
+
+// Predicts one observation from a model with exactly one output value. The result
+// is returned by value and remains valid across later model operations. Performs
+// inference without allocating; input must be finite and disjoint from model
+// storage. Like SequentialPredictBatches, this mutates model scratch and cannot
+// run concurrently with operations on the same model. Returns (0, false) for an
+// invalid model, shape or non-finite prediction; a failed forward may change scratch.
+SequentialPredictScalar :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity), input: []f32) -> (f32, bool) {
+	if model == nil || model.inputWidth <= 0 || len(input) != model.inputWidth { return 0, false }
+	output: [1]f32
+	if !SequentialPredictBatches(model, input, output[:]) { return 0, false }
+	return output[0], true
 }
 
 // Returns the last layer that is neither dropout nor flatten, or nil if none exists.
@@ -636,6 +668,10 @@ SequentialEvaluateBatches :: proc(model: ^Sequential($maxLayers, $maxWidth, $bat
 // and normal completion restore the best model, Adam state, and non-nil shuffle
 // state, returning that epoch's training loss. Otherwise the current model and
 // its training loss are returned. History and result describe the actual run.
+// Restoring reconstructs the model in its inline parameter storage: externally
+// rebound parameter data/gradients stop being used. Discard previous layer/node
+// and activation borrows; Adam's supplied parameter pointers are rebound. To use
+// external buffers again, copy the restored parameter values before rebinding.
 // Checkpoints omit transient activations and gradients and do not store fit
 // configuration such as l2; supply the desired configuration when resuming.
 // Training forwards sample dropout; all reported and validation losses use inference.

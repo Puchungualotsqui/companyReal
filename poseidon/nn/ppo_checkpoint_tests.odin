@@ -21,20 +21,20 @@ PPOCheckpointTestCollect :: proc(
 		action, logProbability, actionOk := SequentialPolicyAction(
 			policy, observation[:], legal[:], .Stochastic, &state.policyRandomState,
 		)
-		predictions, valueOk := SequentialPredict(value, observation[:])
+		currentValue, valueOk := SequentialPredictScalar(value, observation[:])
 		if !actionOk || !valueOk do return false
 		nextObservation := [1]f32{f32(min(index+1, 3))/3}
 		nextValue: f32
 		if index < buffer.capacity-1 {
-			nextPredictions, nextOk := SequentialPredict(value, nextObservation[:])
+			prediction, nextOk := SequentialPredictScalar(value, nextObservation[:])
 			if !nextOk do return false
-			nextValue = nextPredictions[0]
+			nextValue = prediction
 		}
 		reward: f32 = -0.05
 		if action == 1 { reward += 0.25 }
 		if !rl.RolloutBufferAppend(buffer, rl.RolloutTransition{
 			observation = observation[:], action = action, reward = reward,
-			value = predictions[0], nextValue = nextValue,
+			value = currentValue, nextValue = nextValue,
 			oldLogProbability = logProbability, legalActions = legal[:],
 			terminated = index == buffer.capacity-1,
 		}) {

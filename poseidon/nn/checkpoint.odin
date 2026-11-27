@@ -259,93 +259,314 @@ CheckpointWrite :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity
 	return offset, true
 }
 
+// Inspection errors describe the supervised byte stream, not a destination model.
+CheckpointErrorCode :: enum {
+	None,
+	Truncated,
+	InvalidMagic,
+	UnsupportedVersion,
+	InvalidHeader,
+	UnsupportedLayer,
+	InvalidArchitecture,
+	InvalidValue,
+	Overflow,
+	TrailingData,
+	InvalidLimits,
+	LimitExceeded,
+}
+
+// offset identifies the affected field, dimension group or layer; for Truncated
+// it is the input length, and for TrailingData it is the first trailing byte.
+// InvalidLimits and a maxBytes failure use zero. Offsets are input-relative.
+CheckpointError :: struct {
+	code: CheckpointErrorCode,
+	offset: int,
+}
+
+// Counts are structural, whether or not Adam is present: parameterPointers is
+// the number of ^core.Node entries, and momentElements is the number of f32s in
+// EACH Adam moment array. Without Adam, CheckpointRead requires neither array.
+// outputWidth is the flattened element count per sample; outputRank includes the
+// batch dimension (2 for vectors, 4 for NHWC). An empty model reports its input.
+CheckpointInfo :: struct {
+	version: u64,
+	maxLayers, maxWidth, batchCapacity: int,
+	inputWidth, layerCount: int,
+	hasAdam: bool,
+	parameterPointers, momentElements: int,
+	outputWidth, outputRank: int,
+}
+
+// Describes the last layer other than dropout/flatten. False also covers models
+// with no such layer. This is structural metadata, not a PPO compatibility check.
+CheckpointInspectDetails :: struct {
+	effectiveOutputIsSoftmax: bool,
+}
+
+// Zero means no additional limit; negative limits are invalid. Capacity limits
+// apply to the encoded capacities, not merely the number of used layers or width.
+// Pointer and moment limits are checked as soon as each layer's counts are known,
+// even if that layer's parameter payload is incomplete.
+CheckpointInspectLimits :: struct {
+	maxBytes, maxLayers, maxWidth, maxBatchCapacity: int,
+	maxParameterPointers, maxMomentElements: int,
+}
+
+@(private)
+checkpointReadTarget :: struct {
+	maxLayers, maxWidth, batchCapacity: int,
+	hasAdam: bool,
+	parameterCapacity, firstCapacity, secondCapacity: int,
+}
+
+@(private)
+checkpointParsed :: struct {
+	info: CheckpointInfo,
+	details: CheckpointInspectDetails,
+	header: [10]u64,
+	step: u64,
+	config: [4]f32,
+	// A rejected target stops parsing early; the remaining bytes are not validated.
+	targetRejected: bool,
+}
+
+@(private="file")
+checkpointParameterValues :: proc(input: []u8, offset: ^int, count: int, info: ^CheckpointInfo, limits: CheckpointInspectLimits, target: ^checkpointReadTarget, layerOffset: int) -> (CheckpointError, bool) {
+	if info.momentElements > max(int)-count || info.parameterPointers > max(int)-2 { return {.Overflow, layerOffset}, false }
+	info.parameterPointers += 2
+	info.momentElements += count
+	if limits.maxParameterPointers > 0 && info.parameterPointers > limits.maxParameterPointers ||
+		limits.maxMomentElements > 0 && info.momentElements > limits.maxMomentElements {
+		return {.LimitExceeded, layerOffset}, false
+	}
+	if target != nil && target.hasAdam && (info.parameterPointers > target.parameterCapacity ||
+		info.momentElements > target.firstCapacity || info.momentElements > target.secondCapacity) {
+		return {}, true
+	}
+	if count > (len(input)-offset^)/4 { return {.Truncated, len(input)}, false }
+	for _ in 0..<count {
+		valueOffset := offset^
+		value, valid := CheckpointGet32(input, offset)
+		if !valid { return {.Truncated, len(input)}, false }
+		if !AdamFinite(f64(value)) { return {.InvalidValue, valueOffset}, false }
+	}
+	return {}, false
+}
+
+// Validates a complete supervised checkpoint without allocation or a destination.
+// The input must have valid backing storage and must not be concurrently mutated.
+// A zero limits struct disables policy limits, so set them for untrusted input.
+// Success reports encoded capacities and structural requirements, not proof that
+// a matching compiled Sequential type exists, can be allocated, or is compatible
+// with a particular destination. On failure info is zero and error identifies the
+// byte problem or limit. An inspection applies only to the bytes inspected;
+// keep them unchanged through restore. CheckpointRead revalidates its input but
+// does not apply these policy limits. This does not inspect PPO or normalized
+// checkpoints.
+CheckpointInspect :: proc(input: []u8, limits: CheckpointInspectLimits = {}) -> (CheckpointInfo, CheckpointError) {
+	info, _, err := CheckpointInspectWithDetails(input, limits)
+	return info, err
+}
+
+// Applies the same validation as CheckpointInspect and also reports effective
+// output topology. Both metadata values are zero on failure.
+CheckpointInspectWithDetails :: proc(input: []u8, limits: CheckpointInspectLimits = {}) -> (CheckpointInfo, CheckpointInspectDetails, CheckpointError) {
+	parsed, err := checkpointParse(input, limits, nil)
+	if err.code != .None { return {}, {}, err }
+	return parsed.info, parsed.details, {}
+}
+
+@(private)
+checkpointParse :: proc(input: []u8, limits: CheckpointInspectLimits, target: ^checkpointReadTarget) -> (checkpointParsed, CheckpointError) {
+	if limits.maxBytes < 0 || limits.maxLayers < 0 || limits.maxWidth < 0 || limits.maxBatchCapacity < 0 ||
+		limits.maxParameterPointers < 0 || limits.maxMomentElements < 0 { return {}, {.InvalidLimits, 0} }
+	if limits.maxBytes > 0 && len(input) > limits.maxBytes { return {}, {.LimitExceeded, 0} }
+
+	parsed: checkpointParsed
+	offset := 0
+	for &value in parsed.header {
+		v, ok := CheckpointGet64(input, &offset)
+		if !ok { return {}, {.Truncated, len(input)} }
+		value = v
+	}
+	header := parsed.header
+	if header[0] != CHECKPOINT_MAGIC { return {}, {.InvalidMagic, 0} }
+	if header[1] != CHECKPOINT_VERSION && header[1] != CHECKPOINT_SPATIAL_VERSION { return {}, {.UnsupportedVersion, 8} }
+	for i in 2..=4 {
+		if header[i] == 0 { return {}, {.InvalidHeader, i*8} }
+		if header[i] > u64(max(int)) { return {}, {.Overflow, i*8} }
+	}
+	maxLayers, maxWidth, batchCapacity := int(header[2]), int(header[3]), int(header[4])
+	if limits.maxLayers > 0 && maxLayers > limits.maxLayers { return {}, {.LimitExceeded, 16} }
+	if limits.maxWidth > 0 && maxWidth > limits.maxWidth { return {}, {.LimitExceeded, 24} }
+	if limits.maxBatchCapacity > 0 && batchCapacity > limits.maxBatchCapacity { return {}, {.LimitExceeded, 32} }
+	if header[5] == 0 || header[5] > u64(maxWidth) { return {}, {.InvalidHeader, 40} }
+	if header[6] > u64(maxLayers) { return {}, {.InvalidHeader, 48} }
+	if header[7] == 0 { return {}, {.InvalidHeader, 56} }
+	if header[9] > 1 { return {}, {.InvalidHeader, 72} }
+	parsed.info = CheckpointInfo{
+		version = header[1], maxLayers = maxLayers, maxWidth = maxWidth, batchCapacity = batchCapacity,
+		inputWidth = int(header[5]), layerCount = int(header[6]), hasAdam = header[9] == 1,
+	}
+	if target != nil && (maxLayers != target.maxLayers || maxWidth != target.maxWidth ||
+		batchCapacity != target.batchCapacity || parsed.info.hasAdam != target.hasAdam) {
+		return checkpointParsed{targetRejected = true}, {}
+	}
+	width := parsed.info.inputWidth
+	spatial := false
+	h, w, channels := 0, 0, 0
+	if header[1] == CHECKPOINT_SPATIAL_VERSION {
+		dims: [3]u64
+		for &dim, i in dims {
+			v, ok := CheckpointGet64(input, &offset)
+			if !ok { return {}, {.Truncated, len(input)} }
+			if v > u64(maxWidth) { return {}, {.InvalidArchitecture, 80+i*8} }
+			dim = v
+		}
+		if dims != ([3]u64{}) {
+			if dims[0] == 0 || dims[1] == 0 || dims[2] == 0 { return {}, {.InvalidArchitecture, 80} }
+			h, w, channels = int(dims[0]), int(dims[1]), int(dims[2])
+			if h > maxWidth/w || h*w > maxWidth/channels || h*w*channels != width { return {}, {.InvalidArchitecture, 80} }
+			spatial = true
+		}
+	}
+	for _ in 0..<parsed.info.layerCount {
+		layerOffset := offset
+		kind, ok := CheckpointGet64(input, &offset); if !ok { return {}, {.Truncated, len(input)} }
+		layerWidth, ok2 := CheckpointGet64(input, &offset); if !ok2 { return {}, {.Truncated, len(input)} }
+		if kind > 9 || header[1] == CHECKPOINT_VERSION && kind > 5 { return {}, {.UnsupportedLayer, layerOffset} }
+		if kind != 5 && kind != 7 { parsed.details.effectiveOutputIsSoftmax = kind == 4 }
+		if layerWidth == 0 || layerWidth > u64(maxWidth) { return {}, {.InvalidArchitecture, layerOffset+8} }
+		if kind != 0 && kind != 6 && kind != 8 && kind != 9 && layerWidth != u64(width) { return {}, {.InvalidArchitecture, layerOffset+8} }
+		if kind == 0 {
+			if spatial { return {}, {.InvalidArchitecture, layerOffset} }
+			if width > max(int)/int(layerWidth) { return {}, {.Overflow, layerOffset+8} }
+			weights := width*int(layerWidth)
+			if weights > max(int)-int(layerWidth) { return {}, {.Overflow, layerOffset+8} }
+			err, rejected := checkpointParameterValues(input, &offset, weights+int(layerWidth), &parsed.info, limits, target, layerOffset)
+			if err.code != .None { return {}, err }
+			if rejected { return checkpointParsed{targetRejected = true}, {} }
+		} else if kind == 5 {
+			rateOffset := offset
+			rate, valid := CheckpointGet32(input, &offset)
+			if !valid { return {}, {.Truncated, len(input)} }
+			if !(rate >= 0 && rate < 1) { return {}, {.InvalidValue, rateOffset} }
+		} else if kind == 7 {
+			spatial = false
+		} else if kind == 8 || kind == 9 {
+			if !spatial { return {}, {.InvalidArchitecture, layerOffset} }
+			values: [3]u64
+			for &value in values {
+				fieldOffset := offset
+				v, valid := CheckpointGet64(input, &offset)
+				if !valid { return {}, {.Truncated, len(input)} }
+				if v > u64(max(int)) { return {}, {.Overflow, fieldOffset} }
+				value = v
+			}
+			kh, kw, stride := int(values[0]), int(values[1]), int(values[2])
+			if kh <= 0 || kw <= 0 || stride <= 0 || kh > h || kw > w { return {}, {.InvalidArchitecture, layerOffset} }
+			if kh > max(int)/kw { return {}, {.Overflow, layerOffset} }
+			oh, ow := (h-kh)/stride+1, (w-kw)/stride+1
+			if oh > maxWidth/ow || oh*ow > maxWidth/channels || oh*ow*channels != int(layerWidth) { return {}, {.InvalidArchitecture, layerOffset} }
+			h, w = oh, ow
+		} else if kind == 6 {
+			if !spatial { return {}, {.InvalidArchitecture, layerOffset} }
+			if maxWidth > max(int)/maxWidth { return {}, {.Overflow, 24} }
+			values: [5]u64
+			for &value in values {
+				fieldOffset := offset
+				v, valid := CheckpointGet64(input, &offset)
+				if !valid { return {}, {.Truncated, len(input)} }
+				if v > u64(max(int)) { return {}, {.Overflow, fieldOffset} }
+				value = v
+			}
+			kh, kw, oc, stride, pad := int(values[0]), int(values[1]), int(values[2]), int(values[3]), int(values[4])
+			if kh <= 0 || kw <= 0 || oc <= 0 || oc > maxWidth { return {}, {.InvalidArchitecture, layerOffset} }
+			capacity := maxWidth*maxWidth
+			if kh > max(int)/kw { return {}, {.Overflow, layerOffset+24} }
+			area := kh*kw
+			if area > max(int)/channels { return {}, {.Overflow, layerOffset} }
+			fanIn := area*channels
+			if fanIn > max(int)/oc { return {}, {.Overflow, layerOffset+32} }
+			count := fanIn*oc
+			if count > capacity { return {}, {.InvalidArchitecture, layerOffset} }
+			if stride <= 0 { return {}, {.InvalidArchitecture, layerOffset} }
+			if pad > (max(int)-h)/2 || pad > (max(int)-w)/2 { return {}, {.Overflow, layerOffset+48} }
+			oh, okh := Conv2DDimension(h, kh, stride, pad)
+			ow, okw := Conv2DDimension(w, kw, stride, pad)
+			if !okh || !okw || oh <= 0 || ow <= 0 { return {}, {.InvalidArchitecture, layerOffset} }
+			if oh > max(int)/ow { return {}, {.Overflow, layerOffset} }
+			spatialArea := oh*ow
+			if spatialArea > max(int)/oc { return {}, {.Overflow, layerOffset} }
+			outputCount := spatialArea*oc
+			if outputCount > maxWidth || outputCount != int(layerWidth) { return {}, {.InvalidArchitecture, layerOffset} }
+			if oh-1 > (max(int)-(kh-1))/stride || ow-1 > (max(int)-(kw-1))/stride { return {}, {.Overflow, layerOffset+40} }
+			if count > max(int)-oc { return {}, {.Overflow, layerOffset} }
+			err, rejected := checkpointParameterValues(input, &offset, count+oc, &parsed.info, limits, target, layerOffset)
+			if err.code != .None { return {}, err }
+			if rejected { return checkpointParsed{targetRejected = true}, {} }
+			h, w, channels = oh, ow, oc
+		}
+		width = int(layerWidth)
+	}
+	parsed.info.outputWidth = width
+	parsed.info.outputRank = 2
+	if spatial { parsed.info.outputRank = 4 }
+	if parsed.info.hasAdam {
+		ok: bool
+		parsed.step, ok = CheckpointGet64(input, &offset); if !ok { return {}, {.Truncated, len(input)} }
+		configOffset := offset
+		for &value in parsed.config {
+			v, valid := CheckpointGet32(input, &offset)
+			if !valid { return {}, {.Truncated, len(input)} }
+			value = v
+		}
+		config := parsed.config
+		if !AdamFinite(f64(config[0])) || config[0] <= 0 { return {}, {.InvalidValue, configOffset} }
+		if !(config[1] >= 0 && config[1] < 1) { return {}, {.InvalidValue, configOffset+4} }
+		if !(config[2] >= 0 && config[2] < 1) { return {}, {.InvalidValue, configOffset+8} }
+		if !AdamFinite(f64(config[3])) || config[3] <= 0 { return {}, {.InvalidValue, configOffset+12} }
+		if parsed.info.momentElements > (len(input)-offset)/8 { return {}, {.Truncated, len(input)} }
+		for _ in 0..<parsed.info.momentElements {
+			valueOffset := offset
+			value, valid := CheckpointGet32(input, &offset)
+			if !valid { return {}, {.Truncated, len(input)} }
+			if !AdamFinite(f64(value)) { return {}, {.InvalidValue, valueOffset} }
+		}
+		for _ in 0..<parsed.info.momentElements {
+			valueOffset := offset
+			value, valid := CheckpointGet32(input, &offset)
+			if !valid { return {}, {.Truncated, len(input)} }
+			if !AdamFinite(f64(value)) || value < 0 { return {}, {.InvalidValue, valueOffset} }
+		}
+	}
+	if offset != len(input) { return {}, {.TrailingData, offset} }
+	return parsed, {}
+}
+
 // Restores directly into model's final location. On failure no destination is
 // changed. Capacities must exactly match the checkpoint. If Adam is recorded,
 // adam and storage of at least two node pointers per trainable layer and one element
 // per parameter in each moment slice are required. If absent, adam must be nil.
+// Incompatible header capacities/Adam presence and insufficient optimizer storage
+// are rejected as soon as the relevant information is available.
 // Input, model, shuffleState, Adam and all storage slices must be disjoint and
 // have valid backing storage; concurrent mutation is forbidden. Do not move or
 // copy the restored model. Trailing input bytes are rejected.
 CheckpointRead :: proc(model: ^Sequential($maxLayers, $maxWidth, $batchCapacity), adam: ^Adam, shuffleState: ^u64, input: []u8, parameterStorage: []^core.Node, firstMoment, secondMoment: []f32) -> bool {
 	if model == nil || shuffleState == nil || maxLayers <= 0 || maxWidth <= 0 || batchCapacity <= 0 { return false }
+	target := checkpointReadTarget{
+		maxLayers = maxLayers, maxWidth = maxWidth, batchCapacity = batchCapacity, hasAdam = adam != nil,
+		parameterCapacity = len(parameterStorage), firstCapacity = len(firstMoment), secondCapacity = len(secondMoment),
+	}
+	parsed, err := checkpointParse(input, {}, &target)
+	if err.code != .None || parsed.targetRejected { return false }
+	info := parsed.info
+	header, step, config := parsed.header, parsed.step, parsed.config
 	offset := 0
-	header: [10]u64
-	for &value in header { v, ok := CheckpointGet64(input, &offset); if !ok { return false }; value = v }
-	if header[0] != CHECKPOINT_MAGIC || (header[1] != CHECKPOINT_VERSION && header[1] != CHECKPOINT_SPATIAL_VERSION) || header[2] != u64(maxLayers) || header[3] != u64(maxWidth) || header[4] != u64(batchCapacity) || header[5] == 0 || header[5] > u64(maxWidth) || header[6] > u64(maxLayers) || header[7] == 0 || header[9] > 1 || (header[9] == 1) != (adam != nil) { return false }
 	width := int(header[5])
-	spatial := false
-	h, w, channels := 0, 0, 0
-	if header[1] == CHECKPOINT_SPATIAL_VERSION {
-		dims: [3]u64
-		for &dim in dims { v, ok := CheckpointGet64(input, &offset); if !ok || v > u64(maxWidth) { return false }; dim = v }
-		if dims != ([3]u64{}) {
-			if dims[0] == 0 || dims[1] == 0 || dims[2] == 0 { return false }
-			h, w, channels = int(dims[0]), int(dims[1]), int(dims[2])
-			if h > maxWidth/w || h*w > maxWidth/channels || h*w*channels != width { return false }
-			spatial = true
-		}
-	}
-	parameterCount, elementCount := 0, 0
-	for _ in 0..<int(header[6]) {
-		kind, ok := CheckpointGet64(input, &offset); if !ok { return false }
-		layerWidth, ok2 := CheckpointGet64(input, &offset); if !ok2 || kind > 9 || (header[1] == CHECKPOINT_VERSION && kind > 5) || layerWidth == 0 || layerWidth > u64(maxWidth) { return false }
-		if kind != 0 && kind != 6 && kind != 8 && kind != 9 && layerWidth != u64(width) { return false }
-		if kind == 0 {
-			if spatial || width > max(int)/int(layerWidth) { return false }
-			weights := width * int(layerWidth)
-			if weights > max(int)-int(layerWidth) { return false }
-			count := weights + int(layerWidth)
-			if count > (len(input)-offset)/4 || elementCount > max(int)-count || parameterCount > max(int)-2 { return false }
-			parameterCount += 2; elementCount += count
-			for _ in 0..<count { value, valid := CheckpointGet32(input, &offset); if !valid || !AdamFinite(f64(value)) { return false } }
-		} else if kind == 5 {
-			rate, valid := CheckpointGet32(input, &offset)
-			if !valid || !(rate >= 0 && rate < 1) { return false }
-		} else if kind == 7 {
-			spatial = false
-		} else if kind == 8 || kind == 9 {
-			if !spatial { return false }
-			values: [3]u64
-			for &value in values { v, ok := CheckpointGet64(input, &offset); if !ok || v > u64(max(int)) { return false }; value = v }
-			kh, kw, stride := int(values[0]), int(values[1]), int(values[2])
-			if kh <= 0 || kw <= 0 || stride <= 0 || kh > h || kw > w || kh > max(int)/kw { return false }
-			oh, ow := (h-kh)/stride+1, (w-kw)/stride+1
-			if oh > maxWidth/ow || oh*ow > maxWidth/channels || oh*ow*channels != int(layerWidth) { return false }
-			h, w = oh, ow
-		} else if kind == 6 {
-			if !spatial || maxWidth > max(int)/maxWidth { return false }
-			values: [5]u64
-			for &value in values { v, ok := CheckpointGet64(input, &offset); if !ok || v > u64(max(int)) { return false }; value = v }
-			kh, kw, oc, stride, pad := int(values[0]), int(values[1]), int(values[2]), int(values[3]), int(values[4])
-			if kh <= 0 || kw <= 0 || oc <= 0 || oc > maxWidth { return false }
-			capacity := maxWidth*maxWidth
-			if kh > capacity/kw || kh*kw > capacity/channels || kh*kw*channels > capacity/oc { return false }
-			oh, okh := Conv2DDimension(h, kh, stride, pad)
-			ow, okw := Conv2DDimension(w, kw, stride, pad)
-			if !okh || !okw || oh <= 0 || ow <= 0 || oh > maxWidth/ow || oh*ow > maxWidth/oc || oh*ow*oc != int(layerWidth) || oh-1 > (max(int)-(kh-1))/stride || ow-1 > (max(int)-(kw-1))/stride { return false }
-			count := kh*kw*channels*oc
-			if count > max(int)-oc { return false }
-			count += oc
-			if count > (len(input)-offset)/4 || elementCount > max(int)-count || parameterCount > max(int)-2 { return false }
-			parameterCount += 2; elementCount += count
-			for _ in 0..<count { value, valid := CheckpointGet32(input, &offset); if !valid || !AdamFinite(f64(value)) { return false } }
-			h, w, channels = oh, ow, oc
-		}
-		width = int(layerWidth)
-	}
-	step: u64
-	config: [4]f32
-	if adam != nil {
-		if len(parameterStorage) < parameterCount || len(firstMoment) < elementCount || len(secondMoment) < elementCount { return false }
-		ok: bool
-		step, ok = CheckpointGet64(input, &offset); if !ok { return false }
-		for &value in config { v, valid := CheckpointGet32(input, &offset); if !valid { return false }; value = v }
-		if !AdamFinite(f64(config[0])) || config[0] <= 0 || !(config[1] >= 0 && config[1] < 1) || !(config[2] >= 0 && config[2] < 1) || !AdamFinite(f64(config[3])) || config[3] <= 0 { return false }
-		if elementCount > (len(input)-offset)/8 { return false }
-		for _ in 0..<elementCount { value, valid := CheckpointGet32(input, &offset); if !valid || !AdamFinite(f64(value)) { return false } }
-		for _ in 0..<elementCount { value, valid := CheckpointGet32(input, &offset); if !valid || !AdamFinite(f64(value)) || value < 0 { return false } }
-	}
-	if offset != len(input) { return false }
+	parameterCount := 0
+	elementCount := info.momentElements
 	// All operations below are guaranteed by the validated architecture and capacities.
 	if header[1] == CHECKPOINT_SPATIAL_VERSION {
 		offset = 80
