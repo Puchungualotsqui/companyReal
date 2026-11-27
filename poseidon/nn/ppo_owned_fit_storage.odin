@@ -27,6 +27,58 @@ PPOOwnedFitStorage :: struct {
 	self:      rawptr,
 }
 
+@(private)
+PPOOwnedFitStorageLayout :: struct {
+	counts, offsets: [8]int,
+	total, alignment: int,
+}
+
+@(private)
+ppoOwnedFitStorageLayout :: proc(
+	rolloutCapacity, observationWidth, actionCount, batchSize, epochs: int,
+) -> (PPOOwnedFitStorageLayout, bool) {
+	if rolloutCapacity <= 0 || observationWidth <= 0 || actionCount <= 0 || batchSize < 0 || epochs <= 0 {
+		return {}, false
+	}
+	rows := rolloutCapacity
+	if batchSize > 0 { rows = min(batchSize, rolloutCapacity) }
+	if rows > max(int)/observationWidth || rows > max(int)/actionCount { return {}, false }
+
+	counts := [8]int{rolloutCapacity, rows*observationWidth, rows, rows*actionCount, rows, rows, rows, epochs}
+	sizes := [8]int{size_of(int), size_of(f32), size_of(int), size_of(bool), size_of(f64), size_of(f32), size_of(f32), size_of(PPOEpochStats)}
+	alignments := [8]int{align_of(int), align_of(f32), align_of(int), align_of(bool), align_of(f64), align_of(f32), align_of(f32), align_of(PPOEpochStats)}
+	offsets: [8]int
+	total, alignment := 0, 1
+	for count, index in counts {
+		itemAlignment := alignments[index]
+		alignment = max(alignment, itemAlignment)
+		padding := (itemAlignment-total%itemAlignment)%itemAlignment
+		if total > max(int)-padding { return {}, false }
+		total += padding
+		offsets[index] = total
+		if count > (max(int)-total)/sizes[index] { return {}, false }
+		total += count*sizes[index]
+	}
+	return {counts, offsets, total, alignment}, true
+}
+
+// layout must be a successful calculation; memory must cover it and satisfy its
+// alignment and address-range requirements.
+@(private)
+ppoOwnedFitStorageViewAt :: proc(memory: rawptr, layout: PPOOwnedFitStorageLayout) -> PPOFitStorage {
+	address := uintptr(memory)
+	return {
+		indices = mem.slice_ptr((^int)(rawptr(address+uintptr(layout.offsets[0]))), layout.counts[0]),
+		observations = mem.slice_ptr((^f32)(rawptr(address+uintptr(layout.offsets[1]))), layout.counts[1]),
+		actions = mem.slice_ptr((^int)(rawptr(address+uintptr(layout.offsets[2]))), layout.counts[2]),
+		legalActions = mem.slice_ptr((^bool)(rawptr(address+uintptr(layout.offsets[3]))), layout.counts[3]),
+		oldLogProbabilities = mem.slice_ptr((^f64)(rawptr(address+uintptr(layout.offsets[4]))), layout.counts[4]),
+		advantages = mem.slice_ptr((^f32)(rawptr(address+uintptr(layout.offsets[5]))), layout.counts[5]),
+		returns = mem.slice_ptr((^f32)(rawptr(address+uintptr(layout.offsets[6]))), layout.counts[6]),
+		epochMetrics = mem.slice_ptr((^PPOEpochStats)(rawptr(address+uintptr(layout.offsets[7]))), layout.counts[7]),
+	}
+}
+
 // Allocates one block containing all eight scratch slices, including epochMetrics.
 // rolloutCapacity, observationWidth, actionCount, and epochs must be positive;
 // batchSize must be nonnegative. Positive batchSize reserves min(batchSize,
@@ -52,52 +104,23 @@ PPOOwnedFitStorageInit :: proc(
 	rolloutCapacity, observationWidth, actionCount, batchSize, epochs: int,
 	allocator: mem.Allocator = context.allocator,
 ) -> bool {
-	if owner == nil || owner.self != nil || owner.memory != nil ||
-		rolloutCapacity <= 0 || observationWidth <= 0 || actionCount <= 0 || batchSize < 0 || epochs <= 0 {
-		return false
-	}
-	rows := rolloutCapacity
-	if batchSize > 0 { rows = min(batchSize, rolloutCapacity) }
-	if rows > max(int)/observationWidth || rows > max(int)/actionCount { return false }
+	if owner == nil || owner.self != nil || owner.memory != nil { return false }
+	layout, ok := ppoOwnedFitStorageLayout(rolloutCapacity, observationWidth, actionCount, batchSize, epochs)
+	if !ok { return false }
 
-	counts := [8]int{rolloutCapacity, rows*observationWidth, rows, rows*actionCount, rows, rows, rows, epochs}
-	sizes := [8]int{size_of(int), size_of(f32), size_of(int), size_of(bool), size_of(f64), size_of(f32), size_of(f32), size_of(PPOEpochStats)}
-	alignments := [8]int{align_of(int), align_of(f32), align_of(int), align_of(bool), align_of(f64), align_of(f32), align_of(f32), align_of(PPOEpochStats)}
-	offsets: [8]int
-	total, alignment := 0, 1
-	for count, index in counts {
-		itemAlignment := alignments[index]
-		alignment = max(alignment, itemAlignment)
-		padding := (itemAlignment-total%itemAlignment)%itemAlignment
-		if total > max(int)-padding { return false }
-		total += padding
-		offsets[index] = total
-		if count > (max(int)-total)/sizes[index] { return false }
-		total += count*sizes[index]
-	}
-
-	bytes, err := mem.alloc_bytes(total, alignment, allocator)
+	bytes, err := mem.alloc_bytes(layout.total, layout.alignment, allocator)
 	memory := rawptr(raw_data(bytes))
 	if memory == nil { return false }
 	committed := false
 	defer if !committed { _ = mem.free(memory, allocator) }
 	address, ownerAddress := uintptr(memory), uintptr(rawptr(owner))
-	if err != nil || len(bytes) < total || address%uintptr(alignment) != 0 ||
-		address > max(uintptr)-uintptr(total) || ownerAddress > max(uintptr)-uintptr(size_of(owner^)) ||
-		PPOFitMemoryRangesOverlap({address, uintptr(total)}, {ownerAddress, uintptr(size_of(owner^))}) {
+	if err != nil || len(bytes) < layout.total || address%uintptr(layout.alignment) != 0 ||
+		address > max(uintptr)-uintptr(layout.total) || ownerAddress > max(uintptr)-uintptr(size_of(owner^)) ||
+		PPOFitMemoryRangesOverlap({address, uintptr(layout.total)}, {ownerAddress, uintptr(size_of(owner^))}) {
 		return false
 	}
 
-	storage := PPOFitStorage{
-		indices = mem.slice_ptr((^int)(rawptr(address+uintptr(offsets[0]))), counts[0]),
-		observations = mem.slice_ptr((^f32)(rawptr(address+uintptr(offsets[1]))), counts[1]),
-		actions = mem.slice_ptr((^int)(rawptr(address+uintptr(offsets[2]))), counts[2]),
-		legalActions = mem.slice_ptr((^bool)(rawptr(address+uintptr(offsets[3]))), counts[3]),
-		oldLogProbabilities = mem.slice_ptr((^f64)(rawptr(address+uintptr(offsets[4]))), counts[4]),
-		advantages = mem.slice_ptr((^f32)(rawptr(address+uintptr(offsets[5]))), counts[5]),
-		returns = mem.slice_ptr((^f32)(rawptr(address+uintptr(offsets[6]))), counts[6]),
-		epochMetrics = mem.slice_ptr((^PPOEpochStats)(rawptr(address+uintptr(offsets[7]))), counts[7]),
-	}
+	storage := ppoOwnedFitStorageViewAt(memory, layout)
 	owner^ = {storage, memory, allocator, rawptr(owner)}
 	committed = true
 	return true

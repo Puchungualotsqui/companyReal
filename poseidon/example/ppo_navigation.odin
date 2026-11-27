@@ -150,4 +150,30 @@ main :: proc() {
 		completedEpisodes, successfulEpisodes = 0, 0
 		rolloutRewardTotal = 0
 	}
+
+	// Checkpoint at a successful fit boundary. The destination models need no
+	// layers beforehand; the inspected capacities choose the compiled model type.
+	checkpoint, policyScratch, valueScratch: [4096]u8
+	size, saveError := nn.PPOTrainingContextCheckpointWrite(&trainer, checkpoint[:], policyScratch[:], valueScratch[:])
+	assert(saveError == .None)
+	limits := nn.PPOCheckpointInspectLimits{
+		maxBytes = len(checkpoint), maxParameterPointers = 12, maxMomentElements = 256, maxEpochs = 4,
+		policy = {maxLayers = 3, maxWidth = 8, maxBatchCapacity = 8},
+		value = {maxLayers = 3, maxWidth = 8, maxBatchCapacity = 8},
+	}
+	info, inspectError := nn.PPOCheckpointInspect(checkpoint[:size], limits)
+	assert(inspectError.code == .None && info.optimizer == .Adam)
+	restoredPolicy, restoredValue: nn.Sequential(3, 8, 8)
+	restoredTrainer: nn.PPOTrainingContext(3, 8, 8, 3, 8, 8)
+	restoreError := nn.PPOTrainingContextCheckpointInit(
+		&restoredTrainer, &restoredPolicy, &restoredValue, checkpoint[:size], ROLLOUT_CAPACITY, limits,
+	)
+	assert(restoreError == .None)
+	defer assert(nn.PPOTrainingContextDestroy(&restoredTrainer) == .None)
+	restoredState := nn.PPOTrainingContextState(&restoredTrainer)
+	assert(restoredState != nil && restoredState^ == trainingState^)
+	restoredReturn, restoredSuccess, restoredOk := PPOExampleEvaluate(&restoredPolicy)
+	assert(restoredOk)
+	fmt.printf("Restored %d-byte checkpoint: %d updates, greedy return %.3f, success %.0f%%\n",
+		size, restoredState.updateCount, restoredReturn, restoredSuccess*100)
 }

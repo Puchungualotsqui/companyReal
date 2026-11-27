@@ -1,17 +1,31 @@
 package nn
 
+// epochMetrics is the final field in the checked scratch layout, so its end
+// describes the complete allocation, including alignment padding between slices.
+@(private)
+ppoTrainingContextScratchRange :: proc(
+	trainer: ^PPOTrainingContext($pl, $pw, $pb, $vl, $vw, $vb),
+) -> (SequentialAdamMemoryRange, bool) {
+	storage, ok := PPOOwnedFitStorageView(&trainer.scratch)
+	if !ok { return {}, false }
+	last, valid := SequentialAdamRange(rawptr(raw_data(storage.epochMetrics)), len(storage.epochMetrics), size_of(PPOEpochStats))
+	start := uintptr(trainer.scratch.memory)
+	if !valid || last.address < start || last.bytes > max(uintptr)-(last.address-start) { return {}, false }
+	return {start, last.address-start+last.bytes}, true
+}
+
 // The checkpoint and staging buffers must also be disjoint from the complete
-// trainer and its reusable fit scratch, not merely its embedded Adam field.
-@(private="file")
+// trainer and its reusable fit allocation, not merely the exposed scratch slices.
+@(private)
 ppoTrainingContextCheckpointBufferDisjoint :: proc(
 	trainer: ^PPOTrainingContext($pl, $pw, $pb, $vl, $vw, $vb),
 	buffer: []u8,
 ) -> bool {
-	trainerRange, trainerOk := PPOFitMemoryRangeOf(rawptr(trainer), 1, size_of(trainer^))
-	bufferRange, bufferOk := PPOFitMemoryRangeOf(rawptr(raw_data(buffer)), len(buffer), size_of(u8))
-	storage, storageOk := PPOOwnedFitStorageView(&trainer.scratch)
-	return trainerOk && bufferOk && storageOk && !PPOFitMemoryRangesOverlap(trainerRange, bufferRange) &&
-		!PPOFitScratchOverlaps(storage, rawptr(raw_data(buffer)), len(buffer), size_of(u8))
+	trainerRange, trainerOk := SequentialAdamRange(rawptr(trainer), 1, size_of(trainer^))
+	bufferRange, bufferOk := SequentialAdamRange(rawptr(raw_data(buffer)), len(buffer), size_of(u8))
+	scratchRange, scratchOk := ppoTrainingContextScratchRange(trainer)
+	return trainerOk && bufferOk && scratchOk && !SequentialAdamRangesOverlap(trainerRange, bufferRange) &&
+		!SequentialAdamRangesOverlap(scratchRange, bufferRange)
 }
 
 // Writes a base PPO checkpoint using caller-owned output and model staging
@@ -58,45 +72,35 @@ PPOTrainingContextCheckpointRead :: proc(
 	optimizer := PPOTrainingContextOptimizer(trainer)
 	if state == nil || optimizer == nil { return .InvalidHandle }
 	if !ppoTrainingContextCheckpointBufferDisjoint(trainer, input) { return .InvalidCheckpoint }
-	policyInput, valueInput, peekOk := PPOCheckpointPeekModelPayloads(input)
-	if !peekOk { return .InvalidCheckpoint }
-	policyInfo, policyError := CheckpointInspect(policyInput, CheckpointInspectLimits{maxLayers = pl, maxWidth = pw, maxBatchCapacity = pb})
-	valueInfo, valueError := CheckpointInspect(valueInput, CheckpointInspectLimits{maxLayers = vl, maxWidth = vw, maxBatchCapacity = vb})
-	if policyError.code == .LimitExceeded || valueError.code == .LimitExceeded { return .CheckpointIncompatible }
-	if policyError.code != .None || valueError.code != .None { return .InvalidCheckpoint }
-	if policyInfo.maxLayers != pl || policyInfo.maxWidth != pw || policyInfo.batchCapacity != pb ||
-		valueInfo.maxLayers != vl || valueInfo.maxWidth != vw || valueInfo.batchCapacity != vb ||
-		policyInfo.hasAdam || valueInfo.hasAdam || policyInfo.inputWidth != trainer.observationWidth ||
-		valueInfo.inputWidth != trainer.observationWidth || policyInfo.outputRank != 2 || valueInfo.outputRank != 2 ||
-		policyInfo.outputWidth != trainer.actionCount || valueInfo.outputWidth != 1 {
-		return .CheckpointIncompatible
+	limits := PPOCheckpointInspectLimits{
+		policy = {maxLayers = pl, maxWidth = pw, maxBatchCapacity = pb},
+		value = {maxLayers = vl, maxWidth = vw, maxBatchCapacity = vb},
 	}
+	info, err := PPOCheckpointInspect(input, limits)
+	if err.code == .InvalidValue && err.offset == 88 { return .CheckpointIncompatible }
+	if err.code != .None { return ppoTrainingContextInspectionError(err) }
+	if !ppoTrainingContextCheckpointCompatible(trainer, info) { return .CheckpointIncompatible }
 	parameters, first, second, storageOk := PPOOwnedAdamStorage(&trainer.adam)
-	storage, fitStorageOk := PPOOwnedFitStorageView(&trainer.scratch)
-	if !storageOk || !fitStorageOk { return .InvalidHandle }
-	if policyInfo.parameterPointers > max(int)-valueInfo.parameterPointers || policyInfo.momentElements > max(int)-valueInfo.momentElements ||
-		policyInfo.parameterPointers+valueInfo.parameterPointers > len(parameters) ||
-		policyInfo.momentElements+valueInfo.momentElements > len(first) ||
-		policyInfo.momentElements+valueInfo.momentElements > len(second) { return .CheckpointIncompatible }
-
-	// PPO checkpoint v1 stores epochs and batch size after its fixed header,
-	// learner state and four objective floats. PeekModelPayloads checked version.
-	offset := 80
-	epochs, epochsOk := CheckpointGet64(input, &offset)
-	batchSize, batchOk := CheckpointGet64(input, &offset)
-	if !epochsOk || !batchOk || epochs == 0 || epochs > u64(max(int)) || batchSize > u64(max(int)) { return .InvalidCheckpoint }
-	_, gradientOk := CheckpointGet32(input, &offset)
-	_, rateOk := CheckpointGet32(input, &offset)
-	kind, kindOk := CheckpointGet64(input, &offset)
-	if !gradientOk || !rateOk || !kindOk || kind > 1 { return .InvalidCheckpoint }
-	if kind != 1 || epochs > u64(len(storage.epochMetrics)) || batchSize > u64(min(pb, vb)) { return .CheckpointIncompatible }
-	rows := int(batchSize)
-	if rows == 0 { rows = min(pb, vb) }
-	rows = min(rows, trainer.rolloutCapacity)
-	if rows > len(storage.actions) { return .CheckpointIncompatible }
-
+	if !storageOk { return .InvalidHandle }
 	restoredState, objective, fitConfig, _, ok := PPOCheckpointRead(trainer.policy, trainer.value, input, optimizer, parameters, first, second)
 	if !ok { return .InvalidCheckpoint }
 	trainer.state, trainer.objective, trainer.fitConfig = restoredState, objective, fitConfig
 	return .None
+}
+
+@(private)
+ppoTrainingContextCheckpointCompatible :: proc(
+	trainer: ^PPOTrainingContext($pl, $pw, $pb, $vl, $vw, $vb), info: PPOCheckpointInfo,
+) -> bool {
+	if info.optimizer != .Adam || info.policy.maxLayers != pl || info.policy.maxWidth != pw || info.policy.batchCapacity != pb ||
+		info.value.maxLayers != vl || info.value.maxWidth != vw || info.value.batchCapacity != vb ||
+		info.policy.inputWidth != trainer.observationWidth || info.value.inputWidth != trainer.observationWidth ||
+		info.policy.outputWidth != trainer.actionCount || info.value.outputWidth != 1 { return false }
+	parameters, first, second, adamOk := PPOOwnedAdamStorage(&trainer.adam)
+	storage, scratchOk := PPOOwnedFitStorageView(&trainer.scratch)
+	if !adamOk || !scratchOk || info.parameterPointers > len(parameters) || info.momentElements > len(first) ||
+		info.momentElements > len(second) || info.fit.epochs > len(storage.epochMetrics) { return false }
+	rows := info.fit.batchSize
+	if rows == 0 { rows = min(pb, vb) }
+	return min(rows, trainer.rolloutCapacity) <= len(storage.actions)
 }

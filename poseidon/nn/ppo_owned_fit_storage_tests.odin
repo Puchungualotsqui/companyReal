@@ -108,12 +108,78 @@ PPOOwnedFitTestExpectLayout :: proc(t: ^testing.T, owner: ^PPOOwnedFitStorage, s
 }
 
 @(test)
+PPOOwnedFitStoragePrivateLayoutAndView :: proc(t: ^testing.T) {
+	Backing :: struct {
+		indices: [7]int,
+		observations: [9]f32,
+		actions: [3]int,
+		legalActions: [15]bool,
+		oldLogProbabilities: [3]f64,
+		advantages: [3]f32,
+		returns: [3]f32,
+		epochMetrics: [4]PPOEpochStats,
+	}
+	layout, ok := ppoOwnedFitStorageLayout(7, 3, 5, 3, 4)
+	testing.expect(t, ok)
+	if !ok { return }
+	expectedOffsets := [8]int{
+		int(offset_of(Backing, indices)), int(offset_of(Backing, observations)), int(offset_of(Backing, actions)),
+		int(offset_of(Backing, legalActions)), int(offset_of(Backing, oldLogProbabilities)),
+		int(offset_of(Backing, advantages)), int(offset_of(Backing, returns)), int(offset_of(Backing, epochMetrics)),
+	}
+	layoutMatches := layout.counts == [8]int{7, 9, 3, 15, 3, 3, 3, 4} && layout.offsets == expectedOffsets &&
+		layout.total == int(offset_of(Backing, epochMetrics))+4*size_of(PPOEpochStats) && layout.alignment == align_of(Backing)
+	testing.expect(t, layoutMatches)
+	if !layoutMatches { return }
+
+	backing: Backing
+	storage := ppoOwnedFitStorageViewAt(rawptr(&backing), layout)
+	viewMatches := len(storage.indices) == 7 && len(storage.observations) == 9 && len(storage.actions) == 3 &&
+		len(storage.legalActions) == 15 && len(storage.oldLogProbabilities) == 3 && len(storage.advantages) == 3 &&
+		len(storage.returns) == 3 && len(storage.epochMetrics) == 4 &&
+		raw_data(storage.indices) == &backing.indices[0] && raw_data(storage.observations) == &backing.observations[0] &&
+		raw_data(storage.actions) == &backing.actions[0] && raw_data(storage.legalActions) == &backing.legalActions[0] &&
+		raw_data(storage.oldLogProbabilities) == &backing.oldLogProbabilities[0] && raw_data(storage.advantages) == &backing.advantages[0] &&
+		raw_data(storage.returns) == &backing.returns[0] && raw_data(storage.epochMetrics) == &backing.epochMetrics[0]
+	testing.expect(t, viewMatches)
+	if !viewMatches { return }
+	storage.indices[6], storage.observations[8], storage.actions[2] = 11, 12, 13
+	storage.legalActions[14], storage.oldLogProbabilities[2] = true, 14
+	storage.advantages[2], storage.returns[2], storage.epochMetrics[3].epoch = 15, 16, 17
+	testing.expect(t, backing.indices[6] == 11 && backing.observations[8] == 12 && backing.actions[2] == 13 &&
+		backing.legalActions[14] && backing.oldLogProbabilities[2] == 14 && backing.advantages[2] == 15 &&
+		backing.returns[2] == 16 && backing.epochMetrics[3].epoch == 17)
+}
+
+@(test)
+PPOOwnedFitStoragePrivateLayoutBoundaries :: proc(t: ^testing.T) {
+	defaultLayout, defaultOk := ppoOwnedFitStorageLayout(4, 2, 3, 0, 1)
+	cappedLayout, cappedOk := ppoOwnedFitStorageLayout(4, 2, 3, max(int), 1)
+	testing.expect(t, defaultOk && cappedOk && defaultLayout.counts == [8]int{4, 8, 4, 12, 4, 4, 4, 1} &&
+		defaultLayout.counts == cappedLayout.counts && defaultLayout.offsets == cappedLayout.offsets &&
+		defaultLayout.total == cappedLayout.total && defaultLayout.alignment == cappedLayout.alignment)
+
+	base, ok := ppoOwnedFitStorageLayout(1, 1, 1, 1, 1)
+	testing.expect(t, ok)
+	if !ok { return }
+	maxEpochs := (max(int)-base.offsets[7])/size_of(PPOEpochStats)
+	largest, largestOk := ppoOwnedFitStorageLayout(1, 1, 1, 1, maxEpochs)
+	_, tooLargeOk := ppoOwnedFitStorageLayout(1, 1, 1, 1, maxEpochs+1)
+	testing.expect(t, largestOk && largest.counts[7] == maxEpochs &&
+		largest.total == base.offsets[7]+maxEpochs*size_of(PPOEpochStats) && !tooLargeOk)
+	_, paddingOverflowOk := ppoOwnedFitStorageLayout(1, 1, max(int)-base.offsets[3], 1, 1)
+	testing.expect(t, !paddingOverflowOk)
+}
+
+@(test)
 PPOOwnedFitStorageLayoutAndReuse :: proc(t: ^testing.T) {
 	state := PPOOwnedFitTestAllocator{backing = context.allocator}
 	allocator := mem.Allocator{procedure = PPOOwnedFitTestAllocatorProc, data = &state}
 	owner: PPOOwnedFitStorage
+	layout, layoutOk := ppoOwnedFitStorageLayout(7, 3, 5, 3, 4)
 	ok := PPOOwnedFitStorageInit(&owner, 7, 3, 5, 3, 4, allocator)
-	testing.expect(t, ok && state.allocations == 1 && state.frees == 0 && state.live == owner.memory)
+	testing.expect(t, layoutOk && ok && state.allocations == 1 && state.frees == 0 && state.live == owner.memory &&
+		state.lastSize == layout.total && state.lastAlignment == layout.alignment)
 	if !ok { return }
 	defer PPOOwnedFitStorageDestroy(&owner)
 	PPOOwnedFitTestExpectLayout(t, &owner, state.lastSize)
@@ -159,6 +225,8 @@ PPOOwnedFitStorageInvalidDimensionsAndOverflow :: proc(t: ^testing.T) {
 	before: [size_of(PPOOwnedFitStorage)]byte
 	copy(before[:], mem.slice_ptr((^byte)(rawptr(&owner)), len(before)))
 	for c in cases {
+		_, layoutOk := ppoOwnedFitStorageLayout(c[0], c[1], c[2], c[3], c[4])
+		testing.expect(t, !layoutOk)
 		testing.expect(t, !PPOOwnedFitStorageInit(&owner, c[0], c[1], c[2], c[3], c[4], allocator))
 		after: [size_of(PPOOwnedFitStorage)]byte
 		copy(after[:], mem.slice_ptr((^byte)(rawptr(&owner)), len(after)))

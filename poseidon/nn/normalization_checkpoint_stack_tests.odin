@@ -296,7 +296,7 @@ PPOStackNormModelPayloads :: proc(mode: int, policyData, valueData: []u8) -> (in
 
 @(test)
 NormalizationCheckpointStackProbeDifferential :: proc(t: ^testing.T) {
-	for mode in 0..<40 {
+	for mode in 0..<41 {
 		policyData, valueData, base, checkpoint: [4096]u8
 		policySize, valueSize, built := PPOStackNormModelPayloads(mode, policyData[:], valueData[:])
 		baseSize, assembled := PPOStackTestSGDEnvelope(policyData[:policySize], valueData[:valueSize], base[:])
@@ -304,7 +304,11 @@ NormalizationCheckpointStackProbeDifferential :: proc(t: ^testing.T) {
 		if mode == 19 { observationWidth = 2 }
 		if mode == 20 { rewardWidth = 2 }
 		sourceStats: PPOStackNormStats
-		setup := PPOStackNormStatsInit(&sourceStats, observationWidth, rewardWidth, mode != 38)
+		setup := PPOStackNormStatsInit(&sourceStats, observationWidth, rewardWidth, mode != 38 && mode != 40)
+		if mode == 40 {
+			setup = setup && data.RunningStandardizerSetMetadata(&sourceStats.observation, 0, sourceStats.observation.epsilon, true) &&
+				data.RunningStandardizerSetMetadata(&sourceStats.reward, 0, sourceStats.reward.epsilon, true)
+		}
 		sourceNormalizers := PPOTrainingNormalizers{&sourceStats.observation, &sourceStats.reward}
 		if mode == 24 || mode == 25 || mode == 35 { sourceNormalizers.observation = nil }
 		if mode == 24 || mode == 26 || mode == 36 { sourceNormalizers.reward = nil }
@@ -320,7 +324,7 @@ NormalizationCheckpointStackProbeDifferential :: proc(t: ^testing.T) {
 		switch mode {
 		case 27: position = observationDescriptor.meanOffset; PPOCheckpointPutF64(checkpoint[:], &position, math.nan_f64())
 		case 28: position = rewardDescriptor.m2Offset; PPOCheckpointPutF64(checkpoint[:], &position, -1)
-		case 29: position = 32; CheckpointPut64(checkpoint[:], &position, 0)
+		case 29: position = 32; CheckpointPut64(checkpoint[:], &position, 0) // Nonzero moments with zero count.
 		case 32: checkpoint[size] = 0xa5; size += 1
 		}
 		expectedTarget, actualTarget: PPOStackNormTarget
@@ -350,7 +354,7 @@ NormalizationCheckpointStackProbeDifferential :: proc(t: ^testing.T) {
 		actualState, actualConfig, actualFit, _, actual := PPOCheckpointReadNormalized(
 			actualPolicy, actualValue, checkpoint[:size], actualAdam, nil, nil, nil, actualNormalizers,
 		)
-		shouldAccept := mode == 0 || mode == 4 || mode == 5 || mode == 6 || mode == 12 || mode == 24 || mode == 25 || mode == 26 || mode == 38
+		shouldAccept := mode == 0 || mode == 4 || mode == 5 || mode == 6 || mode == 12 || mode == 24 || mode == 25 || mode == 26 || mode == 38 || mode == 40
 		testing.expectf(t, expected == shouldAccept && actual == expected && checkpoint == inputBefore,
 			"normalized case %d: new %v, probe %v", mode, actual, expected)
 		if actual && expected {
@@ -368,14 +372,15 @@ NormalizationCheckpointStackProbeDifferential :: proc(t: ^testing.T) {
 
 @(test)
 PolicyExportStackProbeDifferential :: proc(t: ^testing.T) {
-	cases := [22]int{0, 1, 2, 3, 4, 5, 6, 8, 13, 14, 16, 18, 19, 22, 24, 27, 30, 32, 33, 35, 38, 39}
+	cases := [23]int{0, 1, 2, 3, 4, 5, 6, 8, 13, 14, 16, 18, 19, 22, 24, 27, 30, 32, 33, 35, 38, 39, 40}
 	for mode in cases {
 		policyData, valueData, exported: [4096]u8
 		policySize, _, built := PPOStackNormModelPayloads(mode, policyData[:], valueData[:])
 		observationWidth := 1
 		if mode == 19 { observationWidth = 2 }
 		sourceStats: PPOStackNormStats
-		setup := PPOStackNormStatsInit(&sourceStats, observationWidth, 1, mode != 38)
+		setup := PPOStackNormStatsInit(&sourceStats, observationWidth, 1, mode != 38 && mode != 40)
+		if mode == 40 { setup = setup && data.RunningStandardizerSetMetadata(&sourceStats.observation, 0, sourceStats.observation.epsilon, true) }
 		sourceNormalizer := &sourceStats.observation
 		if mode == 24 || mode == 35 { sourceNormalizer = nil }
 		size, wrapped := PPOStackNormWrapExport(policyData[:policySize], sourceNormalizer, exported[:])
@@ -403,7 +408,7 @@ PolicyExportStackProbeDifferential :: proc(t: ^testing.T) {
 		inputBefore := exported
 		expected := PPOStackNormProbeExport(expectedPolicy, exported[:size], expectedNormalizer)
 		actual := PPOPolicyExportRead(actualPolicy, exported[:size], actualNormalizer)
-		shouldAccept := mode == 0 || mode == 4 || mode == 5 || mode == 6 || mode == 24 || mode == 38
+		shouldAccept := mode == 0 || mode == 4 || mode == 5 || mode == 6 || mode == 24 || mode == 38 || mode == 40
 		testing.expectf(t, expected == shouldAccept && actual == expected && exported == inputBefore,
 			"export case %d: new %v, probe %v", mode, actual, expected)
 		if actual && expected {

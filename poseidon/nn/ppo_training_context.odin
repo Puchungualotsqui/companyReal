@@ -46,6 +46,29 @@ PPOTrainingContextOptionsDefault :: proc(rolloutCapacity: int) -> PPOTrainingCon
 @(private)
 PPOTrainingContextPhase :: enum { Empty, Initializing, Ready, Destroying }
 
+// Checkpoint initialization records every allocation until it can transfer
+// ownership to the embedded fit/Adam owners. Failed frees remain retryable.
+@(private)
+PPOTrainingContextPending :: struct {
+	allocator: mem.Allocator,
+	blocks: [4]rawptr,
+}
+
+@(private)
+ppoTrainingContextFreePending :: proc(pending: ^PPOTrainingContextPending) -> bool {
+	ok := true
+	for index := len(pending.blocks)-1; index >= 0; index -= 1 {
+		if pending.blocks[index] != nil {
+			if mem.free(pending.blocks[index], pending.allocator) == nil {
+				pending.blocks[index] = nil
+			} else {
+				ok = false
+			}
+		}
+	}
+	return ok
+}
+
 // Owns shared Adam buffers, reusable PPO fit scratch, and learner state/config;
 // it does not own either model, the rollout, or an environment. The models and
 // any external parameter data must outlive the trainer and remain at their final
@@ -73,6 +96,7 @@ PPOTrainingContext :: struct(
 	rolloutCapacity, observationWidth, actionCount: int,
 	adam: PPOOwnedAdam,
 	scratch: PPOOwnedFitStorage,
+	pending: PPOTrainingContextPending,
 	self: rawptr,
 	phase: PPOTrainingContextPhase,
 }
@@ -110,7 +134,7 @@ PPOTrainingContextInit :: proc(
 	allocator: mem.Allocator = context.allocator,
 ) -> PPOTrainingContextError {
 	if trainer == nil || trainer.self != nil || trainer.phase != .Empty || trainer.adam.self != nil ||
-		trainer.scratch.self != nil || trainer.scratch.memory != nil { return .InvalidHandle }
+		trainer.scratch.self != nil || trainer.scratch.memory != nil || trainer.pending.blocks != ([4]rawptr{}) { return .InvalidHandle }
 	if options.rolloutCapacity <= 0 || options.policySeed == 0 || !PPOConfigValid(options.objective) ||
 		!PPOFitConfigValid(options.fit) || options.fit.batchSize > min(policyBatchCapacity, valueBatchCapacity) {
 		return .InvalidOptions
@@ -215,12 +239,13 @@ PPOTrainingContextFit :: proc(
 // An empty/destroyed trainer succeeds; a nil, copied, or moved trainer fails.
 PPOTrainingContextDestroy :: proc(trainer: ^PPOTrainingContext($pl, $pw, $pb, $vl, $vw, $vb)) -> PPOTrainingContextError {
 	if trainer == nil { return .InvalidHandle }
-	if trainer.self == nil && trainer.phase == .Empty { return .None }
+	if trainer.self == nil && trainer.phase == .Empty && trainer.pending.blocks == ([4]rawptr{}) { return .None }
 	if trainer.self != rawptr(trainer) { return .InvalidHandle }
 	trainer.phase = .Destroying
 	adamOk := PPOOwnedAdamDestroy(&trainer.adam)
 	scratchOk := PPOOwnedFitStorageDestroy(&trainer.scratch)
-	if !adamOk || !scratchOk { return .CleanupFailed }
+	pendingOk := ppoTrainingContextFreePending(&trainer.pending)
+	if !adamOk || !scratchOk || !pendingOk { return .CleanupFailed }
 	trainer^ = {}
 	return .None
 }

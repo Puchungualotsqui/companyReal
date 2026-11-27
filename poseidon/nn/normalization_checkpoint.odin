@@ -16,6 +16,32 @@ PPOTrainingNormalizers :: struct {
 	reward:      ^data.RunningStandardizer,
 }
 
+// Metadata needed to provision a normalizer for a later owned restore. An absent
+// normalizer has all-zero metadata. Moments are validated during inspection but
+// remain in the checkpoint input.
+PPOCheckpointNormalizerInfo :: struct {
+	present: bool,
+	count:   u64,
+	width:   int,
+	epsilon: f64,
+	frozen:  bool,
+}
+
+PPONormalizedCheckpointInfo :: struct {
+	base:                PPOCheckpointInfo,
+	observation, reward: PPOCheckpointNormalizerInfo,
+}
+
+// Zero disables a limit; negative limits are invalid. maxBytes applies to the
+// entire normalized input, while base limits apply to the embedded PPO payload.
+// maxObservationWidth bounds the policy input even without a normalizer. It
+// rejects an oversized descriptor before scanning its moments, or an oversized
+// policy input header before scanning model parameters or optimizer moments.
+PPONormalizedCheckpointInspectLimits :: struct {
+	maxBytes, maxObservationWidth: int,
+	base: PPOCheckpointInspectLimits,
+}
+
 PPOCheckpointNormalizerDescriptor :: struct {
 	present:    bool,
 	count:      u64,
@@ -62,25 +88,40 @@ PPOCheckpointPutNormalizer :: proc(
 	for item in normalizer.m2 { PPOCheckpointPutF64(output, offset, item) }
 }
 
-PPOCheckpointGetNormalizer :: proc(
+// Shared by normalized checkpoints and policy exports. Empty normalizers may
+// be frozen, but their moments must still be zero.
+@(private="file")
+ppoCheckpointParseNormalizer :: proc(
 	input: []u8,
 	offset: ^int,
-) -> (descriptor: PPOCheckpointNormalizerDescriptor, ok: bool) {
-	present, presentOk := CheckpointGet64(input, offset)
-	if !presentOk || present > 1 do return {}, false
-	if present == 0 { return PPOCheckpointNormalizerDescriptor{}, true }
+	maxWidth, requiredWidth: int,
+) -> (PPOCheckpointNormalizerDescriptor, CheckpointError) {
+	presentOffset := offset^
+	present, ok := CheckpointGet64(input, offset)
+	if !ok { return {}, {.Truncated, len(input)} }
+	if present > 1 { return {}, {.InvalidHeader, presentOffset} }
+	if present == 0 { return {}, {} }
 	count, countOk := CheckpointGet64(input, offset)
+	if !countOk { return {}, {.Truncated, len(input)} }
+	widthOffset := offset^
 	width64, widthOk := CheckpointGet64(input, offset)
-	if !countOk || !widthOk || width64 == 0 || width64 > u64(max(int)) do return {}, false
+	if !widthOk { return {}, {.Truncated, len(input)} }
+	if width64 == 0 { return {}, {.InvalidHeader, widthOffset} }
+	if width64 > u64(max(int)) { return {}, {.Overflow, widthOffset} }
+	if maxWidth > 0 && width64 > u64(maxWidth) { return {}, {.LimitExceeded, widthOffset} }
+	if requiredWidth > 0 && width64 != u64(requiredWidth) { return {}, {.InvalidArchitecture, widthOffset} }
+	epsilonOffset := offset^
 	epsilon, epsilonOk := PPOCheckpointGetF64(input, offset)
+	if !epsilonOk { return {}, {.Truncated, len(input)} }
+	if !data.RunningFiniteF64(epsilon) || epsilon <= 0 { return {}, {.InvalidValue, epsilonOffset} }
+	frozenOffset := offset^
 	frozen, frozenOk := CheckpointGet64(input, offset)
-	if !epsilonOk || !frozenOk || frozen > 1 || frozen == 1 && count == 0 ||
-		!data.RunningFiniteF64(epsilon) || epsilon <= 0 {
-		return {}, false
-	}
+	if !frozenOk { return {}, {.Truncated, len(input)} }
+	if frozen > 1 { return {}, {.InvalidHeader, frozenOffset} }
 	width := int(width64)
-	if width > (len(input)-offset^)/16 do return {}, false
-	descriptor = PPOCheckpointNormalizerDescriptor{
+	if width > (max(int)-offset^)/16 { return {}, {.Overflow, widthOffset} }
+	if width > (len(input)-offset^)/16 { return {}, {.Truncated, len(input)} }
+	descriptor := PPOCheckpointNormalizerDescriptor{
 		present = true,
 		count = count,
 		width = width,
@@ -90,14 +131,24 @@ PPOCheckpointGetNormalizer :: proc(
 		m2Offset = offset^+width*8,
 	}
 	for _ in 0..<width {
-		mean, readOk := PPOCheckpointGetF64(input, offset)
-		if !readOk || !data.RunningFiniteF64(mean) || count == 0 && mean != 0 do return {}, false
+		at := offset^
+		mean, _ := PPOCheckpointGetF64(input, offset)
+		if !data.RunningFiniteF64(mean) || count == 0 && mean != 0 { return {}, {.InvalidValue, at} }
 	}
 	for _ in 0..<width {
-		m2, readOk := PPOCheckpointGetF64(input, offset)
-		if !readOk || !data.RunningFiniteF64(m2) || m2 < 0 || count == 0 && m2 != 0 do return {}, false
+		at := offset^
+		m2, _ := PPOCheckpointGetF64(input, offset)
+		if !data.RunningFiniteF64(m2) || m2 < 0 || count == 0 && m2 != 0 { return {}, {.InvalidValue, at} }
 	}
-	return descriptor, true
+	return descriptor, {}
+}
+
+PPOCheckpointGetNormalizer :: proc(
+	input: []u8,
+	offset: ^int,
+) -> (PPOCheckpointNormalizerDescriptor, bool) {
+	descriptor, err := ppoCheckpointParseNormalizer(input, offset, 0, 0)
+	return descriptor, err.code == .None
 }
 
 PPOCheckpointPeekModelPayloads :: proc(input: []u8) -> (policyInput, valueInput: []u8, ok: bool) {
@@ -309,6 +360,142 @@ PPOCheckpointWriteNormalized :: proc(
 	return offset, true
 }
 
+@(private)
+ppoNormalizedCheckpointReadTarget :: struct {
+	policy: rawptr,
+	policySize: int,
+	value: rawptr,
+	valueSize: int,
+	adam: ^Adam,
+	parameterStorage: []^core.Node,
+	firstMoment, secondMoment: []f32,
+	normalizers: PPOTrainingNormalizers,
+}
+
+@(private)
+ppoNormalizedCheckpointParsed :: struct {
+	info: PPONormalizedCheckpointInfo,
+	observation, reward: PPOCheckpointNormalizerDescriptor,
+	baseOffset: int,
+	targetRejected: bool,
+}
+
+@(private="file")
+ppoCheckpointNormalizerInfo :: proc(descriptor: PPOCheckpointNormalizerDescriptor) -> PPOCheckpointNormalizerInfo {
+	return {descriptor.present, descriptor.count, descriptor.width, descriptor.epsilon, descriptor.frozen}
+}
+
+// Validate the base envelope up to its policy payload without scanning model
+// parameters or Adam moments. A one-byte policy limit makes the authoritative
+// base parser stop at that payload; the peek is used only to locate its header.
+@(private="file")
+ppoCheckpointPreflightObservationWidth :: proc(input: []u8, maxWidth: int, limits: PPOCheckpointInspectLimits) -> CheckpointError {
+	policyInput, valueInput, found := PPOCheckpointPeekModelPayloads(input)
+	if !found || len(policyInput) < 80 { return {} }
+	policyOffset := len(input)-len(policyInput)-len(valueInput)
+	valueOffset := policyOffset+len(policyInput)
+	guardLimits := limits
+	guardLimits.policy.maxBytes = 1
+	_, err := PPOCheckpointInspect(input, guardLimits)
+	if err.code != .LimitExceeded || err.offset != policyOffset { return err }
+	// Preserve the real nested byte-limit order before inspecting either model.
+	if limits.policy.maxBytes > 0 && len(policyInput) > limits.policy.maxBytes { return {.LimitExceeded, policyOffset} }
+	if limits.value.maxBytes > 0 && len(valueInput) > limits.value.maxBytes { return {.LimitExceeded, valueOffset} }
+
+	// Inspect just the fixed model header, so its errors and capacity limits retain
+	// priority without visiting any layer or parameter payload.
+	headerLimits := limits.policy
+	headerLimits.maxBytes = 0
+	_, headerError := CheckpointInspect(policyInput[:80], headerLimits)
+	if headerError.code != .None && headerError.code != .Truncated {
+		headerError.offset += policyOffset
+		return headerError
+	}
+	widthOffset := 40
+	width, ok := CheckpointGet64(policyInput, &widthOffset)
+	if ok && width > u64(maxWidth) { return {.LimitExceeded, policyOffset+40} }
+	return {}
+}
+
+// This is the shared interpretation of the normalized envelope. A target can
+// reject incompatible or overlapping storage before the base scan; only the
+// target-free path promises complete validation. No model-sized probe is needed.
+@(private)
+ppoCheckpointParseNormalized :: proc(
+	input: []u8,
+	limits: PPONormalizedCheckpointInspectLimits,
+	target: ^ppoNormalizedCheckpointReadTarget = nil,
+) -> (ppoNormalizedCheckpointParsed, CheckpointError) {
+	if limits.maxBytes < 0 || limits.maxObservationWidth < 0 { return {}, {.InvalidLimits, 0} }
+	// Let the base inspector own the validation of its complete limits hierarchy,
+	// even when the outer envelope is malformed or exceeds its own byte limit.
+	_, limitsError := PPOCheckpointInspect(nil, limits.base)
+	if limitsError.code == .InvalidLimits { return {}, limitsError }
+	if limits.maxBytes > 0 && len(input) > limits.maxBytes { return {}, {.LimitExceeded, 0} }
+
+	offset := 0
+	magic, ok := CheckpointGet64(input, &offset)
+	if !ok { return {}, {.Truncated, len(input)} }
+	if magic != PPO_NORMALIZED_CHECKPOINT_MAGIC { return {}, {.InvalidMagic, 0} }
+	version, versionOk := CheckpointGet64(input, &offset)
+	if !versionOk { return {}, {.Truncated, len(input)} }
+	if version != PPO_NORMALIZED_CHECKPOINT_VERSION { return {}, {.UnsupportedVersion, 8} }
+	baseSize64, sizeOk := CheckpointGet64(input, &offset)
+	if !sizeOk { return {}, {.Truncated, len(input)} }
+	if baseSize64 > u64(max(int)) { return {}, {.Overflow, 16} }
+
+	parsed: ppoNormalizedCheckpointParsed
+	observation, observationError := ppoCheckpointParseNormalizer(input, &offset, limits.maxObservationWidth, 0)
+	if observationError.code != .None { return {}, observationError }
+	reward, rewardError := ppoCheckpointParseNormalizer(input, &offset, 0, 1)
+	if rewardError.code != .None { return {}, rewardError }
+	remaining := len(input)-offset
+	if baseSize64 > u64(remaining) { return {}, {.Truncated, len(input)} }
+	if baseSize64 < u64(remaining) { return {}, {.TrailingData, offset+int(baseSize64)} }
+	parsed.baseOffset = offset
+	if target != nil && (target.policy == nil || target.value == nil || target.policy == target.value ||
+		!PPOCheckpointNormalizerTargetValid(observation, target.normalizers.observation) ||
+		!PPOCheckpointNormalizerTargetValid(reward, target.normalizers.reward) ||
+		!PPOCheckpointNormalizedReadDisjoint(input, target.policy, target.policySize, target.value, target.valueSize,
+			target.adam, target.parameterStorage, target.firstMoment, target.secondMoment, target.normalizers)) {
+		return ppoNormalizedCheckpointParsed{targetRejected = true}, {}
+	}
+	baseInput := input[offset:]
+	if limits.maxObservationWidth > 0 {
+		widthError := ppoCheckpointPreflightObservationWidth(baseInput, limits.maxObservationWidth, limits.base)
+		if widthError.code != .None { widthError.offset += offset; return {}, widthError }
+	}
+	base, baseError := PPOCheckpointInspect(baseInput, limits.base)
+	if baseError.code != .None { baseError.offset += offset; return {}, baseError }
+	if observation.present && observation.width != base.policy.inputWidth {
+		return {}, {.InvalidArchitecture, observation.meanOffset-24}
+	}
+	parsed.observation, parsed.reward = observation, reward
+	parsed.info = PPONormalizedCheckpointInfo{
+		base = base,
+		observation = ppoCheckpointNormalizerInfo(observation),
+		reward = ppoCheckpointNormalizerInfo(reward),
+	}
+	return parsed, {}
+}
+
+// Validates the complete normalized checkpoint without allocation or a target.
+// Success describes encoded requirements, not whether a particular destination
+// is compatible. Input must have valid backing storage and remain unchanged during
+// inspection and any later restore; the reader revalidates without these limits.
+// On failure info is zero. Offsets are absolute within input, including nested
+// errors; truncation points to the end of the affected payload, trailing data to
+// its first byte, width mismatches to the normalizer width field. A
+// maxObservationWidth failure points to the oversized descriptor's width field
+// or to the policy input-width field, whether or not a normalizer is present.
+// InvalidLimits and an outer maxBytes failure use zero; base maxBytes uses the
+// base start.
+PPOCheckpointInspectNormalized :: proc(input: []u8, limits: PPONormalizedCheckpointInspectLimits = {}) -> (PPONormalizedCheckpointInfo, CheckpointError) {
+	parsed, err := ppoCheckpointParseNormalized(input, limits)
+	if err.code != .None { return {}, err }
+	return parsed.info, {}
+}
+
 // Reads the normalized training format. Normalizer targets must be initialized
 // with the expected feature widths and caller-owned storage. The base PPO reader
 // preflights both models before commit; normalization moments are copied only
@@ -322,49 +509,21 @@ PPOCheckpointReadNormalized :: proc(
 	firstMoment, secondMoment: []f32,
 	normalizers: PPOTrainingNormalizers,
 ) -> (state: PPOTrainingState, ppoConfig: PPOConfig, fitConfig: PPOFitConfig, optimizer: SequentialOptimizer, ok: bool) {
-	offset := 0
-	magic, magicOk := CheckpointGet64(input, &offset)
-	version, versionOk := CheckpointGet64(input, &offset)
-	baseSize64, baseSizeOk := CheckpointGet64(input, &offset)
-	if !magicOk || !versionOk || !baseSizeOk || magic != PPO_NORMALIZED_CHECKPOINT_MAGIC ||
-		version != PPO_NORMALIZED_CHECKPOINT_VERSION || baseSize64 > u64(max(int)) {
-		return {}, {}, {}, nil, false
+	target := ppoNormalizedCheckpointReadTarget{
+		policy = rawptr(policy), policySize = size_of(Sequential(policyMaxLayers, policyMaxWidth, policyBatchCapacity)),
+		value = rawptr(value), valueSize = size_of(Sequential(valueMaxLayers, valueMaxWidth, valueBatchCapacity)),
+		adam = restoredAdam, parameterStorage = parameterStorage, firstMoment = firstMoment,
+		secondMoment = secondMoment, normalizers = normalizers,
 	}
-	observationDescriptor, observationOk := PPOCheckpointGetNormalizer(input, &offset)
-	rewardDescriptor, rewardOk := PPOCheckpointGetNormalizer(input, &offset)
-	if !observationOk || !rewardOk ||
-		!PPOCheckpointNormalizerTargetValid(observationDescriptor, normalizers.observation) ||
-		!PPOCheckpointNormalizerTargetValid(rewardDescriptor, normalizers.reward) {
-		return {}, {}, {}, nil, false
-	}
-	if baseSize64 != u64(len(input)-offset) do return {}, {}, {}, nil, false
-	if !PPOCheckpointNormalizedReadDisjoint(
-		input,
-		rawptr(policy), size_of(Sequential(policyMaxLayers, policyMaxWidth, policyBatchCapacity)),
-		rawptr(value), size_of(Sequential(valueMaxLayers, valueMaxWidth, valueBatchCapacity)),
-		restoredAdam, parameterStorage, firstMoment, secondMoment, normalizers,
-	) { return {}, {}, {}, nil, false }
-	baseInput := input[offset:]
-	policyInput, valueInput, payloadsOk := PPOCheckpointPeekModelPayloads(baseInput)
-	if !payloadsOk do return {}, {}, {}, nil, false
-	// These checks match the model-only probe reads; PPOCheckpointRead then
-	// preflights the paired PPO topology and optimizer before committing either.
-	policyInfo, policyError := CheckpointInspect(policyInput)
-	valueInfo, valueError := CheckpointInspect(valueInput)
-	if policyError.code != .None || valueError.code != .None ||
-		policyInfo.maxLayers != policyMaxLayers || policyInfo.maxWidth != policyMaxWidth || policyInfo.batchCapacity != policyBatchCapacity ||
-		valueInfo.maxLayers != valueMaxLayers || valueInfo.maxWidth != valueMaxWidth || valueInfo.batchCapacity != valueBatchCapacity ||
-		policyInfo.hasAdam || valueInfo.hasAdam ||
-		observationDescriptor.present && observationDescriptor.width != policyInfo.inputWidth ||
-		rewardDescriptor.present && rewardDescriptor.width != 1 {
-		return {}, {}, {}, nil, false
-	}
+	parsed, err := ppoCheckpointParseNormalized(input, {}, &target)
+	if err.code != .None || parsed.targetRejected { return {}, {}, {}, nil, false }
+	baseInput := input[parsed.baseOffset:]
 	restoredState, restoredPPOConfig, restoredFitConfig, restoredOptimizer, readOk := PPOCheckpointRead(
 		policy, value, baseInput, restoredAdam, parameterStorage, firstMoment, secondMoment,
 	)
 	if !readOk do return {}, {}, {}, nil, false
-	PPOCheckpointApplyNormalizer(input, observationDescriptor, normalizers.observation)
-	PPOCheckpointApplyNormalizer(input, rewardDescriptor, normalizers.reward)
+	PPOCheckpointApplyNormalizer(input, parsed.observation, normalizers.observation)
+	PPOCheckpointApplyNormalizer(input, parsed.reward, normalizers.reward)
 	return restoredState, restoredPPOConfig, restoredFitConfig, restoredOptimizer, true
 }
 

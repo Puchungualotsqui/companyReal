@@ -5,6 +5,32 @@ import "../core"
 PPO_CHECKPOINT_MAGIC :: u64(0x3154504b43505050)
 PPO_CHECKPOINT_VERSION :: u64(1)
 
+PPOCheckpointOptimizerKind :: enum { SGD, Adam }
+
+// Counts describe the combined policy-then-value structure, including for SGD.
+// momentElements is the number of f32s in EACH Adam moment array. Adam-specific
+// fields are zero for SGD. Model capacities are the encoded Sequential type
+// capacities; inspection cannot guarantee that a matching type is available or
+// allocatable, nor that caller-owned destination storage is disjoint.
+PPOCheckpointInfo :: struct {
+	policy, value: CheckpointInfo,
+	state: PPOTrainingState,
+	objective: PPOConfig,
+	fit: PPOFitConfig,
+	optimizer: PPOCheckpointOptimizerKind,
+	parameterPointers, momentElements: int,
+	learningRate, beta1, beta2, epsilon: f32,
+	step: u64,
+}
+
+// Zero disables a limit; negative limits are invalid. The top-level pointer and
+// moment limits apply to the combined model requirements, including for SGD.
+// policy and value additionally limit their respective nested checkpoints.
+PPOCheckpointInspectLimits :: struct {
+	maxBytes, maxParameterPointers, maxMomentElements, maxEpochs: int,
+	policy, value: CheckpointInspectLimits,
+}
+
 PPOCheckpointRange :: proc(data: rawptr, count, elementSize: int) -> (PPOFitMemoryRange, bool) {
 	return PPOFitMemoryRangeOf(data, count, elementSize)
 }
@@ -233,11 +259,245 @@ PPOCheckpointWrite :: proc(
 	return offset, true
 }
 
+@(private="file")
+ppoCheckpointReadTarget :: struct {
+	policy, value: checkpointReadTarget,
+	hasAdam, storageEmpty: bool,
+	parameterCapacity, firstCapacity, secondCapacity: int,
+}
+
+@(private="file")
+ppoCheckpointParsed :: struct {
+	info: PPOCheckpointInfo,
+	policyOffset, policySize, valueOffset, valueSize, momentsOffset: int,
+	targetRejected: bool,
+}
+
+@(private="file")
+ppoCheckpointLimitsValid :: proc(limits: PPOCheckpointInspectLimits) -> bool {
+	if limits.maxBytes < 0 || limits.maxParameterPointers < 0 || limits.maxMomentElements < 0 || limits.maxEpochs < 0 {
+		return false
+	}
+	for nested in ([2]CheckpointInspectLimits{limits.policy, limits.value}) {
+		if nested.maxBytes < 0 || nested.maxLayers < 0 || nested.maxWidth < 0 || nested.maxBatchCapacity < 0 ||
+			nested.maxParameterPointers < 0 || nested.maxMomentElements < 0 { return false }
+	}
+	return true
+}
+
+// Intersect a nested limit with the unused combined allowance. A trainable layer
+// contributes at least two pointers and two elements, so 1 represents an exhausted
+// allowance without accidentally turning the nested parser's limit off (zero).
+@(private="file")
+ppoCheckpointRemainingLimit :: proc(nested, combined, used: int) -> int {
+	if combined == 0 { return nested }
+	remaining := max(combined-used, 1)
+	if nested == 0 || remaining < nested { return remaining }
+	return nested
+}
+
+// Validates a complete base PPO checkpoint without allocation or a destination.
+// Zero limits disable policy limits; set them for untrusted input. Input must have
+// valid backing storage and remain unchanged during inspection and subsequent
+// restore. On failure info is zero. Error offsets are absolute within input:
+// nested errors are translated, nested truncation points to the end of that
+// payload, and PPO topology errors identify the affected model's payload/header.
+// InvalidLimits and the outer maxBytes failure use offset zero. This does not
+// inspect normalized checkpoints; PPOCheckpointRead revalidates without limits.
+PPOCheckpointInspect :: proc(input: []u8, limits: PPOCheckpointInspectLimits = {}) -> (PPOCheckpointInfo, CheckpointError) {
+	parsed, err := ppoCheckpointParse(input, limits, nil)
+	if err.code != .None { return {}, err }
+	return parsed.info, {}
+}
+
+// This is the single validating interpretation of the PPO envelope for both
+// inspection and restore. A target can stop parsing early on an incompatible
+// destination; only the target-free path promises complete byte validation.
+@(private="file")
+ppoCheckpointParse :: proc(input: []u8, limits: PPOCheckpointInspectLimits, target: ^ppoCheckpointReadTarget) -> (ppoCheckpointParsed, CheckpointError) {
+	if !ppoCheckpointLimitsValid(limits) { return {}, {.InvalidLimits, 0} }
+	if limits.maxBytes > 0 && len(input) > limits.maxBytes { return {}, {.LimitExceeded, 0} }
+
+	parsed: ppoCheckpointParsed
+	info := &parsed.info
+	offset := 0
+	magic, ok := CheckpointGet64(input, &offset)
+	if !ok { return {}, {.Truncated, len(input)} }
+	if magic != PPO_CHECKPOINT_MAGIC { return {}, {.InvalidMagic, 0} }
+	version, versionOk := CheckpointGet64(input, &offset)
+	if !versionOk { return {}, {.Truncated, len(input)} }
+	if version != PPO_CHECKPOINT_VERSION { return {}, {.UnsupportedVersion, 8} }
+	policySize64, policySizeOk := CheckpointGet64(input, &offset)
+	if !policySizeOk { return {}, {.Truncated, len(input)} }
+	if policySize64 > u64(max(int)) { return {}, {.Overflow, 16} }
+	valueSize64, valueSizeOk := CheckpointGet64(input, &offset)
+	if !valueSizeOk { return {}, {.Truncated, len(input)} }
+	if valueSize64 > u64(max(int)) || valueSize64 > u64(max(int))-policySize64 { return {}, {.Overflow, 24} }
+	parsed.policySize, parsed.valueSize = int(policySize64), int(valueSize64)
+
+	stateValues: [4]u64
+	for &item in stateValues {
+		item, ok = CheckpointGet64(input, &offset)
+		if !ok { return {}, {.Truncated, len(input)} }
+	}
+	if stateValues[2] == 0 { return {}, {.InvalidHeader, 48} }
+	info.state = PPOTrainingState{stateValues[0], stateValues[1], stateValues[2], stateValues[3]}
+	objective: [4]f32
+	for &item in objective {
+		item, ok = CheckpointGet32(input, &offset)
+		if !ok { return {}, {.Truncated, len(input)} }
+	}
+	info.objective = PPOConfig{objective[0], objective[1], objective[2], objective[3]}
+	if !PPOConfigValid(info.objective) {
+		// Ask the authoritative config validator which field is invalid.
+		isolated := [4]PPOConfig{{objective[0], 0, 0, 1}, {0, objective[1], 0, 1}, {0, 0, objective[2], 1}, {0, 0, 0, objective[3]}}
+		for candidate, index in isolated {
+			if !PPOConfigValid(candidate) { return {}, {.InvalidValue, 64+4*index} }
+		}
+		return {}, {.InvalidValue, 64}
+	}
+	epochs, epochsOk := CheckpointGet64(input, &offset)
+	if !epochsOk { return {}, {.Truncated, len(input)} }
+	if epochs > u64(max(int)) { return {}, {.Overflow, 80} }
+	if epochs == 0 { return {}, {.InvalidValue, 80} }
+	if limits.maxEpochs > 0 && epochs > u64(limits.maxEpochs) { return {}, {.LimitExceeded, 80} }
+	batchSize, batchOk := CheckpointGet64(input, &offset)
+	if !batchOk { return {}, {.Truncated, len(input)} }
+	if batchSize > u64(max(int)) { return {}, {.Overflow, 88} }
+	info.fit.epochs, info.fit.batchSize = int(epochs), int(batchSize)
+	info.fit.maxGradientNorm, ok = CheckpointGet32(input, &offset)
+	if !ok { return {}, {.Truncated, len(input)} }
+	info.fit.finalLearningRate, ok = CheckpointGet32(input, &offset)
+	if !ok { return {}, {.Truncated, len(input)} }
+	if !PPOFitConfigValid(info.fit) {
+		if !PPOFitConfigValid(PPOFitConfig{epochs = 1, maxGradientNorm = info.fit.maxGradientNorm}) {
+			return {}, {.InvalidValue, 96}
+		}
+		return {}, {.InvalidValue, 100}
+	}
+	if target != nil && info.fit.batchSize > min(target.policy.batchCapacity, target.value.batchCapacity) {
+		return ppoCheckpointParsed{targetRejected = true}, {}
+	}
+
+	kind, kindOk := CheckpointGet64(input, &offset)
+	if !kindOk { return {}, {.Truncated, len(input)} }
+	if kind > 1 { return {}, {.InvalidHeader, 104} }
+	storedElements := 0
+	if kind == 0 {
+		info.optimizer = .SGD
+		if target != nil && (target.hasAdam || !target.storageEmpty) { return ppoCheckpointParsed{targetRejected = true}, {} }
+		info.learningRate, ok = CheckpointGet32(input, &offset)
+		if !ok { return {}, {.Truncated, len(input)} }
+		if info.learningRate <= 0 || !PPOFiniteF64(f64(info.learningRate)) { return {}, {.InvalidValue, 112} }
+	} else {
+		info.optimizer = .Adam
+		if target != nil && !target.hasAdam { return ppoCheckpointParsed{targetRejected = true}, {} }
+		info.step, ok = CheckpointGet64(input, &offset)
+		if !ok { return {}, {.Truncated, len(input)} }
+		if info.step == max(u64) { return {}, {.InvalidValue, 112} }
+		config: [4]f32
+		for &item in config {
+			item, ok = CheckpointGet32(input, &offset)
+			if !ok { return {}, {.Truncated, len(input)} }
+		}
+		if !AdamFinite(f64(config[0])) || config[0] <= 0 { return {}, {.InvalidValue, 120} }
+		if !(config[1] >= 0 && config[1] < 1) { return {}, {.InvalidValue, 124} }
+		if !(config[2] >= 0 && config[2] < 1) { return {}, {.InvalidValue, 128} }
+		if !AdamFinite(f64(config[3])) || config[3] <= 0 { return {}, {.InvalidValue, 132} }
+		info.learningRate, info.beta1, info.beta2, info.epsilon = config[0], config[1], config[2], config[3]
+		count, countOk := CheckpointGet64(input, &offset)
+		if !countOk { return {}, {.Truncated, len(input)} }
+		if count > u64((max(int)-offset)/8) { return {}, {.Overflow, 136} }
+		storedElements = int(count)
+		if limits.maxMomentElements > 0 && storedElements > limits.maxMomentElements { return {}, {.LimitExceeded, 136} }
+		if target != nil && (storedElements > target.firstCapacity || storedElements > target.secondCapacity) {
+			return ppoCheckpointParsed{targetRejected = true}, {}
+		}
+		parsed.momentsOffset = offset
+		if storedElements > (len(input)-offset)/8 { return {}, {.Truncated, len(input)} }
+		offset += storedElements*8
+	}
+
+	remaining := len(input)-offset
+	if parsed.policySize > remaining || parsed.valueSize > remaining-parsed.policySize { return {}, {.Truncated, len(input)} }
+	parsed.policyOffset = offset
+	parsed.valueOffset = offset+parsed.policySize
+	end := parsed.valueOffset+parsed.valueSize
+	if end != len(input) { return {}, {.TrailingData, end} }
+	if limits.policy.maxBytes > 0 && parsed.policySize > limits.policy.maxBytes { return {}, {.LimitExceeded, parsed.policyOffset} }
+	if limits.value.maxBytes > 0 && parsed.valueSize > limits.value.maxBytes { return {}, {.LimitExceeded, parsed.valueOffset} }
+	policyInput := input[parsed.policyOffset:parsed.valueOffset]
+	valueInput := input[parsed.valueOffset:end]
+
+	policyLimits := limits.policy
+	policyLimits.maxParameterPointers = ppoCheckpointRemainingLimit(policyLimits.maxParameterPointers, limits.maxParameterPointers, 0)
+	policyLimits.maxMomentElements = ppoCheckpointRemainingLimit(policyLimits.maxMomentElements, limits.maxMomentElements, 0)
+	if target != nil && target.hasAdam {
+		// Stop on insufficient pointer storage as soon as a layer's count is known.
+		policyLimits.maxParameterPointers = ppoCheckpointRemainingLimit(policyLimits.maxParameterPointers, max(target.parameterCapacity, 1), 0)
+	}
+	policyTarget: ^checkpointReadTarget
+	if target != nil { policyTarget = &target.policy }
+	policy, policyError := checkpointParse(policyInput, policyLimits, policyTarget)
+	if policyError.code != .None { policyError.offset += parsed.policyOffset; return {}, policyError }
+	if policy.targetRejected { return ppoCheckpointParsed{targetRejected = true}, {} }
+	info.policy = policy.info
+	if info.policy.hasAdam { return {}, {.InvalidArchitecture, parsed.policyOffset+72} }
+	if info.policy.parameterPointers == 0 || info.policy.outputRank != 2 || policy.details.effectiveOutputIsSoftmax {
+		return {}, {.InvalidArchitecture, parsed.policyOffset}
+	}
+
+	valueLimits := limits.value
+	valueLimits.maxParameterPointers = ppoCheckpointRemainingLimit(valueLimits.maxParameterPointers, limits.maxParameterPointers, info.policy.parameterPointers)
+	valueLimits.maxMomentElements = ppoCheckpointRemainingLimit(valueLimits.maxMomentElements, limits.maxMomentElements, info.policy.momentElements)
+	if target != nil && target.hasAdam {
+		valueLimits.maxParameterPointers = ppoCheckpointRemainingLimit(valueLimits.maxParameterPointers, max(target.parameterCapacity, 1), info.policy.parameterPointers)
+	}
+	valueTarget: ^checkpointReadTarget
+	if target != nil { valueTarget = &target.value }
+	value, valueError := checkpointParse(valueInput, valueLimits, valueTarget)
+	if valueError.code != .None { valueError.offset += parsed.valueOffset; return {}, valueError }
+	if value.targetRejected { return ppoCheckpointParsed{targetRejected = true}, {} }
+	info.value = value.info
+	if info.value.hasAdam { return {}, {.InvalidArchitecture, parsed.valueOffset+72} }
+	if info.value.parameterPointers == 0 || info.value.outputRank != 2 || info.value.outputWidth != 1 {
+		return {}, {.InvalidArchitecture, parsed.valueOffset}
+	}
+	if info.policy.inputWidth != info.value.inputWidth { return {}, {.InvalidArchitecture, parsed.valueOffset+40} }
+	if info.fit.batchSize > min(info.policy.batchCapacity, info.value.batchCapacity) { return {}, {.InvalidValue, 88} }
+	if info.policy.parameterPointers > max(int)-info.value.parameterPointers || info.policy.momentElements > max(int)-info.value.momentElements {
+		return {}, {.Overflow, parsed.valueOffset}
+	}
+	info.parameterPointers = info.policy.parameterPointers+info.value.parameterPointers
+	info.momentElements = info.policy.momentElements+info.value.momentElements
+	if kind == 1 {
+		if storedElements != info.momentElements { return {}, {.InvalidArchitecture, 136} }
+		if target != nil && (info.parameterPointers > target.parameterCapacity ||
+			storedElements > target.firstCapacity || storedElements > target.secondCapacity) {
+			return ppoCheckpointParsed{targetRejected = true}, {}
+		}
+		momentOffset := parsed.momentsOffset
+		for _ in 0..<storedElements {
+			at := momentOffset
+			moment, _ := CheckpointGet32(input, &momentOffset)
+			if !AdamFinite(f64(moment)) { return {}, {.InvalidValue, at} }
+		}
+		for _ in 0..<storedElements {
+			at := momentOffset
+			moment, _ := CheckpointGet32(input, &momentOffset)
+			if !AdamFinite(f64(moment)) || moment < 0 { return {}, {.InvalidValue, at} }
+		}
+	}
+	return parsed, {}
+}
+
 // Restores a PPO checkpoint atomically with respect to malformed/truncated input.
 // Models must be destination objects at their final addresses. For Adam snapshots,
 // supply disjoint parameter and moment storage plus an Adam destination; for SGD,
-// pass nil Adam and empty moment storage. Caller storage must not overlap input or
-// either model. The game environment is adapter-owned and is not restored here.
+// pass nil Adam and empty optimizer storage. Caller storage must not overlap input
+// or either model; input must have valid backing storage and remain unchanged during
+// the call. No allocation or model-sized stack probe is used. The game environment
+// is adapter-owned and is not restored here.
 PPOCheckpointRead :: proc(
 	policy: ^Sequential($policyMaxLayers, $policyMaxWidth, $policyBatchCapacity),
 	value: ^Sequential($valueMaxLayers, $valueMaxWidth, $valueBatchCapacity),
@@ -247,119 +507,18 @@ PPOCheckpointRead :: proc(
 	firstMoment, secondMoment: []f32,
 ) -> (state: PPOTrainingState, ppoConfig: PPOConfig, fitConfig: PPOFitConfig, optimizer: SequentialOptimizer, ok: bool) {
 	if policy == nil || value == nil || rawptr(policy) == rawptr(value) do return {}, {}, {}, nil, false
-	offset := 0
-	magic, magicOk := CheckpointGet64(input, &offset)
-	if !magicOk || magic != PPO_CHECKPOINT_MAGIC do return {}, {}, {}, nil, false
-	version, versionOk := CheckpointGet64(input, &offset)
-	if !versionOk || version != PPO_CHECKPOINT_VERSION do return {}, {}, {}, nil, false
-	policySize64, policySizeOk := CheckpointGet64(input, &offset)
-	if !policySizeOk do return {}, {}, {}, nil, false
-	valueSize64, valueSizeOk := CheckpointGet64(input, &offset)
-	if !valueSizeOk || policySize64 > u64(max(int)) || valueSize64 > u64(max(int)) do return {}, {}, {}, nil, false
-	stateValues: [4]u64
-	for &item in stateValues {
-		stateValue, stateReadOk := CheckpointGet64(input, &offset)
-		if !stateReadOk do return {}, {}, {}, nil, false
-		item = stateValue
+	target := ppoCheckpointReadTarget{
+		policy = {maxLayers = policyMaxLayers, maxWidth = policyMaxWidth, batchCapacity = policyBatchCapacity},
+		value = {maxLayers = valueMaxLayers, maxWidth = valueMaxWidth, batchCapacity = valueBatchCapacity},
+		hasAdam = restoredAdam != nil,
+		storageEmpty = len(parameterStorage) == 0 && len(firstMoment) == 0 && len(secondMoment) == 0,
+		parameterCapacity = len(parameterStorage), firstCapacity = len(firstMoment), secondCapacity = len(secondMoment),
 	}
-	if stateValues[2] == 0 do return {}, {}, {}, nil, false
-	for index in 0..<4 {
-		configValue, configReadOk := CheckpointGet32(input, &offset)
-		if !configReadOk do return {}, {}, {}, nil, false
-		switch index {
-		case 0: ppoConfig.clipRange = configValue
-		case 1: ppoConfig.entropyCoefficient = configValue
-		case 2: ppoConfig.valueCoefficient = configValue
-		case 3: ppoConfig.valueHuberDelta = configValue
-		}
-	}
-	if !PPOConfigValid(ppoConfig) do return {}, {}, {}, nil, false
-	epochs64, epochsOk := CheckpointGet64(input, &offset)
-	if !epochsOk || epochs64 > u64(max(int)) do return {}, {}, {}, nil, false
-	batchSize64, batchSizeOk := CheckpointGet64(input, &offset)
-	if !batchSizeOk || batchSize64 > u64(max(int)) do return {}, {}, {}, nil, false
-	fitConfig.epochs, fitConfig.batchSize = int(epochs64), int(batchSize64)
-	maxGradientNorm, maxGradientNormOk := CheckpointGet32(input, &offset)
-	if !maxGradientNormOk do return {}, {}, {}, nil, false
-	fitConfig.maxGradientNorm = maxGradientNorm
-	finalLearningRate, finalLearningRateOk := CheckpointGet32(input, &offset)
-	if !finalLearningRateOk do return {}, {}, {}, nil, false
-	fitConfig.finalLearningRate = finalLearningRate
-	if !PPOFitConfigValid(fitConfig) || fitConfig.batchSize > min(policyBatchCapacity, valueBatchCapacity) {
-		return {}, {}, {}, nil, false
-	}
-	kind, kindOk := CheckpointGet64(input, &offset)
-	if !kindOk || kind > 1 do return {}, {}, {}, nil, false
-	adamStep: u64
-	adamConfig: [4]f32
-	storedElementCount := 0
-	adamMomentsOffset := 0
-	if kind == 0 {
-		if restoredAdam != nil || len(parameterStorage) != 0 || len(firstMoment) != 0 || len(secondMoment) != 0 {
-			return {}, {}, {}, nil, false
-		}
-		learningRate, readOk := CheckpointGet32(input, &offset)
-		if !readOk || learningRate <= 0 || !PPOFiniteF64(f64(learningRate)) do return {}, {}, {}, nil, false
-		optimizer = SequentialSGD{learningRate}
-	} else {
-		if restoredAdam == nil do return {}, {}, {}, nil, false
-		stepValue, stepReadOk := CheckpointGet64(input, &offset)
-		if !stepReadOk || stepValue == max(u64) do return {}, {}, {}, nil, false
-		adamStep = stepValue
-		for &item in adamConfig {
-			configValue, configReadOk := CheckpointGet32(input, &offset)
-			if !configReadOk do return {}, {}, {}, nil, false
-			item = configValue
-		}
-		if !AdamFinite(f64(adamConfig[0])) || adamConfig[0] <= 0 ||
-			!(adamConfig[1] >= 0 && adamConfig[1] < 1) || !(adamConfig[2] >= 0 && adamConfig[2] < 1) ||
-			!AdamFinite(f64(adamConfig[3])) || adamConfig[3] <= 0 {
-			return {}, {}, {}, nil, false
-		}
-		elementCount64, readOk := CheckpointGet64(input, &offset)
-		if !readOk || elementCount64 > u64(max(int)) do return {}, {}, {}, nil, false
-		storedElementCount = int(elementCount64)
-		if storedElementCount > (len(input)-offset)/8 do return {}, {}, {}, nil, false
-		adamMomentsOffset = offset
-		for _ in 0..<storedElementCount {
-			moment, readOk := CheckpointGet32(input, &offset)
-			if !readOk || !AdamFinite(f64(moment)) do return {}, {}, {}, nil, false
-		}
-		for _ in 0..<storedElementCount {
-			moment, readOk := CheckpointGet32(input, &offset)
-			if !readOk || !AdamFinite(f64(moment)) || moment < 0 do return {}, {}, {}, nil, false
-		}
-	}
-	if policySize64 > u64(len(input)-offset) || valueSize64 > u64(len(input)-offset)-policySize64 ||
-		policySize64+valueSize64 != u64(len(input)-offset) {
-		return {}, {}, {}, nil, false
-	}
-	policySize, valueSize := int(policySize64), int(valueSize64)
-	policyInput := input[offset:offset+policySize]
-	offset += policySize
-	valueInput := input[offset:offset+valueSize]
-
-	// Inspection shares CheckpointRead's parser. Its layer, rank, dimension,
-	// parameter and RNG checks establish that the constructors can be replayed
-	// for these exact model types; their node buffers are then distinct and inline.
-	policyInfo, policyDetails, policyError := CheckpointInspectWithDetails(policyInput)
-	valueInfo, valueError := CheckpointInspect(valueInput)
-	if policyError.code != .None || valueError.code != .None ||
-		policyInfo.maxLayers != policyMaxLayers || policyInfo.maxWidth != policyMaxWidth || policyInfo.batchCapacity != policyBatchCapacity ||
-		valueInfo.maxLayers != valueMaxLayers || valueInfo.maxWidth != valueMaxWidth || valueInfo.batchCapacity != valueBatchCapacity ||
-		policyInfo.hasAdam || valueInfo.hasAdam || policyInfo.parameterPointers == 0 || valueInfo.parameterPointers == 0 ||
-		policyInfo.inputWidth != valueInfo.inputWidth || policyInfo.outputRank != 2 || valueInfo.outputRank != 2 ||
-		valueInfo.outputWidth != 1 || policyDetails.effectiveOutputIsSoftmax ||
-		policyInfo.parameterPointers > max(int)-valueInfo.parameterPointers ||
-		policyInfo.momentElements > max(int)-valueInfo.momentElements {
-		return {}, {}, {}, nil, false
-	}
-	parameterCount := policyInfo.parameterPointers+valueInfo.parameterPointers
-	actualElementCount := policyInfo.momentElements+valueInfo.momentElements
-	if kind == 1 && (actualElementCount != storedElementCount || len(parameterStorage) < parameterCount ||
-		len(firstMoment) < storedElementCount || len(secondMoment) < storedElementCount) {
-		return {}, {}, {}, nil, false
-	}
+	parsed, err := ppoCheckpointParse(input, {}, &target)
+	if err.code != .None || parsed.targetRejected { return {}, {}, {}, nil, false }
+	info := parsed.info
+	policyInput := input[parsed.policyOffset:parsed.policyOffset+parsed.policySize]
+	valueInput := input[parsed.valueOffset:parsed.valueOffset+parsed.valueSize]
 	if !PPOCheckpointReadDisjoint(
 		input,
 		rawptr(policy), size_of(Sequential(policyMaxLayers, policyMaxWidth, policyBatchCapacity)),
@@ -376,30 +535,28 @@ PPOCheckpointRead :: proc(
 		!CheckpointRead(value, nil, &valueInnerState, valueInput, nil, nil, nil) {
 		return {}, {}, {}, nil, false
 	}
-	if kind == 1 {
+	if info.optimizer == .Adam {
 		actualParameters, actualCount, actualOk := PPOCheckpointCombinedParameters(
 			policy, value, parameterStorage,
 		)
-		if !actualOk || actualCount != storedElementCount { return {}, {}, {}, nil, false }
-		momentOffset := adamMomentsOffset
-		for index in 0..<storedElementCount {
+		if !actualOk || actualCount != info.momentElements { return {}, {}, {}, nil, false }
+		momentOffset := parsed.momentsOffset
+		for index in 0..<info.momentElements {
 			firstMoment[index], _ = CheckpointGet32(input, &momentOffset)
 		}
-		for index in 0..<storedElementCount {
+		for index in 0..<info.momentElements {
 			secondMoment[index], _ = CheckpointGet32(input, &momentOffset)
 		}
 		restoredAdam^ = Adam{
 			parameters = actualParameters,
-			firstMoment = firstMoment[:storedElementCount],
-			secondMoment = secondMoment[:storedElementCount],
-			step = adamStep,
-			learningRate = adamConfig[0], beta1 = adamConfig[1], beta2 = adamConfig[2], epsilon = adamConfig[3],
+			firstMoment = firstMoment[:info.momentElements],
+			secondMoment = secondMoment[:info.momentElements],
+			step = info.step,
+			learningRate = info.learningRate, beta1 = info.beta1, beta2 = info.beta2, epsilon = info.epsilon,
 		}
 		optimizer = restoredAdam
+	} else {
+		optimizer = SequentialSGD{info.learningRate}
 	}
-	state = PPOTrainingState{
-		updateCount = stateValues[0], rolloutCount = stateValues[1],
-		policyRandomState = stateValues[2], shuffleRandomState = stateValues[3],
-	}
-	return state, ppoConfig, fitConfig, optimizer, true
+	return info.state, info.objective, info.fit, optimizer, true
 }
